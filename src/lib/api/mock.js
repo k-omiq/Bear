@@ -7447,7 +7447,7 @@ export function createMockBackend(options = {}) {
     /** `src-tauri/src/rollback.rs` reads the version index; see `mockrollback.js`. */
     async rollbackVersions() {
       await delay(timing.method)
-      return mockRollbackCatalog(aboutInfo().appVersion)
+      return mockRollbackCatalog(aboutInfo().appVersion, { offline: options.rollback === 'offline' })
     },
 
     /** @param {{version: string}} spec */

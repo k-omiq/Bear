@@ -18,6 +18,7 @@
    * app (on Windows the moment it starts). The confirm step says how many are
    * running, live, before anything is downloaded.
    */
+  import { untrack } from 'svelte'
   import { Modal, Button } from '../ui/index.js'
   import { installUpdate, relaunchApp } from '../updater.js'
   import { t, locale } from '../i18n/index.js'
@@ -30,6 +31,7 @@
     displayVersion,
     offersPage,
     rememberSkipped,
+    restoreSkipped,
     rollbackErrorCode,
     rollbackRows,
     shortNotes,
@@ -55,9 +57,24 @@
   const current = $derived(displayVersion(catalog?.currentVersion ?? ''))
   const target = $derived(displayVersion(chosen?.version ?? ''))
 
+  /**
+   * Whether this opening has asked for the list. Not `$state`: the effect
+   * must not re-run when it changes. The list is asked for once per opening;
+   * a failure stays on screen until Retry, so an offline or rate-limited
+   * machine does not ask the releases list again and again.
+   */
+  let asked = false
+
   $effect(() => {
-    if (open && !catalog && !loading) load()
-    if (!open) reset()
+    if (open) {
+      if (!asked) {
+        asked = true
+        if (!untrack(() => catalog)) untrack(load)
+      }
+    } else {
+      asked = false
+      reset()
+    }
   })
 
   function reset() {
@@ -69,6 +86,7 @@
   }
 
   async function load() {
+    if (loading) return
     loading = true
     listError = ''
     try {
@@ -134,7 +152,7 @@
       })
       phase = 'installed'
     } catch (e) {
-      rememberSkipped(before)
+      restoreSkipped(before)
       fail(e)
     }
   }

@@ -171,16 +171,30 @@ export function skippedVersion(store = defaultStorage()) {
 }
 
 /**
- * Remember the version being left. Answers what was there before, so a
- * failed install can put it back.
+ * Remember the version being left. A second rollback in a row leaves from a
+ * lower version than the first, so the higher of the two is kept: the badge
+ * must not offer the version the user left first. Answers what was there
+ * before, so a failed install can put it back with [`restoreSkipped`].
  *
  * @param {string} version
  * @param {Storage|null} [store]
  */
 export function rememberSkipped(version, store = defaultStorage()) {
   const before = skippedVersion(store)
-  writeRecord(SKIP_KEY, parseVersion(version) ? { version } : {}, store)
+  if (!parseVersion(version)) return before
+  const keep = before && compareVersions(before, version) > 0 ? before : version
+  writeRecord(SKIP_KEY, { version: keep }, store)
   return before
+}
+
+/**
+ * Put back exactly what [`rememberSkipped`] answered, `''` for none.
+ *
+ * @param {string} version
+ * @param {Storage|null} [store]
+ */
+export function restoreSkipped(version, store = defaultStorage()) {
+  writeRecord(SKIP_KEY, parseVersion(version) ? { version } : {}, store)
 }
 
 /** @param {Storage|null} [store] */

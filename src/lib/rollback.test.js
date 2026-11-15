@@ -7,6 +7,7 @@ import {
   offersPage,
   parseVersion,
   rememberSkipped,
+  restoreSkipped,
   rollbackErrorCode,
   rollbackRows,
   shortNotes,
@@ -146,10 +147,26 @@ describe('the skipped version', () => {
     rememberSkipped('1.0.0-beta.19', store)
     const before = rememberSkipped('1.0.0-beta.21', store)
     expect(before).toBe('1.0.0-beta.19')
-    rememberSkipped(before, store)
+    expect(skippedVersion(store)).toBe('1.0.0-beta.21')
+    restoreSkipped(before, store)
     expect(skippedVersion(store)).toBe('1.0.0-beta.19')
+    restoreSkipped('', store)
+    expect(skippedVersion(store)).toBe('')
     clearSkipped(store)
     expect(skippedVersion(store)).toBe('')
+  })
+
+  it('keeps the higher version over two rollbacks in a row', () => {
+    const store = memoryStore()
+    // beta.22 to beta.21, then beta.21 to beta.20.
+    rememberSkipped('1.0.0-beta.22', store)
+    expect(rememberSkipped('1.0.0-beta.21', store)).toBe('1.0.0-beta.22')
+    expect(skippedVersion(store)).toBe('1.0.0-beta.22')
+    expect(shouldOfferUpdate('1.0.0-beta.22', '1.0.0-beta.20', store)).toBe(false)
+    expect(shouldOfferUpdate('1.0.0-beta.23', '1.0.0-beta.20', store)).toBe(true)
+    // Something that is not a version changes nothing.
+    rememberSkipped('nightly', store)
+    expect(skippedVersion(store)).toBe('1.0.0-beta.22')
   })
 
   it('treats a missing or broken record as no skip', () => {

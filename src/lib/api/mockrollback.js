@@ -7,7 +7,8 @@
  * per-version manifests has none until it is back-filled, so it shows the
  * download page path. `0.8.9` fails its signature, the way a wrongly signed build is
  * refused. `?rollback=deb` makes this copy a `.deb` install, which cannot be
- * replaced in place.
+ * replaced in place. `?rollback=offline` (or the mock's `rollback: 'offline'`
+ * option) makes the list fail, the way an offline or rate-limited machine does.
  */
 
 const FLOOR = '0.8.5'
@@ -25,9 +26,16 @@ const RELEASES = [
 /** @param {string} version */
 const pageUrl = (version) => `https://github.com/k-omiq/Bear/releases/tag/v${version}`
 
-/** @param {string} currentVersion */
-export function mockRollbackCatalog(currentVersion) {
-  const deb = /[?&]rollback=deb\b/.test(String(globalThis.location?.search ?? ''))
+/**
+ * @param {string} currentVersion
+ * @param {{offline?: boolean}} [options]
+ */
+export function mockRollbackCatalog(currentVersion, options = {}) {
+  const search = String(globalThis.location?.search ?? '')
+  if (options.offline || /[?&]rollback=offline\b/.test(search)) {
+    throw new Error('rollback_offline: api.github.com: HTTP 403 rate limit exceeded')
+  }
+  const deb = /[?&]rollback=deb\b/.test(search)
   return {
     currentVersion,
     bundle: deb ? 'deb' : 'app',

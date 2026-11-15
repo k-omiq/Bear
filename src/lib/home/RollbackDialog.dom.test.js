@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte'
 
 import { setBackend } from '../api/backend.js'
+import { createMockBackend } from '../api/mock.js'
 import { t } from '../i18n/index.js'
 import { jobs } from '../state/jobs.svelte.js'
 import { skippedVersion } from '../rollback.js'
@@ -178,4 +179,27 @@ it('is reached from the update dialog, which then closes', async () => {
   await waitFor(() => expect(row(r, '1.0.0-beta.20')).toBeTruthy())
   expect(r.baseElement.textContent).toContain(t('update.rollback.title'))
   expect(r.baseElement.textContent).not.toContain(t('update.title'))
+})
+
+it('asks for the list once per opening when it fails, and again only on Retry', async () => {
+  const mock = createMockBackend({ rollback: 'offline', speed: 1000 })
+  const calls = vi.spyOn(mock, 'rollbackVersions')
+  setBackend(mock)
+  const r = render(RollbackDialog, { open: true })
+  await waitFor(() => expect(r.baseElement.textContent).toContain(t('update.rollback.error.offline')))
+  // Long enough for a loop to have asked many times over.
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  expect(calls).toHaveBeenCalledTimes(1)
+
+  await fireEvent.click(button(r, t('update.rollback.action.retry')))
+  await waitFor(() => expect(calls).toHaveBeenCalledTimes(2))
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  expect(calls).toHaveBeenCalledTimes(2)
+
+  // Closed and opened again: one more ask.
+  await r.rerender({ open: false })
+  await r.rerender({ open: true })
+  await waitFor(() => expect(calls).toHaveBeenCalledTimes(3))
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  expect(calls).toHaveBeenCalledTimes(3)
 })
