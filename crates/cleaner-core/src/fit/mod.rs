@@ -344,6 +344,12 @@ pub fn fit_within(
 /// from the candidate search's mask or its separately padded model ink.
 /// Zero therefore preserves the seed exactly. Re-sample the paper around the
 /// actual output so Fill measures the same surround as a later stored clean.
+///
+/// `walled` is the caller saying the lettering sits on a balloon's plain paper
+/// ([`crate::balloon::in_bubble`] and [`crate::balloon::plain_paper`]). The
+/// padding is then held inside the balloon's outline ([`padded_in_bubble`]), so
+/// a padding wide enough to take furigana does not also take the outline.
+#[allow(clippy::too_many_arguments)]
 pub fn fit_with_padding(
     page: &Raster,
     seed: &Mask,
@@ -352,9 +358,14 @@ pub fn fit_with_padding(
     edges: &noise::EdgeMap,
     bounds: Rect,
     padding: u32,
+    walled: bool,
 ) -> Fitted {
     let mut fitted = fit_within(page, seed, scale, noise_sigma, edges, false, bounds);
-    fitted.mask = seed.dilated_within(padding, bounds);
+    fitted.mask = if walled {
+        padded_in_bubble(page, seed, scale, noise_sigma, bounds, padding)
+    } else {
+        seed.dilated_within(padding, bounds)
+    };
     fitted.ink = fitted.mask.clone();
     fitted.paper = authoritative_paper(page, &fitted.mask, edges);
     fitted.ring = ring::sample_over(page, &fitted.paper);
@@ -405,6 +416,11 @@ const FLAT_SHARE: f32 = 0.9;
 /// line takes a few of them, and a few are enough to move a standard
 /// deviation past any threshold while the paper is as flat as it was.
 pub(crate) fn flat_tone(levels: &mut [i32], noise_sigma: f32) -> Option<(i32, i32)> {
+    tone_at_share(levels, noise_sigma, FLAT_SHARE)
+}
+
+/// [`flat_tone`] at a share of the caller's choosing.
+fn tone_at_share(levels: &mut [i32], noise_sigma: f32, share: f32) -> Option<(i32, i32)> {
     if levels.is_empty() {
         return None;
     }
@@ -412,7 +428,7 @@ pub(crate) fn flat_tone(levels: &mut [i32], noise_sigma: f32) -> Option<(i32, i3
     let paper = levels[levels.len() / 2];
     let tolerance = (2.0 * deviation_threshold(noise_sigma)) as i32;
     let at_paper = levels.iter().filter(|&&v| (v - paper).abs() <= tolerance).count();
-    ((at_paper as f32) >= FLAT_SHARE * levels.len() as f32).then_some((paper, tolerance))
+    ((at_paper as f32) >= share * levels.len() as f32).then_some((paper, tolerance))
 }
 
 /// Whether the paper around `mask` is one tone: at least [`FLAT_SHARE`] of
@@ -542,6 +558,165 @@ fn with_stray_lettering(page: &Raster, seed: &Mask, scale: f32, noise_sigma: f32
         return seed.clone();
     }
     Mask::union(&[seed, &strays], page.width, page.height)
+}
+
+/// How far past the padding [`padded_in_bubble`] looks for the outline, in
+/// multiples of the first step: one large glyph. Ink that runs out of that box
+/// is the outline or the picture, and ink that ends inside it is lettering.
+const WALL_LOOK_STEPS: u32 = 4;
+
+/// The width of the band of paper [`padded_in_bubble`] reads the balloon's
+/// tone from, just past the lettering's anti-aliasing.
+const WALL_PAPER_BAND: u32 = 3;
+
+/// The share of that band that must sit at one tone. Well under
+/// [`FLAT_SHARE`], because this band is where the wall is: an outline two
+/// pixels thick along one side of a narrow column of lettering is a third of
+/// it, and that is the balloon the wall is wanted for most. The caller has
+/// already called the balloon's paper plain; this only has to make the band's
+/// median the paper and not the ink.
+const WALL_PAPER_SHARE: f32 = 0.6;
+
+/// `seed` grown by `padding`, and stopped at the balloon's outline.
+///
+/// A plain dilation takes whatever is within `padding` of the lettering. Inside
+/// a balloon that is the furigana the segmentation missed, which is what the
+/// padding is raised for, and it is also the outline where the lettering sits
+/// near it. Measured on 38 plain balloons of 15 real pages, at 10 px more
+/// padding a plain dilation took 2,596 more outline pixels and this took none,
+/// and both took every missed furigana piece but one.
+///
+/// The wall is read off the page, with no model:
+///
+/// - The paper's tone is the band just outside the lettering
+///   ([`WALL_PAPER_BAND`]), and most of the band must sit at it
+///   ([`WALL_PAPER_SHARE`]). Where it does not, on art or a gradient, there is
+///   no wall to read and the answer is the plain dilation.
+/// - Ink is what is off that tone. An ink island is **the wall** when it runs
+///   out of the search box, or spans the lettering's box in both directions
+///   (a small balloon's whole outline). Any other island is lettering: a
+///   furigana glyph, a dakuten, a stroke's tip.
+/// - The padding is kept where the lettering can reach it over paper and
+///   lettering without stepping on the wall, in 4-connected steps, which an
+///   8-connected line of ink cannot be crossed by. The walk is no longer than
+///   the padding needs, so it does not go round through a gap in an open
+///   outline and come back on the far side.
+///
+/// The seed itself is always kept: lettering that crosses its balloon's outline
+/// is still lettering. Zero padding is the seed, exactly.
+pub fn padded_in_bubble(page: &Raster, seed: &Mask, scale: f32, noise_sigma: f32, bounds: Rect, padding: u32) -> Mask {
+    let plain = seed.dilated_within(padding, bounds);
+    if padding == 0 {
+        return plain;
+    }
+    let Some(letters) = set_bounds(seed) else { return plain };
+    let reach = padding + WALL_LOOK_STEPS * first_step(scale);
+    let grown = letters.grown(reach, u32::MAX, u32::MAX);
+    let x0 = grown.x.max(bounds.x).max(0);
+    let y0 = grown.y.max(bounds.y).max(0);
+    let x1 = grown.right().min(bounds.right()).min(page.width as i64);
+    let y1 = grown.bottom().min(bounds.bottom()).min(page.height as i64);
+    if x1 <= x0 || y1 <= y0 {
+        return plain;
+    }
+    let search = Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32);
+    let luma = |x: i64, y: i64| page.luma16_at(x as u32, y as u32) as i32;
+
+    // The balloon's tone, from the paper nearest the lettering.
+    let fringe = seed.dilated_within(antialias_pad(scale) + 1, search);
+    let band = fringe.dilated_within(WALL_PAPER_BAND, search);
+    let mut paper_levels: Vec<i32> = Vec::new();
+    for y in search.y..search.bottom() {
+        for x in search.x..search.right() {
+            if band.contains(x, y) && !fringe.contains(x, y) {
+                paper_levels.push(luma(x, y));
+            }
+        }
+    }
+    let Some((paper, tolerance)) = tone_at_share(&mut paper_levels, noise_sigma, WALL_PAPER_SHARE) else {
+        return plain;
+    };
+    let is_ink = |x: i64, y: i64| !seed.contains(x, y) && (luma(x, y) - paper).abs() > tolerance;
+
+    // The wall: every ink island that leaves the search box or spans the lettering.
+    let mut wall = Mask::empty(search);
+    let mut seen = Mask::empty(search);
+    let mut island = Vec::new();
+    for sy in search.y..search.bottom() {
+        for sx in search.x..search.right() {
+            if seen.contains(sx, sy) || !is_ink(sx, sy) {
+                continue;
+            }
+            island.clear();
+            seen.set(sx, sy, true);
+            let mut stack = vec![(sx, sy)];
+            let mut edge = false;
+            let (mut ix0, mut iy0, mut ix1, mut iy1) = (sx, sy, sx, sy);
+            while let Some((x, y)) = stack.pop() {
+                island.push((x, y));
+                edge |= x == search.x || y == search.y || x == search.right() - 1 || y == search.bottom() - 1;
+                (ix0, iy0, ix1, iy1) = (ix0.min(x), iy0.min(y), ix1.max(x), iy1.max(y));
+                for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if search.contains(nx, ny) && !seen.contains(nx, ny) && is_ink(nx, ny) {
+                        seen.set(nx, ny, true);
+                        stack.push((nx, ny));
+                    }
+                }
+            }
+            let spans = ix1 - ix0 + 1 >= letters.w as i64 && iy1 - iy0 + 1 >= letters.h as i64;
+            if edge || spans {
+                for &(x, y) in &island {
+                    wall.set(x, y, true);
+                }
+            }
+        }
+    }
+    if wall.is_empty() {
+        return plain;
+    }
+
+    // What the lettering reaches without stepping on the wall. A disc of
+    // radius `padding` is within one and a half times that many 4-connected
+    // steps of its centre.
+    let limit = (3 * padding).div_ceil(2) + 1;
+    let mut reached = Mask::empty(search);
+    let mut front: Vec<(i64, i64)> = Vec::new();
+    for y in search.y..search.bottom() {
+        for x in search.x..search.right() {
+            if seed.contains(x, y) {
+                reached.set(x, y, true);
+                front.push((x, y));
+            }
+        }
+    }
+    for _ in 0..limit {
+        let mut next = Vec::new();
+        for &(x, y) in &front {
+            for (dx, dy) in [(0, -1), (-1, 0), (1, 0), (0, 1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if search.contains(nx, ny) && !reached.contains(nx, ny) && !wall.contains(nx, ny) {
+                    reached.set(nx, ny, true);
+                    next.push((nx, ny));
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        front = next;
+    }
+
+    // Past the page there is nothing to read, and the plain growth stands.
+    let mut out = Mask::empty(plain.bounds);
+    for y in plain.bounds.y..plain.bounds.bottom() {
+        for x in plain.bounds.x..plain.bounds.right() {
+            if plain.contains(x, y) && (seed.contains(x, y) || !search.contains(x, y) || reached.contains(x, y)) {
+                out.set(x, y, true);
+            }
+        }
+    }
+    out
 }
 
 /// How far past the lettering [`lettering_extent`] looks, in native pixels.
@@ -1265,7 +1440,7 @@ mod tests {
         let automatic = fit(&page, &seed, 1.0, 0.0, &edges, false);
         assert!(automatic.thickness > 4, "fixture must exercise automatic growth");
         for padding in [0, 4, 2, 0] {
-            let fitted = fit_with_padding(&page, &seed, 1.0, 0.0, &edges, bounds, padding);
+            let fitted = fit_with_padding(&page, &seed, 1.0, 0.0, &edges, bounds, padding, false);
             let expected = seed.dilated(padding, PAGE, PAGE);
             assert_eq!(fitted.mask, expected);
             assert_eq!(fitted.ink, expected);
@@ -1274,8 +1449,136 @@ mod tests {
             assert_eq!(fitted.paper, ring::paper_annulus(&page, &expected, 0, &edges));
         }
         let clipped = Rect::new(REGION.x, REGION.y, REGION.w + 1, REGION.h + 1);
-        let fitted = fit_with_padding(&page, &seed, 1.0, 0.0, &edges, clipped, 4);
+        let fitted = fit_with_padding(&page, &seed, 1.0, 0.0, &edges, clipped, 4, false);
         assert_eq!(fitted.mask, seed.dilated_within(4, clipped));
+    }
+
+    /* -- padding inside a balloon ----------------------------------------- */
+
+    const WHOLE: Rect = Rect { x: 0, y: 0, w: PAGE, h: PAGE };
+
+    /// Dark lettering on white paper, and whatever else `ink` draws.
+    fn lettered(ink: impl Fn(i64, i64) -> bool) -> (Raster, Mask) {
+        let page = gray_page(|x, y| {
+            if REGION.contains(x as i64, y as i64) || ink(x as i64, y as i64) { 20 } else { 250 }
+        });
+        (page, Mask::filled(REGION))
+    }
+
+    fn pixels(mask: &Mask) -> Vec<(i64, i64)> {
+        let b = mask.bounds;
+        (b.y..b.bottom()).flat_map(|y| (b.x..b.right()).map(move |x| (x, y))).filter(|&(x, y)| mask.contains(x, y)).collect()
+    }
+
+    /// An outline three pixels right of the lettering, and a padding of eight:
+    /// the mask stops before the outline and takes nothing past it, and on the
+    /// three open sides it is the plain growth.
+    #[test]
+    fn padding_in_a_balloon_stops_at_the_outline() {
+        let stroke = REGION.right() + 3;
+        let (page, seed) = lettered(|x, _| x == stroke || x == stroke + 1);
+        let plain = seed.dilated_within(8, WHOLE);
+        let padded = padded_in_bubble(&page, &seed, 1.0, 0.0, WHOLE, 8);
+        assert!(pixels(&plain).iter().any(|&(x, _)| x >= stroke), "fixture: the plain growth must cross the outline");
+        for (x, y) in pixels(&plain) {
+            assert_eq!(padded.contains(x, y), x < stroke, "at {x},{y}");
+        }
+    }
+
+    /// The whole of a small balloon's outline fits inside the search box, so
+    /// it never reaches the box's edge. It spans the lettering, and is the wall.
+    #[test]
+    fn a_closed_outline_inside_the_search_box_is_still_the_wall() {
+        let ring = Rect::new(REGION.x - 6, REGION.y - 6, REGION.w + 12, REGION.h + 12);
+        let on_ring = |x: i64, y: i64| {
+            ring.contains(x, y) && (x == ring.x || y == ring.y || x == ring.right() - 1 || y == ring.bottom() - 1)
+        };
+        let (page, seed) = lettered(on_ring);
+        let padded = padded_in_bubble(&page, &seed, 1.0, 0.0, WHOLE, 10);
+        let inside = Rect::new(ring.x + 1, ring.y + 1, ring.w - 2, ring.h - 2);
+        let taken = pixels(&padded);
+        assert!(taken.iter().all(|&(x, y)| inside.contains(x, y)), "the padding crossed a closed outline");
+        assert_eq!(taken.len(), (inside.w * inside.h) as usize, "the balloon's inside was not all taken");
+    }
+
+    /// What the padding is raised for: a furigana glyph beside the lettering
+    /// is taken whole, and the outline behind it is not.
+    #[test]
+    fn padding_in_a_balloon_takes_furigana_and_leaves_the_outline() {
+        let ruby = Rect::new(REGION.right() + 2, REGION.y + 2, 3, 4);
+        let stroke = REGION.right() + 8;
+        let (page, seed) = lettered(|x, y| ruby.contains(x, y) || x == stroke);
+        let padded = padded_in_bubble(&page, &seed, 1.0, 0.0, WHOLE, 10);
+        for y in ruby.y..ruby.bottom() {
+            for x in ruby.x..ruby.right() {
+                assert!(padded.contains(x, y), "furigana pixel {x},{y} was left out");
+            }
+        }
+        assert!(pixels(&padded).iter().all(|&(x, _)| x < stroke), "the padding reached the outline");
+    }
+
+    /// A wall the padding does not reach changes nothing: the answer is the
+    /// plain growth, pixel for pixel, at every padding offered.
+    #[test]
+    fn a_wall_out_of_reach_leaves_the_plain_growth() {
+        let (page, seed) = lettered(|x, _| x == REGION.right() + 34);
+        for padding in [1, 2, 3, 5, 8, 13, 21, crate::constants::MAX_MASK_PADDING] {
+            let plain = seed.dilated_within(padding, WHOLE);
+            assert_eq!(padded_in_bubble(&page, &seed, 1.0, 0.0, WHOLE, padding), plain, "padding {padding}");
+        }
+    }
+
+    /// Screentone has no wall in it: its dots are islands that end inside the
+    /// search box, and the padding is the plain growth. So is a ground that is
+    /// half one tone and half another, which has no paper to read. And zero is
+    /// the seed, as it is everywhere.
+    #[test]
+    fn padding_on_screentone_or_at_zero_is_the_plain_growth() {
+        let (toned, seed) = lettered(|x, y| tone(x as u32, y as u32));
+        assert_eq!(padded_in_bubble(&toned, &seed, 1.0, 0.0, WHOLE, 8), seed.dilated_within(8, WHOLE));
+        let (halved, seed) = lettered(|x, y| (x + y) % 2 == 0);
+        assert_eq!(padded_in_bubble(&halved, &seed, 1.0, 0.0, WHOLE, 8), seed.dilated_within(8, WHOLE));
+        let (page, seed) = lettered(|x, _| x == REGION.right() + 3);
+        assert_eq!(padded_in_bubble(&page, &seed, 1.0, 0.0, WHOLE, 0), seed);
+    }
+
+    /// Lettering that crosses its own outline is kept whole, and the padding
+    /// around the part inside still stops at the outline.
+    #[test]
+    fn lettering_across_the_outline_is_never_cut() {
+        let stroke = REGION.right() - 4;
+        let (page, seed) = lettered(|x, _| x == stroke);
+        let padded = padded_in_bubble(&page, &seed, 1.0, 0.0, WHOLE, 6);
+        assert!(pixels(&seed).iter().all(|&(x, y)| padded.contains(x, y)), "a seed pixel was dropped");
+    }
+
+    /// A white-on-black balloon is as plain as a black-on-white one.
+    #[test]
+    fn padding_in_a_dark_balloon_stops_at_its_edge() {
+        let edge = REGION.right() + 4;
+        let page = gray_page(|x, y| {
+            if REGION.contains(x as i64, y as i64) || (x as i64) >= edge { 245 } else { 8 }
+        });
+        let seed = Mask::filled(REGION);
+        let padded = padded_in_bubble(&page, &seed, 1.0, 0.0, WHOLE, 9);
+        assert!(pixels(&padded).iter().all(|&(x, _)| x < edge), "the padding left the dark balloon");
+        assert!(padded.count() > seed.count());
+    }
+
+    /// The fit takes the wall only when it is told the lettering is in a
+    /// balloon: `walled` off is the padding as it always was.
+    #[test]
+    fn the_fit_holds_its_padding_inside_a_balloon_only_when_told() {
+        let stroke = REGION.right() + 3;
+        let (page, seed) = lettered(|x, _| x == stroke || x == stroke + 1);
+        let edges = EdgeMap::sobel(&page);
+        let free = fit_with_padding(&page, &seed, 1.0, 0.0, &edges, WHOLE, 8, false);
+        let held = fit_with_padding(&page, &seed, 1.0, 0.0, &edges, WHOLE, 8, true);
+        assert_eq!(free.mask, seed.dilated_within(8, WHOLE));
+        assert_eq!(held.mask, padded_in_bubble(&page, &seed, 1.0, 0.0, WHOLE, 8));
+        assert_eq!(held.ink, held.mask);
+        assert_eq!(held.thickness, 8);
+        assert!(held.mask.count() < free.mask.count());
     }
 
     #[test]
@@ -1285,7 +1588,7 @@ mod tests {
         let edges = EdgeMap::sobel(&page);
         let bounds = Rect::new(0, 0, PAGE, PAGE);
         assert!(ring::paper_annulus(&page, &seed, 0, &edges).is_empty());
-        let fitted = fit_with_padding(&page, &seed, 1.0, 0.0, &edges, bounds, 0);
+        let fitted = fit_with_padding(&page, &seed, 1.0, 0.0, &edges, bounds, 0, false);
         let stored = fit_within(&page, &seed, 1.0, 0.0, &edges, true, bounds);
         assert_eq!(fitted.mask, seed);
         assert_eq!(fitted.ink, seed);

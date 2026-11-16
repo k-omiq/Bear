@@ -6539,6 +6539,10 @@ fn pad_detections(
             .map(|record| record.id.clone())
             .collect();
         let mut updated = Vec::with_capacity(ids.len());
+        // The page's pixels, read the first time a detection on a balloon's
+        // plain paper is padded: that padding stops at the outline, as
+        // Detect's does. `None` inside is a page that could not be read.
+        let mut pixels: Option<Option<(Raster, f32)>> = None;
         for id in &ids {
             let Some(found) = job.load_detection(id).map_err(|e| e.to_string())? else {
                 continue;
@@ -6560,9 +6564,16 @@ fn pad_detections(
             if record.padding_from_seed {
                 if let Some(fitted) = &mut record.fit { fitted.thickness = padding; }
             }
+            let page = if record.inside && padding > 0 {
+                pixels.get_or_insert_with(|| page_pixels(job, source_idx)).as_ref()
+            } else {
+                None
+            };
+            let scale = record.fit.as_ref().map_or(1.0, |fitted| fitted.scale);
+            let (mask, ink) = padded_pair(&base_mask, &base_ink, padding, (width, height), scale, page);
             updated.push(cleaner_core::project::LoadedDetection {
-                mask: dilated_on_page(&base_mask, padding, (width, height)),
-                ink: dilated_on_page(&base_ink, padding, (width, height)),
+                mask,
+                ink,
                 base: (padding > 0).then_some((base_mask, base_ink)),
                 record,
                 evidence: None,
@@ -7117,6 +7128,40 @@ fn page_reach(bounds: Rect, by: u32, (width, height): (u32, u32)) -> Rect {
 /// mask on its page, and one that keeps a longstrip overhang.
 fn dilated_on_page(mask: &Mask, radius: u32, size: (u32, u32)) -> Mask {
     mask.dilated_within(radius, page_reach(mask.bounds, radius, size))
+}
+
+/// Page `source_idx` as it is displayed, and its noise floor, for a padding
+/// that reads the page ([`padded_pair`]). `None` is a page whose source could
+/// not be read or decoded: its paddings are then the plain growth, as they
+/// were before a padding read the page at all, and the edit is not refused.
+fn page_pixels(job: &Job, source_idx: usize) -> Option<(Raster, f32)> {
+    let bytes = std::fs::read(job.source_path(source_idx)?).ok()?;
+    let page = job.display_page(source_idx, &bytes).ok()?;
+    let noise = fit::page_noise_sigma(&page);
+    Some((page, noise))
+}
+
+/// A detection's ungrown mask and ink, grown by `padding`. With `page`, the
+/// detection is on a balloon's plain paper and the growth stops at the
+/// balloon's outline ([`fit::padded_in_bubble`]), exactly as Detect's padding
+/// of the same seed does. Without it, [`dilated_on_page`].
+fn padded_pair(
+    base_mask: &Mask,
+    base_ink: &Mask,
+    padding: u32,
+    size: (u32, u32),
+    scale: f32,
+    page: Option<&(Raster, f32)>,
+) -> (Mask, Mask) {
+    let grow = |base: &Mask| match page {
+        Some((pixels, noise)) => {
+            fit::padded_in_bubble(pixels, base, scale, *noise, page_reach(base.bounds, padding, size), padding)
+        }
+        None => dilated_on_page(base, padding, size),
+    };
+    let mask = grow(base_mask);
+    let ink = if base_ink == base_mask { mask.clone() } else { grow(base_ink) };
+    (mask, ink)
 }
 
 /// The smallest rectangle holding both. A rectangle with no area holds
@@ -8943,6 +8988,34 @@ mod tests {
             .map(|at: usize| if lettering.contains((at % 128) as i64, (at / 128) as i64) { 20 } else { 255 })
             .collect();
         raw
+    }
+
+    /// The editor's padding of a detection on a balloon's plain paper stops at
+    /// the outline and is Detect's mask for the same seed. With no page read
+    /// (text outside a balloon, or a source that will not open) it is the
+    /// plain growth it always was.
+    #[test]
+    fn a_padding_in_a_balloon_stops_at_the_outline_and_one_outside_does_not() {
+        let lettering = Rect::new(50, 50, 20, 16);
+        let stroke = lettering.right() + 3;
+        let mut page = lettered_page(lettering);
+        for y in 0..128 {
+            for x in stroke..stroke + 2 {
+                page.data[(y * 128 + x) as usize] = 0;
+            }
+        }
+        let base = Mask::filled(lettering);
+        let (plain, plain_ink) = padded_pair(&base, &base, 8, (128, 128), 1.0, None);
+        assert_eq!(plain, base.dilated(8, 128, 128));
+        assert_eq!(plain_ink, plain);
+
+        let pixels = (page, 0.0);
+        let (held, ink) = padded_pair(&base, &base, 8, (128, 128), 1.0, Some(&pixels));
+        assert_eq!(ink, held);
+        assert!(plain.contains(stroke, 58), "fixture: the plain growth must reach the outline");
+        assert!(!held.contains(stroke, 58) && !held.contains(stroke + 3, 58), "the padding crossed the outline");
+        assert!(held.contains(lettering.x - 8, 58), "the open side lost its padding");
+        assert_eq!(held, fit::padded_in_bubble(&pixels.0, &base, 1.0, 0.0, Rect::new(0, 0, 128, 128), 8));
     }
 
     /// A cleaned layer as a LaMa run leaves one: white over the lettering

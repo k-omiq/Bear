@@ -4343,8 +4343,10 @@ impl Pipeline {
         // Padding owns the total growth from SAM, including outside balloons.
         // The background fit still chooses a route, but its automatic mask,
         // outline and model-hole growth must not become a second padding.
+        // On a balloon's plain paper the padding stops at the outline
+        // (`fit::padded_in_bubble`), so it can be wide enough for furigana.
         let fitted = fit::fit_with_padding(
-            engine_crop, &seed, scale, at.noise, &edges, bounds, self.mask_padding);
+            engine_crop, &seed, scale, at.noise, &edges, bounds, self.mask_padding, paper_inside);
         let unpadded = (self.mask_padding > 0).then(|| (seed.clone(), seed.clone()));
 
         // **The pressure ladder, between regions.** The last region's

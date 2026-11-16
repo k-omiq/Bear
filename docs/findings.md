@@ -408,6 +408,20 @@ never written as though it were general.
   is a disc at radius 5 and a square at radius 1, so the composition reaches the square root of
   37, about 6.08 px, at four corners per region. One dilation by 6 does not. Off by 0.08 px on
   four pixels, found by a test asserting the bound rather than by inspection.
+- **Padding inside a balloon stops at the outline, and needs no model to do it (2026-11-16).**
+  Mask padding is raised to take furigana the lettering mask missed, and a plain dilation then
+  takes the outline too. `fit::padded_in_bubble` reads the wall off the page: ink that runs out of
+  a box around the lettering, or spans the lettering both ways, is the outline, and the padding is
+  kept only where the lettering reaches it over paper. On 42 in-balloon regions in 38 plain
+  balloons of 15 real pages, growing the stored masks by 5, 10, 20 and 40 px more took 315, 1,057,
+  8,722 and 58,083 more outline pixels plain, and 0, 3, 14 and 341 with the wall. Both took every
+  one of the 12 furigana pieces the 5 px masks had missed. The balloon detector's box is no wall:
+  it is a rectangle with the outline inside its corners, and clamping to it took 2,451 at 10 px
+  where no clamp took 2,596.
+- **The wall's paper band cannot ask for 90% flat.** The band of paper beside the lettering is
+  where the outline is. An outline two pixels thick along one side of a narrow column is a third
+  of a 3 px band, so the share `flat_tone` asks of ordinary paper returned no wall on exactly the
+  balloons that needed one. The band asks for 60%, enough for its median to be the paper.
 
 ## Long strips and memory
 
@@ -723,6 +737,31 @@ never written as though it were general.
   beside every Windows and Linux x64 runtime.
 
 ## What has not been measured
+
+**Padding inside a balloon (2026-11-16): what is still open.**
+
+- **Noisy and JPEG scans were not measured.** The 15 bench pages are clean PNG. The wall is ink
+  off the paper's tone by twice the fit's deviation threshold, which rises with the page's noise,
+  and nothing here shows where that stops telling a thin grey outline from paper.
+- **The seeds were not SAM's.** The bench set keeps masks already grown by 5 px, so every count is
+  for padding past those. A raw seed sits closer to its glyphs and reads its paper band nearer
+  them.
+- **The judge is a model.** Outline and furigana were told apart by a balloon segmentation mask
+  (`mayocream/manga109-segmentation-bubble`, YOLO11n) set back 3 px, not by hand.
+- **That model was benched and not taken.** It covered all 110 in-balloon text boxes on 32 real
+  pages, where a paper flood leaked on 29, and it would give the whole balloon's shape. It is
+  Ultralytics YOLO, so the licence question under Models and licensing stands, and there is no
+  ONNX export of it. The wall above did not need it.
+- **No run of the app.** Detect passes its `inside` answer to the fit and the Layers slider reads
+  the page; both are covered by unit tests of the padding itself, not by a headless Detect on a
+  real chapter or by the built app.
+- **A chapter-wide padding now decodes pages.** Each page holding an in-balloon detection is read
+  once per edit. The time on a long chapter was not taken.
+- **Detect and the slider read different pixels.** Detect reads its engine window and the slider
+  reads the display page with the page's own noise floor. The two masks for one seed were not
+  compared on a denoised or long-strip chapter.
+- **Stored detections keep their masks.** A chapter detected before this date has plain paddings
+  until its padding is changed.
 
 **Undo per page (2026-11-16): what is still open.**
 
