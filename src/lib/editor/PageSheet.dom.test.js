@@ -61,6 +61,7 @@ it('shows movable artwork for a selected regional copy and retains it until the 
 })
 
 it('draws a grid over every image pixel from 800% up, and none below', async () => {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
   editor.project = { mode: 'single' }
   const page = { id: 'grid-p', chapterId: 'c1', index: 0, width: 100, height: 150, regions: [] }
   editor.chapter = { id: 'c1', pages: [page] }
@@ -68,7 +69,8 @@ it('draws a grid over every image pixel from 800% up, and none below', async () 
   expect(view.container.querySelector('.pixel-grid')).toBeNull()
   await view.rerender({ page, width: 1600 })
   const grid = /** @type {HTMLElement} */ (view.container.querySelector('.pixel-grid'))
-  expect(grid.style.getPropertyValue('--pixel')).toBe('16px')
+  // One canvas for the vertical lines and one for the horizontal.
+  expect(grid.querySelectorAll('canvas')).toHaveLength(2)
   expect(grid.getAttribute('aria-hidden')).toBe('true')
 })
 

@@ -8,6 +8,7 @@
   import DrawLayer from './DrawLayer.svelte'
   import PageArtwork from './PageArtwork.svelte'
   import PatchLayers from './PatchLayers.svelte'
+  import PixelGrid from './PixelGrid.svelte'
   import RegionLayer from './RegionLayer.svelte'
   import { layerPreviews } from './layerpreview.svelte.js'
   import { eraseMasks } from './erasepreview.svelte.js'
@@ -214,7 +215,7 @@
     <DetectionMasks {page} />
 
     {#if grid}
-      <div class="pixel-grid" style:--pixel="{pixel}px" style:--dpr={globalThis.devicePixelRatio || 1} aria-hidden="true"></div>
+      <PixelGrid {pixel} columns={naturalWidth(page)} rows={Math.round(naturalWidth(page) * ratio)} />
     {/if}
 
     <RegionLayer {page} {tabbable} interactive={!drawing} {stripMinY} {stripMaxY} />
@@ -274,22 +275,6 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
-  }
-
-  /* One line at the left and the top of every image pixel, a device pixel
-     wide. Over the masks, under the outlines. The grey is the image's, not
-     the interface's: it has to show on black ink and on white paper alike,
-     in either theme, which no token is for. */
-  .pixel-grid {
-    position: absolute;
-    inset: 0;
-    z-index: var(--z-mask);
-    pointer-events: none;
-    --grid-line: calc(1px / var(--dpr, 1));
-    background-image:
-      linear-gradient(to right, rgba(128, 128, 128, .45) var(--grid-line), transparent var(--grid-line)),
-      linear-gradient(to bottom, rgba(128, 128, 128, .45) var(--grid-line), transparent var(--grid-line));
-    background-size: var(--pixel) var(--pixel);
   }
 
   .divider {
