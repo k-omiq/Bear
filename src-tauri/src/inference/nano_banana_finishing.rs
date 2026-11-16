@@ -32,7 +32,8 @@ const OLD_KEYS: [&str; 3] = ["nanoBananaFinishing", "nanoBananaFinishingGrayscal
 /// The finishing a new Nano Banana answer takes: the shared choice. An
 /// unreadable one is the default, as a region edit reads it.
 pub fn from_settings(settings: &Value) -> Choice {
-    crate::inference::cloud_clean::finishing_from_settings(settings).map(|setting| setting.choice).unwrap_or_default()
+    crate::inference::cloud_clean::finishing_from_settings(settings).map(|setting| setting.choice)
+        .unwrap_or(Choice::SETTING_DEFAULT)
 }
 
 /// Take the old settings out of a file as it is read, so no reader and no
@@ -102,14 +103,18 @@ mod tests {
     /// reach it, and a file that holds them is read without them.
     #[test]
     fn finishing_is_the_shared_choice_and_the_old_settings_are_gone() {
-        assert_eq!(from_settings(&json!({})), Choice::default());
+        // The setting's default, Tone only, fill lost dots: not the type's,
+        // which is what a record that names no finishing means.
+        assert_eq!(Choice::SETTING_DEFAULT, Choice::of(Finishing::ToneFillDots, false));
+        assert_ne!(Choice::SETTING_DEFAULT, Choice::default());
+        assert_eq!(from_settings(&json!({})), Choice::SETTING_DEFAULT);
         let mut settings = json!({"cloudFinishing": "poisson", "cloudFinishingGrayscale": true,
             "nanoBananaFinishing": "tone-only", "nanoBananaFinishingGrayscale": false, "nanoBananaStrays": true});
         assert_eq!(from_settings(&settings), Choice::of(Finishing::Poisson, true));
         forget_old_settings(&mut settings);
         assert_eq!(settings, json!({"cloudFinishing": "poisson", "cloudFinishingGrayscale": true}));
         // Unreadable is the default, not a refused edit.
-        assert_eq!(from_settings(&json!({"cloudFinishing": "blur"})), Choice::default());
+        assert_eq!(from_settings(&json!({"cloudFinishing": "blur"})), Choice::SETTING_DEFAULT);
     }
 
     #[test]

@@ -370,7 +370,7 @@ describe('sanitizeSession', () => {
     const { sanitizeSession } = await import('./session.svelte.js')
     const off = { locationPrompt: false, marker: false, lowShift: false, megapixelSize: false }
     const finishing = (/** @type {any} */ read) => [read.cloudFinishing, read.cloudFinishingGrayscale, read.finishingEveryModel]
-    expect(finishing(sanitizeSession({}))).toEqual(['copy', false, false])
+    expect(finishing(sanitizeSession({}))).toEqual(['tone-fill-dots', false, false])
     expect(sanitizeSession({}).cloudFlux3Generation).toEqual(off)
     const kept = sanitizeSession({ cloudFinishing: 'dots-only', cloudFinishingGrayscale: true, finishingEveryModel: true,
       cloudFlux3Generation: { marker: true, megapixelSize: true } })
@@ -378,10 +378,10 @@ describe('sanitizeSession', () => {
     expect(kept.cloudFlux3Generation).toEqual({ ...off, marker: true, megapixelSize: true })
     for (const bad of [1, 'true', null, {}, ['copy']]) {
       const read = sanitizeSession({ cloudFinishing: bad, cloudFinishingGrayscale: bad, finishingEveryModel: bad, cloudFlux3Generation: bad })
-      expect(finishing(read), JSON.stringify(bad)).toEqual(['copy', false, false])
+      expect(finishing(read), JSON.stringify(bad)).toEqual(['tone-fill-dots', false, false])
       expect(read.cloudFlux3Generation).toEqual(off)
     }
-    expect(sanitizeSession({ cloudFinishing: 'reference' }).cloudFinishing).toBe('copy')
+    expect(sanitizeSession({ cloudFinishing: 'reference' }).cloudFinishing).toBe('tone-fill-dots')
     // Names an older version saved still read as the method they became.
     expect(sanitizeSession({ cloudFinishing: 'reference-poisson' }).cloudFinishing).toBe('poisson')
     expect(sanitizeSession({ cloudFinishing: 'reference-off' }).cloudFinishing).toBe('as-is')

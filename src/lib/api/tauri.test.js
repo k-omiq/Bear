@@ -68,7 +68,9 @@ it('keeps a Nano Banana grant and sends it only where it reaches the rung', asyn
 
   // A batch goes on the grant too, and Stop on it forgets it.
   await backend.startNanoBananaRun({ chapterId: 'c', regionIds: ['r1', 'r2'] })
-  expect(invoke).toHaveBeenLastCalledWith('start_nano_banana_run', { chapterId: 'c', regionIds: ['r1', 'r2'], nanoBananaGrant: 'g1' })
+  expect(invoke).toHaveBeenLastCalledWith('start_nano_banana_run', { chapterId: 'c', regionIds: ['r1', 'r2'], nanoBananaGrant: 'g1', generations: 1 })
+  await backend.startNanoBananaRun({ chapterId: 'c', regionIds: ['r1'], generations: 3 })
+  expect(invoke).toHaveBeenLastCalledWith('start_nano_banana_run', { chapterId: 'c', regionIds: ['r1'], nanoBananaGrant: 'g1', generations: 3 })
   await backend.cancelRun({ runId: 'run-9' })
   await backend.applyTool({ tool: 'autoClean', regionId: 'r', params: { engine: 'nanobanana' } })
   expect(invoke).toHaveBeenLastCalledWith('apply_tool', expect.objectContaining({ params: { engine: 'nanobanana' } }))
@@ -151,6 +153,18 @@ it('asks for finishing previews and finishes a result again through the register
   invoke.mockRejectedValueOnce('refinish_page_changed: the page under the region changed')
   await expect(backend.setRegionFinishing({ regionId: 'c-p001-h1', finishing: 'copy', grayscale: true }))
     .rejects.toThrow(/^refinish_page_changed: /)
+})
+
+// A region's variations, then the pick of one, which records its own step.
+it('lists a region\'s variations and picks one through the registered commands', async () => {
+  const invoke = vi.fn().mockResolvedValue([{ revision: 'r1', engine: 'flux', model: 'flux2-klein-4b', created: 1, current: true }])
+  const backend = createTauriBackend({ invoke, fallback: {} })
+  expect(await backend.regionVariations({ regionId: 'c-p001-h1' })).toHaveLength(1)
+  expect(invoke).toHaveBeenLastCalledWith('region_variations', { regionId: 'c-p001-h1' })
+  invoke.mockResolvedValueOnce({ region: { id: 'c-p001-h1' }, pageStatus: 'cleaned', history: null })
+  await backend.pickVariation({ regionId: 'c-p001-h1', revision: 'r2' })
+  expect(invoke).toHaveBeenLastCalledWith('pick_variation', { regionId: 'c-p001-h1', revision: 'r2' })
+  expect(implementedMethods()).toEqual(expect.arrayContaining(['regionVariations', 'pickVariation']))
 })
 
 /** The seam methods that are commands, as opposed to event listeners. */

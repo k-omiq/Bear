@@ -27,6 +27,13 @@
    * An entry with a `hint` prints it at its end, quieter than its label: the
    * chord of the shortcut that does the same thing, as the user has it bound.
    *
+   * An item with a `stepper` is a row with its label and a previous and a
+   * next button, named by `previousLabel` and `nextLabel`: the arrows reach
+   * it as any item, Left and Right go between its two buttons, and a press
+   * goes to `onstep` with -1 or 1, which the host wraps round at the ends,
+   * so neither button is ever disabled under the focus. The menu stays
+   * open, as for a range.
+   *
    * No state, no strings: every label arrives translated, like the rest of the
    * vocabulary.
    *
@@ -40,14 +47,16 @@
    *     items: Array<{
    *       id: string, label: string, icon?: string, disabled?: boolean, selected?: boolean, hint?: string,
    *       range?: { min: number, max: number, step?: number, value: number, unit?: string, hint?: string, boxLabel?: string },
+   *       stepper?: { current: number, count: number, previousLabel: string, nextLabel: string },
    *     }>,
    *   }>,
    *   onselect: (id: string) => void,
    *   onrange?: (id: string, value: number) => void,
+   *   onstep?: (id: string, delta: number) => void,
    *   onclose: () => void,
    * }}
    */
-  let { x, y, label, sections, onselect, onrange, onclose } = $props()
+  let { x, y, label, sections, onselect, onrange, onstep, onclose } = $props()
 
   /** How close to the window edge the panel may come. */
   const MARGIN = 6
@@ -189,6 +198,32 @@
   }
 
   /**
+   * A stepper row takes the focus on its first button that can be pressed.
+   *
+   * @param {FocusEvent} event
+   */
+  function stepperFocus(event) {
+    const row = /** @type {HTMLElement} */ (event.currentTarget)
+    if (event.target !== row) return
+    /** @type {HTMLButtonElement|null} */ (row.querySelector('button:not(:disabled)'))?.focus({ preventScroll: true })
+  }
+
+  /**
+   * Left and Right go between a stepper row's two buttons.
+   *
+   * @param {KeyboardEvent} event
+   */
+  function stepperKeys(event) {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    const row = /** @type {HTMLElement} */ (event.currentTarget)
+    const buttons = /** @type {HTMLButtonElement[]} */ ([...row.querySelectorAll('button:not(:disabled)')])
+    const at = buttons.indexOf(/** @type {any} */ (event.target))
+    const next = buttons[event.key === 'ArrowLeft' ? Math.max(0, at - 1) : Math.min(buttons.length - 1, at + 1)]
+    next?.focus({ preventScroll: true })
+    event.preventDefault()
+  }
+
+  /**
    * Run the entry, **then** close. The host owns what the menu is about, and
    * closing first would take it away before the entry could read it.
    *
@@ -242,6 +277,36 @@
               disabled={item.disabled}
               onchange={(value) => onrange?.(item.id, value)}
             />
+          </div>
+        {:else if item.stepper}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <div
+            bind:this={itemEls[index]}
+            class="item stepper"
+            role="group"
+            aria-label={item.label}
+            tabindex="-1"
+            onfocus={stepperFocus}
+            onkeydown={stepperKeys}
+          >
+            <span class="mark">{#if item.icon}<Icon name={item.icon} size={13} />{/if}</span>
+            <span class="item-label" aria-hidden="true">{item.label}</span>
+            <button
+              type="button"
+              class="step"
+              tabindex="-1"
+              aria-label={item.stepper.previousLabel}
+              disabled={item.disabled}
+              onclick={() => onstep?.(item.id, -1)}
+            ><Icon name="chevron-left" size={13} /></button>
+            <button
+              type="button"
+              class="step"
+              tabindex="-1"
+              aria-label={item.stepper.nextLabel}
+              disabled={item.disabled}
+              onclick={() => onstep?.(item.id, 1)}
+            ><Icon name="chevron-right" size={13} /></button>
           </div>
         {:else}
         <button
@@ -332,6 +397,26 @@
     width: 14px;
     color: var(--text);
   }
+
+  .stepper { cursor: default }
+  .stepper:hover,
+  .stepper:focus-within { background: transparent; color: var(--text) }
+  .step {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--t2);
+    cursor: pointer;
+  }
+  .step:hover:not(:disabled),
+  .step:focus-visible { background: var(--accent-soft); color: var(--text) }
+  .step:disabled { opacity: .4; cursor: default }
 
   .range {
     padding: 4px var(--s-3) 6px calc(var(--s-3) + 14px + var(--s-3));

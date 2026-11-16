@@ -573,6 +573,12 @@ pub struct AttemptRecord {
     /// records on disk carry it and unknown fields are refused.
     #[serde(default)]
     pub review_accepted: bool,
+    /// A further generation of a cloud clean run (Generations per region):
+    /// its answer is kept as a variation of the region's live result and
+    /// never applied, by the run or by a recovery after it. Absent on every
+    /// other attempt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_as_variation: bool,
     pub source_image_hash: String,
     pub region_id: String,
     pub region_revision: u64,
@@ -850,6 +856,24 @@ impl AttemptJournal {
         &self,
         intent: CreateAttemptIntent,
     ) -> Result<(AttemptRecord, AttemptLockGuard), JournalError> {
+        self.create_intent_kept(intent, false)
+    }
+
+    /// [`Self::create_intent`] for a further generation of a cloud clean
+    /// run, whose answer is kept as a variation only
+    /// ([`AttemptRecord::keep_as_variation`]).
+    pub fn create_variation_intent(
+        &self,
+        intent: CreateAttemptIntent,
+    ) -> Result<(AttemptRecord, AttemptLockGuard), JournalError> {
+        self.create_intent_kept(intent, true)
+    }
+
+    fn create_intent_kept(
+        &self,
+        intent: CreateAttemptIntent,
+        keep_as_variation: bool,
+    ) -> Result<(AttemptRecord, AttemptLockGuard), JournalError> {
         for (id, f) in [
             (&intent.attempt_id, "attempt_id"),
             (&intent.job_id, "job_id"),
@@ -902,6 +926,7 @@ impl AttemptJournal {
             flux3_generation: intent.flux3_generation,
             finishing: intent.finishing,
             review_accepted: false,
+            keep_as_variation,
             source_image_hash: intent.source_image_hash,
             region_id: intent.region_id,
             region_revision: intent.region_revision,

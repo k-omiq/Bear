@@ -48,7 +48,7 @@ function chapter() {
 
 function backend(overrides = {}) {
   return {
-    historyPush: vi.fn(async ({ entry }) => ({ cursor: 1, entries: [{ seq: 1, label: entry.label }] })),
+    historyPush: vi.fn(async ({ entry }) => ({ cursor: 1, entries: [{ seq: 1, label: entry.label, page: 0 }] })),
     loadPages: vi.fn(async () => []),
     proposePatchSource: vi.fn(async () => ({ offset: { x: 30, y: 0 } })),
     fitGradient: vi.fn(async () => ({
@@ -122,7 +122,7 @@ describe('the Patch tool', () => {
     expect(request.params.painted.feather).toBe(0)
     expect(draft.selection).toBeNull()
     await settled(editor.history)
-    expect(canUndo(editor.history)).toBe(true)
+    expect(canUndo(editor.history, 0)).toBe(true)
     expect(api.historyPush.mock.calls[0][0].entry.label).toBe('retouch.command.patch')
   })
 

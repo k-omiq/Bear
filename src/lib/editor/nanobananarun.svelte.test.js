@@ -20,6 +20,7 @@ import { createMockBackend } from '../api/mock.js'
 import { app, clearNotices, closeModal } from '../state/app.svelte.js'
 import { claimRunStart, editor, releaseRunStart } from '../state/editor.svelte.js'
 import { jobById, resetJobs, startJobs } from '../state/jobs.svelte.js'
+import { session } from '../state/session.svelte.js'
 import { evictRegions } from '../state/pagewindow.svelte.js'
 import { openNanoBananaSummary, retryable, retryNanoBanana, startNanoBananaRun } from './nanobananarun.svelte.js'
 import { confirmNanoBanana } from './nanobananaask.svelte.js'
@@ -148,6 +149,25 @@ describe('a Nano Banana batch', () => {
     expect(await detections()).toEqual([])
     expect(backend.cleanAnyway).not.toHaveBeenCalled()
     expect(backend.applyTool).not.toHaveBeenCalled()
+  })
+
+  it('at two generations per region, states and grants two requests a region and keeps both', async () => {
+    session.generationsPerRegion = 2
+    try {
+      const targets = await detections()
+      const started = startNanoBananaRun('chapter')
+      const spec = await answer('confirm')
+      expect(spec.props.count).toBe(targets.length * 2)
+      const runId = await started
+      expect(backend.startNanoBananaRun.mock.calls[0][0]).toMatchObject({ chapterId: CHAPTER, generations: 2 })
+      const report = await ended(runId)
+      expect(report).toMatchObject({ total: targets.length, cleaned: targets.length, generationsNotMade: 0 })
+      for (const target of targets) {
+        expect(await backend.regionVariations({ regionId: target.id }), target.id).toHaveLength(2)
+      }
+    } finally {
+      session.generationsPerRegion = 1
+    }
   })
 
   it('holds a page batch to the page on screen', async () => {

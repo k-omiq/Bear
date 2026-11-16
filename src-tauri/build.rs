@@ -235,6 +235,8 @@ fn main() {
             "reject_result",
             "region_finishing_previews",
             "set_region_finishing",
+            "region_variations",
+            "pick_variation",
             "apply_tool",
             "create_region",
             "edit_detection_mask",

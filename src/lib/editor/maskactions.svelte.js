@@ -40,7 +40,7 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { getBackend } from '../api/backend.js'
 import { hasKey } from '../i18n/index.js'
-import { CLOUD_ENGINE, MAX_MASK_PADDING, NANO_BANANA_ENGINE, isCloudMask, isDetected, isFailedClean, maskEngine, reRunnable, rejectable, retryWidens } from '../model/masks.js'
+import { CLOUD_ENGINE, DEFAULT_VARIATIONS, MAX_MASK_PADDING, MAX_VARIATIONS, MIN_VARIATIONS, NANO_BANANA_ENGINE, isCloudMask, isDetected, isFailedClean, maskEngine, reRunnable, rejectable, retryWidens, variesEachTime } from '../model/masks.js'
 import { currentRung, simpler, stronger } from '../model/ladder.js'
 import { isRegionCopy, layerOf, sameLayer, sanitizeLayer } from '../model/layers.js'
 import { heldStartsOutside } from '../model/review.js'
@@ -411,24 +411,26 @@ export function rerunTarget(mask, kind, engine) {
 const rerunning = new Set()
 
 /**
- * Before one paid Nano Banana request: when it cannot run here (no key saved,
+ * Before paid Nano Banana requests: when they cannot run here (no key saved,
  * or Cloud engines off) say which, and open no window, because a confirmed
- * window would only be refused after it. Otherwise the window for one region.
+ * window would only be refused after it. Otherwise the window for one region,
+ * stating `count` requests: one, or Make variations' n on that one region.
  *
  * Every route that sends one region to Google comes through here: a re-run
  * (`rerunMask`), Clean anyway (`cleanAnyway`) and a detection's clean
  * (`cleanDetected`). A batch asks once for all its regions instead
  * (`nanobananarun.svelte.js`) and is a native job that calls none of them.
  *
+ * @param {number} [count]
  * @returns {Promise<string|null>} the window's grant, or null when it may not go
  */
-async function askNanoBanana() {
+async function askNanoBanana(count = 1) {
   const reason = nanoBananaReasonKey()
   if (reason) {
     notify({ key: reason, tone: 'warn' })
     return null
   }
-  return confirmNanoBanana(1, editor.chapter?.id)
+  return confirmNanoBanana(count, editor.chapter?.id)
 }
 
 /**
@@ -449,11 +451,16 @@ function rerunReachesNanoBanana(mask, kind, engine) {
  * @param {import('../api/backend.js').ApiRegion} region
  * @param {'stronger'|'simpler'|'cycleFill'|'reopenInTool'|'retry'|'retryWider'|'engine'} kind
  * @param {string} [engine]
+ * With `landed`, the re-run is one of a Make variations run's: what it made
+ * is put in `landed` and no undo step is recorded for it, because the run is
+ * one step (`makeVariations`).
+ *
  * @param {{target: string, description: string}} [qwenEdit] - the guidance a FLUX re-run was asked for
  * @param {string|null} [nanoBananaGrant] - the window's grant, for a re-run that lands on Nano Banana
+ * @param {{state?: RegionState}} [landed]
  * @returns {Promise<boolean>}
  */
-async function rerunLocally(region, kind, engine, qwenEdit, nanoBananaGrant) {
+async function rerunLocally(region, kind, engine, qwenEdit, nanoBananaGrant, landed) {
   const chapterId = editor.chapter?.id ?? null
   const before = snapshot(region)
   const params = { ...(qwenEdit ? { qwenEdit } : {}), ...(nanoBananaGrant ? { nanoBananaGrant } : {}) }
@@ -482,10 +489,9 @@ async function rerunLocally(region, kind, engine, qwenEdit, nanoBananaGrant) {
     setTool(reopenTool)
     return true
   }
-  recordEdit('masks.command.rerunMask', region.id, before, {
-    region: result.region,
-    pageStatus: result.pageStatus,
-  }, chapterId)
+  const after = { region: result.region, pageStatus: result.pageStatus }
+  if (landed) landed.state = after
+  else recordEdit('masks.command.rerunMask', region.id, before, after, chapterId)
   if (open) refreshPage(pageIndexOf(region.id), before.region, result.region)
   return true
 }
@@ -1620,21 +1626,26 @@ export function regionPageBusy(region) {
  * @param {import('../model/types.js').OperationIntent} intent
  * @param {(params: import('../api/backend.js').CloudRunParams) => Promise<any>} call
  * @param {string} label - the undo entry's i18n key
+ * @param {{guidance?: {edit?: {target: string, description: string}}, landed?: {state?: RegionState}}} [options] - a run of renders'
+ *   guidance, asked once (`requestCloudConsent`); with `landed`, the render is one of a Make variations
+ *   run's, whose result goes there and which records no step of its own
  * @returns {Promise<boolean>}
  */
-async function renderInCloud(region, intent, call, label) {
+async function renderInCloud(region, intent, call, label, options = {}) {
   const chapterId = editor.chapter?.id
   const pageIndex = pageIndexOf(region.id)
   if (!chapterId || pageIndex === null) return false
   const where = { chapterId, pageIndex, regionId: region.id }
   const before = snapshot(region)
-  const grant = await requestCloudConsent({ ...where, intent })
+  const grant = await requestCloudConsent({ ...where, intent }, undefined, options)
   if (!grant) return false
   const result = await runCloudJob(grant, where, call, (answer) => (answer ? { phase: 'committed' } : null))
   if (!result?.region) return false
   const open = stillOpen(chapterId)
   if (open) replaceRegion(result.region, result.pageStatus)
-  recordEdit(label, region.id, before, { region: result.region, pageStatus: result.pageStatus }, chapterId)
+  const after = { region: result.region, pageStatus: result.pageStatus }
+  if (options.landed) options.landed.state = after
+  else recordEdit(label, region.id, before, after, chapterId)
   if (open) refreshPage(pageIndex, before.region, result.region)
   return true
 }
@@ -1644,9 +1655,10 @@ async function renderInCloud(region, intent, call, label) {
  * mask. The same request either way, so the same consent and the same intent.
  *
  * @param {import('../api/backend.js').ApiRegion} region
+ * @param {{guidance?: {edit?: {target: string, description: string}}, landed?: {state?: RegionState}}} [options]
  * @returns {Promise<boolean>}
  */
-function rerunInCloud(region) {
+function rerunInCloud(region, options = {}) {
   const maskId = region.mask?.id
   if (!maskId) return Promise.resolve(false)
   return renderInCloud(
@@ -1654,7 +1666,194 @@ function rerunInCloud(region) {
     { action: 'rerunMask', mask_id: maskId, kind: 'engine', engine: CLOUD_ENGINE },
     (params) => getBackend().rerunMask({ maskId, kind: 'engine', engine: CLOUD_ENGINE, params }),
     'masks.command.rerunMask',
+    options,
   )
+}
+
+/**
+ * How many Make variations makes, remembered for the session: the region
+ * menu's count, 2 to 8, 3 until one is chosen.
+ */
+export const variationRuns = $state({ count: DEFAULT_VARIATIONS })
+
+/**
+ * Set how many Make variations makes.
+ *
+ * @param {number} count
+ */
+export function setVariationCount(count) {
+  variationRuns.count = Math.min(MAX_VARIATIONS, Math.max(MIN_VARIATIONS, Math.round(Number(count) || DEFAULT_VARIATIONS)))
+}
+
+/**
+ * The region as the open chapter holds it now.
+ *
+ * @param {string} regionId
+ * @returns {import('../api/backend.js').ApiRegion|null}
+ */
+function liveRegion(regionId) {
+  for (const page of editor.chapter?.pages ?? []) {
+    const found = page.regions.find((candidate) => candidate.id === regionId)
+    if (found) return found
+  }
+  return null
+}
+
+/**
+ * A region's variations as the backend lists them (`regionVariations`), or
+ * none when they cannot be read: the menu then shows no position row.
+ *
+ * @param {{id: string}} region
+ * @returns {Promise<import('../api/backend.js').RegionVariation[]>}
+ */
+export async function regionVariations(region) {
+  try {
+    const listed = await getBackend().regionVariations({ regionId: region.id })
+    return Array.isArray(listed) ? listed : []
+  } catch (error) {
+    console.error('a region\'s variations could not be read', error)
+    return []
+  }
+}
+
+/** The Undo tooltip of a Make variations run, one step however many it made. */
+export const MAKE_VARIATIONS_LABEL = 'masks.command.makeVariations'
+
+/**
+ * **Make n variations**: Try again `count` times in a row on one region whose
+ * result a model that answers differently each time made (`variesEachTime`),
+ * one after the other. Each one made is a new variation and the newest is
+ * applied; the first failure, refusal or cancel stops it, and what it made
+ * is kept.
+ *
+ * **The run is one undo step of the page** (`MAKE_VARIATIONS_LABEL`), not
+ * one per variation: making a variation is never an undo step, and what Undo
+ * takes back is which one the region shows. Its undo applies the result the
+ * region showed before the run, its redo the newest again, and every
+ * variation it made stays on the region's list either way. A run stopped
+ * after k of n is that one step for those k; a run that made none records
+ * nothing.
+ *
+ * It asks once, not `count` times: one Nano Banana window stating `count`
+ * requests, whose grant every one of them spends, and whose Stop on the row
+ * ends the run; one FLUX guidance prompt for a local result; one guidance
+ * prompt for a cloud result. A cloud grant covers one attempt, so each cloud
+ * render still has its own consent, which a standing consent in the project
+ * answers without the dialog after the first.
+ *
+ * @param {import('../api/backend.js').ApiRegion} region
+ * @param {number} [count]
+ * @returns {Promise<number>} how many were made
+ */
+export async function makeVariations(region, count = variationRuns.count) {
+  const n = Math.min(MAX_VARIATIONS, Math.max(MIN_VARIATIONS, Math.round(Number(count) || DEFAULT_VARIATIONS)))
+  if (!region?.mask || !variesEachTime(region.mask)) return 0
+  if (rerunning.has(region.id)) return 0
+  const chapterId = editor.chapter?.id ?? null
+  if (!chapterId) return 0
+  const engine = maskEngine(region.mask)
+  /** What the newest variation the run made left the region as. @type {{state?: RegionState}} */
+  const landed = {}
+  /** @type {(current: import('../api/backend.js').ApiRegion) => Promise<boolean>} */
+  let once
+  /** @type {string|null} */
+  let grant = null
+  if (engine === CLOUD_ENGINE) {
+    /** @type {{edit?: {target: string, description: string}}} */
+    const guidance = {}
+    once = (current) => rerunInCloud(current, { guidance, landed })
+  } else {
+    /** @type {{target: string, description: string}|null|undefined} */
+    let qwenEdit
+    if (engine === 'flux') {
+      qwenEdit = await askLocalGuidance(region.id)
+      if (qwenEdit === null) return 0
+    }
+    once = (current) => claimPageEdit(pageIndexOf(current.id))
+      ? rerunLocally(current, 'retry', undefined, qwenEdit ?? undefined, grant, landed)
+      : Promise.resolve(false)
+  }
+  if (engine !== CLOUD_ENGINE && !claimPageEdit(pageIndexOf(region.id))) return 0
+  const before = snapshot(region)
+  rerunning.add(region.id)
+  let made = 0
+  try {
+    if (engine === NANO_BANANA_ENGINE) {
+      grant = await askNanoBanana(n)
+      if (!grant) return 0
+    }
+    made = await whileNanoBananaEdit(region.id, grant, async () => {
+      let done = 0
+      while (done < n) {
+        const current = liveRegion(region.id) ?? (done === 0 ? region : null)
+        if (!current?.mask || !stillOpen(chapterId) || !(await once(current))) break
+        done += 1
+      }
+      return done
+    })
+  } finally {
+    rerunning.delete(region.id)
+    // One step for the run, from what the region showed before it to the
+    // newest it made, recorded whatever stopped it, a thrown error included.
+    if (landed.state) recordEdit(MAKE_VARIATIONS_LABEL, region.id, before, landed.state, chapterId)
+  }
+  if (made > 0 && made < n) notify({ key: 'notice.variations.stopped', params: { made, count: n }, tone: 'info' })
+  return made
+}
+
+/** The regions a pick of a variation is in flight for, by id. */
+const picking = new Set()
+
+/**
+ * Show one of a region's variations: the backend makes it the live result
+ * and records the change as one undo step of the page under the same lock
+ * (`pickVariation`), and the index after it is adopted. Nothing is rendered
+ * and nothing is lost: the one left is still a variation.
+ *
+ * @param {import('../api/backend.js').ApiRegion} region
+ * @param {string} revision
+ * @returns {Promise<boolean>} whether the region changed
+ */
+export async function pickVariation(region, revision) {
+  const chapterId = editor.chapter?.id ?? null
+  const pageIndex = pageIndexOf(region.id)
+  if (!chapterId || pageIndex === null) return false
+  if (picking.has(region.id) || rerunning.has(region.id) || !claimPageEdit(pageIndex)) return false
+  picking.add(region.id)
+  try {
+    /** @type {Awaited<ReturnType<import('../api/backend.js').Backend['pickVariation']>>} */
+    let result
+    try {
+      result = await getBackend().pickVariation({ regionId: region.id, revision })
+    } catch (error) {
+      return reportRegionEditFailure(error)
+    }
+    if (!result?.region) return false
+    if (!result.history) return false
+    if (!stillOpen(chapterId)) return true
+    replaceRegion(result.region, result.pageStatus)
+    adoptBackendHistory(chapterId, result.history)
+    refreshPage(pageIndex, region, result.region)
+    return true
+  } finally {
+    picking.delete(region.id)
+  }
+}
+
+/**
+ * Show the variation before (`-1`) or after (`1`) the one the region shows,
+ * round from the last to the first and back.
+ *
+ * @param {import('../api/backend.js').ApiRegion} region
+ * @param {number} delta
+ * @returns {Promise<boolean>}
+ */
+export async function stepVariation(region, delta) {
+  const listed = await regionVariations(region)
+  const at = listed.findIndex((variation) => variation.current)
+  if (listed.length < 2 || at < 0) return false
+  const target = listed[(at + Math.sign(delta) + listed.length) % listed.length]
+  return pickVariation(liveRegion(region.id) ?? region, target.revision)
 }
 
 /**
@@ -1696,7 +1895,9 @@ export function showOnPage(region) {
  * region's alone, Approve mask a held region's, and Reject result a cleaned
  * detection's, the three entries with no row control: `setDetectionType`,
  * `approveHeldMask` and `rejectResult`. Restore mask on a failed clean is
- * `restoreDeclinedMask`, which its row offers too.
+ * `restoreDeclinedMask`, which its row offers too. Make n variations is Try
+ * again n times in a row (`makeVariations`); the Variations row's previous
+ * and next do not close the menu and are the menu's own (`stepVariation`).
  *
  * @param {string} id
  * @param {import('../api/backend.js').ApiRegion} region
@@ -1706,6 +1907,7 @@ export async function runRegionMenuItem(id, region) {
   if (!region) return false
   if (id === 'retry') return rerunMask(region, 'retry')
   if (id === 'retryWider') return rerunMask(region, 'retryWider')
+  if (id === 'makeVariations') return (await makeVariations(region)) > 0
   if (id === 'reject') return rejectResult(region)
   if (id === 'restoreMask') return restoreDeclinedMask(region)
   if (id === 'finishing') {

@@ -14,7 +14,7 @@
  * Nothing in this file imports from `svelte` or touches the DOM.
  */
 
-import { createJournal, pushEntry, redoEntry, undoEntry, viewOf } from '../model/journal.js'
+import { createJournal, nextEntry, pushEntry, redoEntry, undoEntry, viewOf } from '../model/journal.js'
 import { displayBbox, editedLayer, isErasableLayer, isRegionCopy, layerCapabilities, layerOf, sanitizeLayer } from '../model/layers.js'
 import { regionState, reviewReason } from '../model/review.js'
 import { aboutInfo, buildChapter, buildFixtures, buildProject, defaultSettings } from './fixtures.js'
@@ -28,10 +28,10 @@ import { createBuildContext, makePages } from './pagebuilder.js'
 import { parseChapterNumber, sameChapterNumber } from '../home/chapternumber.js'
 import { CHAIN_STEPS, DENOISE_PRESETS, chainScales, outputScalesFor, presetById, recipeAt } from '../model/denoise.js'
 import { currentRung } from '../model/ladder.js'
-import { MAX_MASK_PADDING, NANO_BANANA_ENGINE, isUncleaned } from '../model/masks.js'
+import { MAX_GENERATIONS, MAX_MASK_PADDING, MIN_GENERATIONS, NANO_BANANA_ENGINE, generationsOf, isUncleaned, listsVariations, maskEngine, retryWidens } from '../model/masks.js'
 import { nanoBananaModel, nanoBananaStartSize } from '../model/nanobanana.js'
 import { recordedNanoBananaFinishing } from '../model/nanobananafinishing.js'
-import { FINISHINGS } from '../model/model-names.js'
+import { DEFAULT_FINISHING, FINISHINGS } from '../model/model-names.js'
 import {
   applyToolToRegion,
   cleanRegionAnyway,
@@ -1162,6 +1162,20 @@ export function createMockBackend(options = {}) {
   const keptDetections = new Map()
   /** @type {Map<string, {region: Object, pageId: string}>} */
   const withdrawnResults = new Map()
+  /**
+   * Every result a region has shown, oldest first, as the native revision
+   * lists keep them (`Job::complete_region_with_policy`): what its variations
+   * are read from (`variations.rs`). Kept as the region was at the time, each
+   * with the revision its mask was given. The mock notes a result when it is
+   * left or read, not at every commit, which is the same list for every
+   * result a region could be asked about.
+   *
+   * @type {Map<string, Object[]>}
+   */
+  const keptResults = new Map()
+  let mockRevisions = 0
+  /** The Undo tooltip of a picked variation (`variations.rs#PICK_LABEL`). */
+  const PICK_LABEL = 'masks.command.pickVariation'
 
   /** The Undo tooltip of a clean the backend recorded, and of a reject (`history.rs`). */
   const CLEAN_LABEL = 'masks.command.cleanRegion'
@@ -1177,7 +1191,7 @@ export function createMockBackend(options = {}) {
   /** Forget what was kept for regions that are gone for good, by their pages. */
   const dropKeptFor = (pages) => {
     const stems = pages.map((page) => `${page.id}-`)
-    for (const map of [keptDetections, withdrawnResults]) {
+    for (const map of [keptDetections, withdrawnResults, keptResults]) {
       for (const id of [...map.keys()]) {
         if (stems.some((stem) => id.startsWith(stem))) map.delete(id)
       }
@@ -1191,19 +1205,21 @@ export function createMockBackend(options = {}) {
   const recordCleanStep = (chapterId, label, regionId, before, after) => {
     const journal = journalFor(chapterId)
     const group = ownRun
-    const last = journal.entries[journal.entries.length - 1]
-    if (group && last?.op === 'clean-state' && last.group === group && journal.cursor === journal.entries.length) {
-      // A Nano Banana batch's cleans are one step (`history.rs#join_group`):
-      // every region is a part, the first included, and a region cleaned
-      // twice keeps its first before.
+    const page = pageIndexIn(chapterId, regionId)
+    const last = journal.entries.findLast((entry) => entry.page === page)
+    const stepLabel = group ? CLEAN_BATCH_LABEL : label
+    if (group && last && !last.undone && last.op === 'clean-state' && last.group === group && last.label === stepLabel) {
+      // A Nano Banana batch's cleans of one page are one step of that page
+      // (`history.rs#join_group`): every region is a part, the first
+      // included, and a region cleaned twice keeps its first before.
       if (!last.parts?.length) last.parts = [{ regionId: last.regionId, before: last.before, after: last.after }]
       const part = last.parts.find((entry) => entry.regionId === regionId)
       if (part) part.after = after
       else last.parts.push({ regionId, before, after })
     } else {
       pushEntry(journal, {
-        label: group ? CLEAN_BATCH_LABEL : label, op: 'clean-state', regionId, before, after, ...(group ? { group } : {}),
-      }, undoLimitValue())
+        label: stepLabel, op: 'clean-state', regionId, before, after, page, ...(group ? { group } : {}),
+      }, undoLimitValue(), (id) => pageIndexIn(chapterId, id))
     }
     emit({ type: 'history-changed', chapterId })
     return snapshot(viewOf(journal, undoLimitValue()))
@@ -1224,9 +1240,152 @@ export function createMockBackend(options = {}) {
    */
   const recordRegionStep = (chapterId, label, regionId, before, after) => {
     const journal = journalFor(chapterId)
-    pushEntry(journal, { label, op: 'region-state', regionId, before, after }, undoLimitValue())
+    pushEntry(journal, { label, op: 'region-state', regionId, before, after }, undoLimitValue(), (id) => pageIndexIn(chapterId, id))
     emit({ type: 'history-changed', chapterId })
     return snapshot(viewOf(journal, undoLimitValue()))
+  }
+
+  /** Keep the region's result as it is now, giving its mask a revision if it has none. */
+  const keepResult = (region) => {
+    if (!region?.mask || isDetection(region)) return
+    if (!region.mask.legacyPatchRevision) region.mask.legacyPatchRevision = `${region.id}-rev-${(mockRevisions += 1)}`
+    const kept = keptResults.get(region.id) ?? []
+    const copy = snapshot(region)
+    const json = JSON.stringify(copy)
+    if (!kept.some((entry) => JSON.stringify(entry) === json)) kept.push(copy)
+    keptResults.set(region.id, kept)
+  }
+
+  /** The seed a local FLUX result records (`variations.rs#FLUX_SEED_KEY`), and the base one. */
+  const FLUX_SEED = 1
+
+  /**
+   * Which hole a LaMa result was rendered through, counted in Try again
+   * wider presses. The native side tells LaMa answers apart by the digest of
+   * the rendered mask (`variations.rs#identity`); the mock has no mask bytes,
+   * so it records the count in the same field.
+   */
+  const lamaHoleOf = (mask) => Number(/^mock-hole-(\d+)$/.exec(String(mask?.provenance?.mask_sha256 ?? ''))?.[1] ?? 0)
+
+  /** Which answer a kept result shows, by `variations.rs#identity`'s rules. */
+  const answerOf = (region) => {
+    const provenance = region.mask?.provenance ?? {}
+    const revision = `revision:${region.mask?.legacyPatchRevision}`
+    switch (maskEngine(region.mask)) {
+      case 'lama':
+        return `lama:mock-hole-${lamaHoleOf(region.mask)}`
+      case 'cloud': {
+        const id = provenance.cloud?.attempt_id || provenance.cloud?.request_id
+        return id ? `cloud:${id}` : revision
+      }
+      case NANO_BANANA_ENGINE: {
+        const sha = provenance.params_snapshot?.nano_banana?.answer_sha256
+        return sha ? `nanobanana:${sha}` : revision
+      }
+      default: {
+        const { flux_model: model, flux_seed: seed } = provenance.params_snapshot ?? {}
+        return typeof model === 'string' && Number.isInteger(seed) ? `flux:${model}:${seed}` : revision
+      }
+    }
+  }
+
+  /**
+   * A region's variations, as `variations.rs#list` reads them: its kept
+   * results of the engines that answer differently each time and of LaMa
+   * (one per hole), one per answer, the newest result of each, in the order
+   * they were first made, and the live one shown as it is live.
+   */
+  const variationsOf = (region) => {
+    if (!region?.mask || isDetection(region) || region.visible === false) return []
+    keepResult(region)
+    /** @type {Array<{key: string, region: Object, created: string|undefined}>} */
+    const groups = []
+    for (const kept of keptResults.get(region.id) ?? []) {
+      if (!listsVariations(kept.mask)) continue
+      const key = answerOf(kept)
+      const held = groups.find((group) => group.key === key)
+      if (held) held.region = kept
+      else groups.push({ key, region: kept, created: kept.mask.provenance?.created })
+    }
+    const live = listsVariations(region.mask) ? answerOf(region) : null
+    return groups.map((group) => {
+      const current = group.key === live
+      const shown = current ? region : group.region
+      const provenance = shown.mask.provenance ?? {}
+      return {
+        revision: shown.mask.legacyPatchRevision,
+        engine: maskEngine(shown.mask),
+        model: provenance.cloud?.model ?? provenance.params_snapshot?.nano_banana?.model
+          ?? provenance.params_snapshot?.flux_model ?? null,
+        created: Math.floor((Date.parse(group.created ?? '') || 0) / 1000),
+        current,
+        region: shown,
+      }
+    })
+  }
+
+  /**
+   * Further generations of a region a clean run just cleaned on local FLUX
+   * (Generations per region), as `run.rs` keeps them: each at the seed after
+   * the last, kept as a variation only (`variations.rs#keep_generation`),
+   * the first left live and nothing journaled. A run's FLUX result records
+   * its model and seed, as natively.
+   */
+  const keepGenerations = (region) => {
+    if (!region?.mask || isDetection(region) || maskEngine(region.mask) !== 'flux') return
+    const provenance = region.mask.provenance ?? (region.mask.provenance = {})
+    const seed = Number.isInteger(provenance.params_snapshot?.flux_seed) ? provenance.params_snapshot.flux_seed : FLUX_SEED
+    provenance.params_snapshot = { ...(provenance.params_snapshot ?? {}),
+      flux_model: String(state.settings?.fluxModel || 'flux2-klein-4b'), flux_seed: seed }
+    keepResult(region)
+    const count = generationsOf(state.settings.generationsPerRegion)
+    for (let step = 1; step < count; step += 1) {
+      const extra = snapshot(region)
+      extra.mask.legacyPatchRevision = `${region.id}-rev-${(mockRevisions += 1)}`
+      extra.mask.provenance.params_snapshot = { ...extra.mask.provenance.params_snapshot, flux_seed: seed + step }
+      extra.mask.provenance.created = new Date(timers.now()).toISOString()
+      keepResult(extra)
+    }
+  }
+
+  /**
+   * Further generations of a region a cloud clean run just cleaned
+   * (Generations per region), as `cloud_clean.rs#generations` keeps them:
+   * each its own render under an attempt of its own, kept as a variation
+   * only (`variations.rs#keep_generation`), the first left live and nothing
+   * journaled. `count` is the consent's renders of each region.
+   *
+   * @param {any} region
+   * @param {string} grantId
+   * @param {number} count
+   */
+  const keepCloudGenerations = (region, grantId, count) => {
+    if (!region?.mask || isDetection(region) || !region.mask.provenance?.cloud || count <= 1) return
+    keepResult(region)
+    for (let step = 1; step < count; step += 1) {
+      const extra = snapshot(region)
+      const attemptId = cloudAttemptId(`${grantId}:${region.id}:${step}`)
+      extra.mask.legacyPatchRevision = `${region.id}-rev-${(mockRevisions += 1)}`
+      extra.mask.provenance.cloud = { ...extra.mask.provenance.cloud, attempt_id: attemptId,
+        job_id: `job-${attemptId.slice(4, 20)}`, request_id: `req-${attemptId.slice(4, 20)}` }
+      extra.mask.provenance.created = new Date(timers.now()).toISOString()
+      keepResult(extra)
+    }
+  }
+
+  /**
+   * The seed a local FLUX re-run of `region` asks at, as
+   * `variations.rs#next_flux_seed` picks it: the base seed plus the answers
+   * the region has from that model, past any seed already used.
+   */
+  const nextFluxSeed = (region, model) => {
+    const rows = (keptResults.get(region.id) ?? [])
+      .filter((kept) => maskEngine(kept.mask) === 'flux' && kept.mask.provenance?.params_snapshot?.flux_model === model)
+    const answers = new Set(rows.map(answerOf))
+    const used = rows.map((kept) => kept.mask.provenance.params_snapshot.flux_seed ?? FLUX_SEED)
+    let seed = FLUX_SEED + answers.size
+    while (used.includes(seed)) seed += 1
+    return seed
   }
 
   /**
@@ -1638,10 +1797,25 @@ export function createMockBackend(options = {}) {
       steps.clean = { ...steps.clean, ...solid }
       steps.auto = { ...steps.auto, ...solid }
     }
+    // Generations per region, for a clean on this computer: a region cleaned
+    // on local FLUX keeps its further generations as variations (`run.rs`).
+    // A streaming cloud clean keeps its own below, as many as its consent says.
+    if (!cloudClean) {
+      for (const key of /** @type {const} */ (['clean', 'auto'])) {
+        const apply = steps[key].apply
+        steps[key] = { ...steps[key], apply: (region, page, ctx) => {
+          const answer = apply(region, page, ctx)
+          if (answer !== false) keepGenerations(region)
+          return answer
+        } }
+      }
+    }
     // A streaming cloud clean (`cloud_clean.rs#run_stream`): each region is
     // detected, then rendered on the cloud GPU while the estimate of what was
     // sent stays within the cap. The region that would pass it, and every one
-    // after, stays detected, said once.
+    // after, stays detected, said once. A region is counted with every
+    // generation its consent covers, and its further ones are kept as
+    // variations.
     if (cloudClean) {
       let spent = 0
       let capped = false
@@ -1649,7 +1823,7 @@ export function createMockBackend(options = {}) {
         ...steps.auto,
         apply: (region, page, ctx) => {
           if (!isDetection(region)) detectRegion(region, page, ctx, detector, maskPaddingPx)
-          const next = spent + (spent === 0 ? MOCK_STREAM_FIXED_USD : 0) + MOCK_STREAM_REGION_USD
+          const next = spent + (spent === 0 ? MOCK_STREAM_FIXED_USD : 0) + MOCK_STREAM_REGION_USD * cloudClean.generations
           if (!capped && next > cloudClean.capUsd) {
             capped = true
             notify('notice.cloudClean.capReached', { page: page.index + 1, cap: cloudClean.capUsd }, 'warn')
@@ -1657,6 +1831,7 @@ export function createMockBackend(options = {}) {
           if (capped) return false
           spent = next
           commitCloudResult({ region, page }, cloudRecordFor(cloudAttemptId(`${cloudClean.grantId}:${region.id}`), cloudClean.target))
+          keepCloudGenerations(region, cloudClean.grantId, cloudClean.generations)
           delete region.pick
           delete region.detector
           delete region.insideBubble
@@ -1958,10 +2133,10 @@ export function createMockBackend(options = {}) {
   /* ---------- the undo journal ---------- */
 
   /**
-   * One journal per chapter. In a real backend this is
+   * One journal per chapter, partitioned by page. In a real backend this is
    * `<job>.mtclean.d/history.json`; here it is a Map, and the semantics are the
-   * same three rules `src/lib/model/journal.js` states, because both sides call
-   * the same functions.
+   * same rules `src/lib/model/journal.js` states, because both sides call the
+   * same functions: undo and redo never leave the page asked for.
    */
   /** @type {Map<string, import('../model/journal.js').Journal>} */
   const journals = new Map()
@@ -1972,6 +2147,25 @@ export function createMockBackend(options = {}) {
       journals.set(chapterId, journal)
     }
     return journal
+  }
+
+  /**
+   * The page a region id names in its chapter, as `region.rs#page_index_in`
+   * reads it: the page whose id, plus the separator, is the longest prefix
+   * of the region id. The id alone, so a region deleted since still has its
+   * page.
+   *
+   * @param {string} chapterId
+   * @param {string} regionId
+   * @returns {number|null}
+   */
+  const pageIndexIn = (chapterId, regionId) => {
+    let best = null
+    for (const page of findChapter(chapterId)?.chapter.pages ?? []) {
+      if (!String(regionId).startsWith(`${page.id}-`)) continue
+      if (!best || page.id.length > best.id.length) best = page
+    }
+    return best ? best.index : (findRegion(regionId)?.page.index ?? null)
   }
 
   /*
@@ -2001,9 +2195,11 @@ export function createMockBackend(options = {}) {
   /** @type {(pages: any[]) => Array<{page: any, before: any}>} */
   const capturePages = (pages) => pages.map((page) => ({ page, before: pageStateOf(page) }))
   /**
-   * Record the pages `capturePages` took before an edit as one step; a page
-   * the edit left as it was is not part of it, and an edit that changed none
-   * records nothing. With a `group`, a run's later pages join its entry.
+   * Record the pages `capturePages` took before an edit as one step **per
+   * page**, as `history.rs#record_pages` does; a page the edit left as it was
+   * is not part of it, and an edit that changed none records nothing. With a
+   * `group`, a run's later write of a page joins its step of that page, and a
+   * page brought back to where it started has no step left.
    */
   const recordPageStep = (chapterId, label, captured, group = null) => {
     const pages = captured
@@ -2011,15 +2207,21 @@ export function createMockBackend(options = {}) {
       .filter((step) => !samePageState(step.before, step.after))
     if (pages.length === 0) return
     const journal = journalFor(chapterId)
-    const last = journal.entries.at(-1)
-    if (group && last?.group === group && journal.cursor === journal.entries.length) {
-      for (const step of pages) {
+    for (const step of pages) {
+      const at = journal.entries.findLastIndex((entry) => entry.page === step.pageIndex)
+      const last = journal.entries[at]
+      if (group && last && !last.undone && last.op === 'detection-state' && last.group === group && last.label === label) {
         const held = last.pages.find((page) => page.pageId === step.pageId)
         if (held) held.after = step.after
         else last.pages.push(step)
+        last.pages = last.pages.filter((page) => !samePageState(page.before, page.after))
+        if (last.pages.length === 0) {
+          journal.entries.splice(at, 1)
+          journal.cursor = journal.entries.filter((entry) => !entry.undone).length
+        }
+      } else {
+        pushEntry(journal, { label, op: 'detection-state', regionId: '', before: { present: false }, after: { present: false }, pages: [step], group, page: step.pageIndex }, undoLimitValue())
       }
-    } else {
-      pushEntry(journal, { label, op: 'detection-state', regionId: '', before: { present: false }, after: { present: false }, pages, group }, undoLimitValue())
     }
     emit({ type: 'history-changed', chapterId })
   }
@@ -2729,7 +2931,7 @@ export function createMockBackend(options = {}) {
     if (!model || !mask?.provenance) return
     const info = ENGINE_INFO[NANO_BANANA_ENGINE]
     const { finishing, grayscale, strays } = recorded ?? {
-      finishing: FINISHINGS.includes(state.settings.cloudFinishing) ? state.settings.cloudFinishing : FINISHINGS[0],
+      finishing: FINISHINGS.includes(state.settings.cloudFinishing) ? state.settings.cloudFinishing : DEFAULT_FINISHING,
       grayscale: state.settings.cloudFinishingGrayscale === true,
       strays: false,
     }
@@ -3691,7 +3893,7 @@ export function createMockBackend(options = {}) {
     async historyPush({ chapterId, entry }) {
       await delay(timing.method)
       const journal = journalFor(chapterId)
-      pushEntry(journal, entry, undoLimitValue())
+      pushEntry(journal, entry, undoLimitValue(), (id) => pageIndexIn(chapterId, id))
       return snapshot(viewOf(journal, undoLimitValue()))
     },
 
@@ -3702,26 +3904,25 @@ export function createMockBackend(options = {}) {
     },
 
     /**
-     * One step. The cursor moves before anything is replayed, which is what
-     * makes an interrupted undo resolve the same way twice: re-applying a delta
-     * to a state already in it is a no-op by construction.
+     * One step on one page: only `pageIndex`'s entries are answered or
+     * marked, as `history.rs#move_at` does it. The mark moves before anything
+     * is replayed, which is what makes an interrupted undo resolve the same
+     * way twice: re-applying a delta to a state already in it is a no-op by
+     * construction.
      */
-    async historyMove({ chapterId, direction }) {
+    async historyMove({ chapterId, pageIndex, direction }) {
       await delay(timing.method)
+      if (!Number.isInteger(pageIndex)) throw new Error('history_move needs the page on screen')
       const journal = journalFor(chapterId)
-      // A step onto the page a run is on is refused before the cursor moves,
+      // A step onto the page a run is on is refused before the mark moves,
       // as `history.rs#history_move` refuses it: the caller replays nothing
-      // and puts its own cursor back.
-      const next = journal.entries[direction === 'redo' ? journal.cursor : journal.cursor - 1]
+      // and puts its own mark back.
+      const next = nextEntry(journal, pageIndex, direction)
       // A batch's step while the batch still adds to it (`history.rs#move_at`).
       if (next?.group && runner.list().some((run) => run.runId === next.group)) {
         throw new Error('run_step_in_progress: the step belongs to a run that is still going')
       }
-      if (next?.op === 'region-state' || next?.op === 'clean-state') {
-        const page =
-          findRegion(next.regionId)?.page ?? findPage(next.before?.pageId ?? next.after?.pageId)
-        if (page) refuseBusyPage(chapterId, page.index)
-      }
+      if (next && Number.isInteger(next.page)) refuseBusyPage(chapterId, next.page)
       // A page edit is put back here, before the answer, as the native side
       // does it under the lock that moves the cursor.
       let replayed = null
@@ -3729,7 +3930,7 @@ export function createMockBackend(options = {}) {
         for (const step of next.pages) refuseBusyPage(chapterId, step.pageIndex)
         replayed = replayPageStep(next, direction === 'undo')
       }
-      const entry = direction === 'redo' ? redoEntry(journal) : undoEntry(journal)
+      const entry = direction === 'redo' ? redoEntry(journal, pageIndex) : undoEntry(journal, pageIndex)
       return snapshot({ cursor: journal.cursor, entry: entry ?? null, ...(replayed ?? {}) })
     },
 
@@ -4004,7 +4205,8 @@ export function createMockBackend(options = {}) {
         if (state.settings.cloudEngines !== 'allowed') throw new Error('cloud_disabled')
         const pages = queueFor({ scope, chapterId, pageIndex, outsideBubbles, mode }).map((entry) => entry.page.index)
         if (pages.some((index) => !grant.pageIndices.includes(index))) throw new Error('cloud_clean_grant_mismatch: pages')
-        cloudClean = { grantId: cloudCleanGrant, capUsd: grant.capUsd, target: grant.target }
+        cloudClean = { grantId: cloudCleanGrant, capUsd: grant.capUsd, target: grant.target,
+          generations: generationsOf(grant.generations) }
         solidBubblesOnly = false
       }
       // As the native run start does: a local lettering mask with less free
@@ -4672,13 +4874,57 @@ export function createMockBackend(options = {}) {
       }
       const before = { present: true, pageStatus: found.page.status, region: snapshot(found.region) }
       const { strays: _strays, ...kept } = was ?? {}
+      // A finishing change is a commit of its own natively, so a new
+      // revision of the same answer.
+      keepResult(found.region)
+      found.region.mask.legacyPatchRevision = `${regionId}-rev-${(mockRevisions += 1)}`
       provenance.params_snapshot = {
         ...(provenance.params_snapshot ?? {}),
         postprocess: { ...kept, finishing, grayscale: grayscale === true, ...(strays === true ? { strays: true } : {}) },
       }
       const after = { present: true, pageStatus: found.page.status, region: snapshot(found.region) }
       const history = recordRegionStep(found.chapter.id, FINISHING_LABEL, regionId, before, after)
+      keepResult(found.region)
       return { region: snapshot(found.region), pageStatus: found.page.status, history }
+    },
+
+    /**
+     * A region's variations, as `variations.rs#list` reads them: one per
+     * answer a model that answers differently each time gave it, the newest
+     * result of each, in the order they were first made. LaMa, fills, paint
+     * and clone results are none.
+     */
+    async regionVariations({ regionId }) {
+      await delay(timing.method)
+      const found = findRegion(regionId)
+      if (!found) return []
+      return variationsOf(found.region).map(({ region: _region, ...variation }) => variation)
+    },
+
+    /**
+     * Show one of a region's variations, as `library.rs#pick_variation`
+     * does: the result kept for it is put back with no render, the region
+     * keeps its place, and the change is one `region-state` undo step this
+     * side records itself. The one it shows already writes nothing.
+     */
+    async pickVariation({ regionId, revision }) {
+      await delay(timing.method)
+      const found = findRegion(regionId)
+      if (!found) return null
+      refuseBusyPage(found.chapter.id, found.page.index)
+      const chosen = variationsOf(found.region).find((variation) => variation.revision === revision)
+      if (!chosen) return null
+      if (chosen.current) return { region: snapshot(found.region), pageStatus: found.page.status, history: null }
+      const before = { present: true, pageStatus: found.page.status, region: snapshot(found.region) }
+      const index = found.page.regions.indexOf(found.region)
+      const drawnBefore = found.region.bbox
+      const picked = snapshot(chosen.region)
+      if ('order' in found.region) picked.order = found.region.order
+      found.page.regions[index] = picked
+      redrawLiveCopies(found.page, regionId, [drawnBefore, picked.bbox], { itself: true })
+      const after = { present: true, pageStatus: found.page.status, region: snapshot(picked) }
+      const history = recordRegionStep(found.chapter.id, PICK_LABEL, regionId, before, after)
+      return { region: snapshot(picked), pageStatus: found.page.status, history }
     },
 
     /**
@@ -4748,12 +4994,16 @@ export function createMockBackend(options = {}) {
       const found = findMask(maskId)
       if (!found) return null
       refuseBusyPage(found.chapter.id, found.page.index)
+      // Try again wider is LaMa's alone, as `region.rs#retry_allowed` has it.
+      if (kind === 'retryWider' && !retryWidens(found.region.mask)) return null
       // With a grant the region renders in the cloud; one that does not commit
       // answers null, its code on the `cloud://attempt` event.
       if (typeof params?.grantNonce === 'string') {
         if (cloudBlocked()) return null
+        keepResult(found.region)
         const ended = await renderWithGrant(params, found, (cloud) => commitCloudResult(found, cloud))
         if (!ended.mask) return null
+        keepResult(found.region)
         return {
           region: snapshot(found.region),
           mask: snapshot(ended.mask),
@@ -4782,9 +5032,30 @@ export function createMockBackend(options = {}) {
       // a re-clean picked by name takes the setting.
       const tryAgain = kind === 'retry' || kind === 'retryWider'
       const recorded = tryAgain ? recordedNanoBananaFinishing(found.region.mask.provenance) : null
+      // The result left is kept, as natively every commit keeps the row it
+      // replaces; a FLUX re-run asks at the region's next seed.
+      keepResult(found.region)
+      // A LaMa re-run keeps the hole it had, and Try again wider is the next one.
+      const lamaHole = maskEngine(found.region.mask) === 'lama' ? lamaHoleOf(found.region.mask) : 0
+      const fluxModel = String(state.settings?.fluxModel || 'flux2-klein-4b')
+      const fluxHere = rerunTarget(found.region.mask, kind, engine) === 'flux' && maskEngine(found.region.mask) !== 'cloud'
+      const fluxSeed = fluxHere ? nextFluxSeed(found.region, fluxModel) : null
       const result = cleaningHere(found, () => rerunRegionMask(found.region, toolContext, { kind, engine, qwenEdit }))
       stampNanoBanana(result.mask, model, recorded)
-      notifyAll(result.notices)
+      if (fluxSeed !== null && maskEngine(result.mask) === 'flux' && result.mask?.provenance) {
+        result.mask.provenance.params_snapshot = { ...(result.mask.provenance.params_snapshot ?? {}),
+          flux_model: fluxModel, flux_seed: fluxSeed }
+      }
+      if (maskEngine(result.mask) === 'lama' && result.mask?.provenance) {
+        result.mask.provenance.mask_sha256 = `mock-hole-${kind === 'retryWider' ? lamaHole + 1 : lamaHole}`
+      }
+      // An answer the region already has is no new variation, and said so.
+      const repeated = reaches && (keptResults.get(found.region.id) ?? []).some((kept) =>
+        answerOf(kept) === answerOf(found.region) && kept.mask.legacyPatchRevision !== found.region.mask?.legacyPatchRevision)
+      keepResult(found.region)
+      notifyAll(repeated
+        ? result.notices.map((notice) => notice.key === 'notice.mask.rerunAgain' ? { ...notice, key: 'notice.variations.sameAnswer' } : notice)
+        : result.notices)
       return {
         region: snapshot(found.region),
         mask: snapshot(result.mask),
@@ -5578,6 +5849,10 @@ export function createMockBackend(options = {}) {
       }
       // As `settings.rs#write_settings`: the profiles have their own commands.
       if (patch && 'nanoBananaProfiles' in patch) throw new Error('the Nano Banana profiles are changed by their own commands')
+      // As `variations.rs#generations_from_settings`: a whole number, 1 to 8.
+      if (patch?.generationsPerRegion != null && generationsOf(patch.generationsPerRegion) !== patch.generationsPerRegion) {
+        throw new Error(`generationsPerRegion must be a whole number from ${MIN_GENERATIONS} to ${MAX_GENERATIONS}`)
+      }
       Object.assign(state.settings, patch)
       // As `settings.rs#write_settings`: cloud engines off withdraws the rest
       // of every Nano Banana window and ends the request in flight.
@@ -5735,15 +6010,20 @@ export function createMockBackend(options = {}) {
      * ends the batch, and Stop does too. The report goes out, then the
      * closing notice, then `run-finished`. The cleans are one undo step.
      */
-    async startNanoBananaRun({ chapterId, regionIds = [], nanoBananaGrant: named } = {}) {
+    async startNanoBananaRun({ chapterId, regionIds = [], nanoBananaGrant: named, generations = 1 } = {}) {
       await delay(timing.method)
       const NO_CONSENT = 'decline.reason.nanoBananaNoConsent'
+      // Generations per region, refused out of range as `variations.rs` refuses it.
+      if (!Number.isInteger(generations) || generations < MIN_GENERATIONS || generations > MAX_GENERATIONS) {
+        throw new Error(`generationsPerRegion must be a whole number from ${MIN_GENERATIONS} to ${MAX_GENERATIONS}`)
+      }
       // The grant the backend holds, as `tauri.js` sends it, when none is named.
       const nonce = named ?? nanoBananaLast
       if (typeof nonce !== 'string') throw new Error(NO_CONSENT)
       const found = findChapter(chapterId)
       if (!Array.isArray(regionIds) || regionIds.length === 0) throw new Error('nano_banana_no_regions')
-      if (regionIds.length > NANO_BANANA_MAX_REGIONS) throw new Error(NO_CONSENT)
+      // The limit is on requests: regions times generations.
+      if (regionIds.length * generations > NANO_BANANA_MAX_REGIONS) throw new Error(NO_CONSENT)
       /** @type {Array<{regionId: string, pageIndex: number}>} */
       const targets = []
       for (const regionId of new Set(regionIds)) {
@@ -5755,7 +6035,8 @@ export function createMockBackend(options = {}) {
       // The grant is read, not spent (`nano_banana_consent.rs#left`).
       if (state.settings.cloudEngines !== 'allowed') throw new Error('decline.reason.nanoBananaOff')
       const live = nanoBananaLive.get(nonce)
-      if (!live || nanoBananaLapsed(live, timers.now()) || live.left < targets.length) throw new Error(NO_CONSENT)
+      if (targets.length * generations > NANO_BANANA_MAX_REGIONS) throw new Error(NO_CONSENT)
+      if (!live || nanoBananaLapsed(live, timers.now()) || live.left < targets.length * generations) throw new Error(NO_CONSENT)
       const own = runner.runFor(chapterId)
       if (own) return { runId: own, pages: [], alreadyRunning: true }
       if (runner.atCapacity()) return { runId: null, pages: [], alreadyRunning: true, atCapacity: true }
@@ -5778,7 +6059,8 @@ export function createMockBackend(options = {}) {
       })
       const ACCOUNT = ['decline.reason.nanoBananaOff', 'decline.reason.nanoBananaNoKey', ...Object.values(ACCOUNT_SCENARIOS),
         'decline.reason.nanoBananaLongWait']
-      const report = { total: targets.length, cleaned: 0, gone: 0, failed: /** @type {any[]} */ ([]), left: /** @type {any[]} */ ([]), byUser: false }
+      const report = { total: targets.length, cleaned: 0, gone: 0, failed: /** @type {any[]} */ ([]), left: /** @type {any[]} */ ([]), byUser: false,
+        generationsNotMade: 0 }
       /** @type {string|null} */
       let stopped = null
       const handled = new Set()
@@ -5834,7 +6116,44 @@ export function createMockBackend(options = {}) {
         stampNanoBanana(region.mask, 'model' in spent ? spent.model : null)
         report.cleaned += 1
         emit({ type: 'region-done', runId, chapterId, pageId: page.id, pageIndex: page.index, region: snapshot(region) })
-        return true
+        return generations > 1 ? vary(region).then(() => true) : true
+      }
+      /**
+       * A region's further generations, as `nano_banana_job.rs#walk_into`
+       * asks them: one share each, each answer kept as a variation only
+       * (`region.rs#variation_for_nano_banana_batch`), the first answer left
+       * live. A failed one fails nothing; one refused for a reason that
+       * stops a batch stops it after this region, which stays cleaned.
+       *
+       * @param {any} region
+       * @returns {Promise<void>}
+       */
+      const vary = async (region) => {
+        keepResult(region)
+        for (let asked = 1; asked < generations; asked += 1) {
+          if (stopped || runner.list().every((run) => run.runId !== runId)) {
+            report.generationsNotMade += generations - asked
+            return
+          }
+          const spent = nanoBananaSpend(nonce, chapterId, runId)
+          let refused = 'reason' in spent ? spent.reason : null
+          if (!refused && 'release' in spent) {
+            const asking = nanoBananaCropGate(spent, region)
+            refused = asking ? await asking : null
+            spent.release()
+          }
+          if (refused) {
+            report.generationsNotMade += 1
+            if (refused === NO_CONSENT || ACCOUNT.includes(refused) || refused === 'decline.reason.nanoBananaStopped') {
+              stopped = refused
+            }
+            continue
+          }
+          const extra = snapshot(region)
+          stampNanoBanana(extra.mask, 'model' in spent ? spent.model : null)
+          extra.mask.legacyPatchRevision = `${region.id}-rev-${(mockRevisions += 1)}`
+          keepResult(extra)
+        }
       }
       const handle = runner.start(queue, {
         chapterId,
@@ -5848,6 +6167,8 @@ export function createMockBackend(options = {}) {
           return ids.map((id) => page.regions.find((region) => region.id === id) ?? { id, gone: true })
         },
         apply: (region, page) => {
+          // A further generation of the region before stopped the batch.
+          if (stopped) return 'halt'
           handled.add(region.id)
           if (region.gone || !isDetection(region)) {
             report.gone += 1
@@ -6317,20 +6638,23 @@ export function createMockBackend(options = {}) {
       inScope = inScope.filter(({ region, page }) => cloudCropFits(region, page))
       const profile = profileOf(target.type, target.profile_id)
       const execution = localFirst ? 'mixed' : 'cloud'
+      // Generations per region: every region is rendered this many times,
+      // and the estimate and the plan count every render.
+      const generations = generationsOf(state.settings.generationsPerRegion)
       const base = { chapterId, provider: target.type, profileName: profile?.name ?? target.profile_id, localCleaned: 0,
-        execution, chunkRegions: 256, unresolvedIds: [], tooLargeIds,
+        execution, chunkRegions: 256, unresolvedIds: [], tooLargeIds, generations,
         localCandidates: localFirst ? inScope.filter(({ region }) => region.pick === 'fill' || region.pick === 'solid').length : 0 }
       if (!inScope.length) {
-        return { ...base, proposalId: null, regionIds: [], regions: 0, pages: 0, pageIndices: [], totalCropPixels: 0,
+        return { ...base, proposalId: null, regionIds: [], regions: 0, renders: 0, pages: 0, pageIndices: [], totalCropPixels: 0,
           totalWorkPixels: 0, chunks: 0, estimatedGpuSeconds: null, estimatedCostUsd: null, gpu: null, planDigest: null,
           expiresAtMs: 0 }
       }
       if (cleanProposals.size >= 16) throw new Error('cloud_clean_proposal_limit')
       const indices = [...new Set(inScope.map(({ page }) => page.index))].sort((a, b) => a - b)
-      const totalCropPixels = inScope.reduce((sum, { region, page }) =>
+      const totalCropPixels = generations * inScope.reduce((sum, { region, page }) =>
         sum + (cloudCropPixels(region, page) ?? 0), 0)
-      // regions * seconds per region + cold start + idle tail, at an L4's list price.
-      const busy = inScope.length * 8
+      // renders * seconds per render + cold start + idle tail, at an L4's list price.
+      const busy = inScope.length * generations * 8
       const seconds = busy + 30 + 120
       const dollars = (seconds / 3600) * 0.8
       const issuedAtMs = Date.now()
@@ -6340,15 +6664,16 @@ export function createMockBackend(options = {}) {
         proposalId: sha256Hex(`cloud-clean:${chapterId}:${ids.join(',')}:${issuedAtMs}:${cleanProposals.size}`).slice(0, 32),
         regionIds: ids,
         regions: inScope.length,
+        renders: inScope.length * generations,
         pages: indices.length,
         pageIndices: indices,
         totalCropPixels,
-        totalWorkPixels: inScope.length * 768 * 768,
+        totalWorkPixels: inScope.length * generations * 768 * 768,
         chunks: Math.ceil(inScope.length / 256),
         estimatedGpuSeconds: { low: busy, high: busy + 655 },
         estimatedCostUsd: { low: Math.round(dollars * 80) / 100, high: Math.round(dollars * 150) / 100 },
         gpu: profile?.gpu ?? 'L4',
-        planDigest: sha256Hex(`cloud-clean-plan:${chapterId}:${execution}:256:${ids.join(',')}`),
+        planDigest: sha256Hex(`cloud-clean-plan:${chapterId}:${execution}:256:${generations > 1 ? `${generations}:` : ''}${ids.join(',')}`),
         expiresAtMs: issuedAtMs + 300000,
         standing: standingFor(chapterId, target.type, target.profile_id, profile?.canonicalOriginFingerprint ?? ''),
       }
@@ -6376,7 +6701,7 @@ export function createMockBackend(options = {}) {
       if (proposal.stream || planDigest !== proposal.planDigest) throw new Error('cloud_clean_plan_mismatch')
       if (!profileOf(proposal.target.type, proposal.target.profile_id)) throw new Error('cloud_clean_profile_changed')
       const grant = { grantId: sha256Hex(`cloud-clean-grant:${proposalId}`).slice(0, 32), expiresAtMs: Date.now() + 120000 }
-      cleanGrants.set(grant.grantId, { ...grant, chapterId: proposal.chapterId, regionIds: proposal.regionIds, regionPages: proposal.regionPages, target: proposal.target, execution: proposal.execution })
+      cleanGrants.set(grant.grantId, { ...grant, chapterId: proposal.chapterId, regionIds: proposal.regionIds, regionPages: proposal.regionPages, target: proposal.target, execution: proposal.execution, generations: proposal.generations })
       recordStanding(proposal.chapterId, proposal.target.type, proposal.target.profile_id, fingerprint,
         sends && rightsAttested === true && retentionAcknowledged === true)
       return structuredClone(grant)
@@ -6456,7 +6781,9 @@ export function createMockBackend(options = {}) {
           }
           // Committed as every cloud render is here (FLUX, reconstructed, with
           // the cloud record), which is what marks the patch as the cloud's.
+          // Its further generations are kept as variations, no undo step.
           commitCloudResult({ region, page }, cloudRecordFor(cloudAttemptId(`${grantId}:${region.id}`), target))
+          keepCloudGenerations(region, grantId, generationsOf(grant.generations))
           delete region.pick
           delete region.detector
           delete region.insideBubble
@@ -6501,7 +6828,8 @@ export function createMockBackend(options = {}) {
       const profile = profileOf(target.type, target.profile_id)
       const execution = localFirst ? 'mixed' : 'cloud'
       const issuedAtMs = Date.now()
-      const suggested = MOCK_STREAM_FIXED_USD + indices.length * 8 * MOCK_STREAM_REGION_USD
+      const generations = generationsOf(state.settings.generationsPerRegion)
+      const suggested = MOCK_STREAM_FIXED_USD + indices.length * 8 * MOCK_STREAM_REGION_USD * generations
       const proposal = {
         proposalId: sha256Hex(`cloud-clean-stream:${chapterId}:${indices.join(',')}:${issuedAtMs}:${cleanProposals.size}`).slice(0, 32),
         chapterId,
@@ -6511,12 +6839,13 @@ export function createMockBackend(options = {}) {
         gpu: profile?.gpu ?? 'L4',
         gpuUsdPerHour: 0.8,
         fixedCostUsd: MOCK_STREAM_FIXED_USD,
-        regionCostUsd: MOCK_STREAM_REGION_USD,
+        regionCostUsd: MOCK_STREAM_REGION_USD * generations,
+        generations,
         suggestedCapUsd: Math.min(100, Math.ceil(suggested * 10) / 10),
         maxCapUsd: 100,
         provider: target.type,
         profileName: profile?.name ?? target.profile_id,
-        streamDigest: sha256Hex(`cloud-clean-stream:${chapterId}:${execution}:${indices.join(',')}`),
+        streamDigest: sha256Hex(`cloud-clean-stream:${chapterId}:${execution}:${generations > 1 ? `${generations}:` : ''}${indices.join(',')}`),
         expiresAtMs: issuedAtMs + 300000,
         standing: standingFor(chapterId, target.type, target.profile_id, profile?.canonicalOriginFingerprint ?? ''),
       }
@@ -6540,7 +6869,7 @@ export function createMockBackend(options = {}) {
       if (!profileOf(open.target.type, open.target.profile_id)) throw new Error('cloud_clean_profile_changed')
       const grant = { grantId: sha256Hex(`cloud-clean-stream-grant:${proposalId}`).slice(0, 32), expiresAtMs: Date.now() + 120000 }
       cleanGrants.set(grant.grantId, { ...grant, stream: true, chapterId: open.chapterId, pageIndices: open.pageIndices,
-        capUsd, target: open.target, execution: open.execution })
+        capUsd, target: open.target, execution: open.execution, generations: open.generations })
       recordStanding(open.chapterId, open.target.type, open.target.profile_id, fingerprint,
         rightsAttested === true && retentionAcknowledged === true)
       return structuredClone(grant)

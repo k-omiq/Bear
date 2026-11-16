@@ -107,7 +107,7 @@ function backend() {
     historyPush: vi.fn(async ({ chapterId, entry }) => {
       const journal = (journals[chapterId] ??= [])
       journal.push(entry)
-      return { cursor: journal.length, entries: journal.map((e, i) => ({ seq: i + 1, label: e.label })) }
+      return { cursor: journal.length, entries: journal.map((e, i) => ({ seq: i + 1, label: e.label, page: 0 })) }
     }),
     loadPages: vi.fn(async () => []),
     applyTool: vi.fn(() => answer.promise),
@@ -321,8 +321,7 @@ describe('an edit answered after its chapter was closed', () => {
     }
     Object.assign(adapter, { historyMove: vi.fn(async () => ({ cursor: 0, entry })) })
     editor.history = createHistory()
-    editor.history.entries = [{ seq: 1, label: entry.label }]
-    editor.history.cursor = 1
+    editor.history.entries = [{ seq: 1, label: entry.label, page: 0, undone: false }]
     undo()
     await vi.waitFor(() => expect(adapter.restoreRegion).toHaveBeenCalledTimes(1))
     expect(adapter.restoreRegion.mock.calls[0][0]).toMatchObject({ regionId: 'c1-p001-r1', region: { mask: { id: 'c1-p001-r1-m1' } } })
@@ -352,7 +351,7 @@ describe('a late result, once its chapter is open again', () => {
     const answer = deferred()
     const view = (/** @type {string} */ id) => ({
       cursor: journals[id].cursor,
-      entries: journals[id].entries.map((entry, index) => ({ seq: index + 1, label: entry.label })),
+      entries: journals[id].entries.map((entry, index) => ({ seq: index + 1, label: entry.label, page: 0 })),
     })
     /** Put a region, or its absence, and its page's status on disk. */
     const write = (/** @type {string} */ regionId, /** @type {any} */ found, /** @type {string|undefined} */ pageStatus) => {

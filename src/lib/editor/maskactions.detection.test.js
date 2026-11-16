@@ -22,8 +22,10 @@ import { app, clearNotices } from '../state/app.svelte.js'
 import {
   closeEditorChapter,
   editor,
+  goToPage,
   openEditorChapter,
   redo,
+  redoAvailable,
   redoLabelKey,
   reloadPage,
   select,
@@ -328,7 +330,7 @@ describe('Reject result on a cleaned detection', () => {
     expect(current(detection.id).mask).toEqual(detection.mask)
     // The backend's own two steps, and none of this side's.
     expect(push).not.toHaveBeenCalled()
-    expect(editor.history.cursor).toBe(3)
+    expect(editor.history.entries.every((entry) => entry.page === 0 && !entry.undone)).toBe(true)
     expect(editor.history.entries.map((entry) => entry.label))
       .toEqual(['masks.command.detectPages', 'masks.command.cleanRegion', 'masks.command.rejectResult'])
     expect(app.notices.filter((notice) => notice.tone === 'warn')).toEqual([])
@@ -436,10 +438,10 @@ describe('a tool applied to a detected region', () => {
     expect(await applyActiveToolToRegion(detection.id)).toBe(true)
     expect(current(detection.id)).toMatchObject({ outcome: 'cleaned' })
     expect(push).not.toHaveBeenCalled()
-    const { entry } = await backend.historyMove({ chapterId: CHAPTER, direction: 'undo' })
+    const { entry } = await backend.historyMove({ chapterId: CHAPTER, pageIndex: 0, direction: 'undo' })
     expect(entry).toMatchObject({ op: 'clean-state', label: 'masks.command.cleanRegion', regionId: detection.id })
     expect(entry.before.region).toMatchObject({ outcome: 'detected', mask: { id: detection.mask.id } })
-    await backend.historyMove({ chapterId: CHAPTER, direction: 'redo' })
+    await backend.historyMove({ chapterId: CHAPTER, pageIndex: 0, direction: 'redo' })
 
     // The same tool on the result is this side's edit, recorded as before.
     expect(await applyActiveToolToRegion(detection.id)).toBe(true)
@@ -481,6 +483,8 @@ describe('clean, undo, redo and reject in an open chapter', () => {
     expect(current(region.id).outcome).toBe('cleaned')
     expect(push).not.toHaveBeenCalled()
     expect(editor.history.entries.length).toBe(steps + 1)
+    // Undo is the region's page's: the user is on it.
+    goToPage(editor.chapter.pages.findIndex((/** @type {any} */ page) => page.regions?.some((/** @type {any} */ held) => held.id === region.id)))
     expect(undoAvailable()).toBe(true)
 
     undo()
@@ -605,6 +609,7 @@ describe('clean, undo, redo and reject in an open chapter', () => {
     const warning = page?.regions.find((/** @type {any} */ region) => !region.mask)
     expect(warning, 'a row with no mask on the second page').toBeTruthy()
     await reloadPage(1)
+    goToPage(1)
     expect(await runRegionMenuItem('delete', current(warning.id))).toBe(true)
     await quiet()
     expect(current(warning.id)).toBeFalsy()
@@ -613,6 +618,88 @@ describe('clean, undo, redo and reject in an open chapter', () => {
     await quiet()
     await reloadPage(1)
     expect(plain(current(warning.id))).toEqual(plain(warning))
+    expect(app.notices.filter((notice) => notice.tone === 'warn')).toEqual([])
+  })
+
+  /*
+   * Undo and redo never leave the page on screen. The chapter-wide stack
+   * this replaced took a press on page 14 back through edits on pages 2, 6,
+   * 9 and 10, off screen, and the next edit cut them off.
+   */
+  it('undoes only the page on screen, however often Undo is pressed, and keeps the other page\'s redo', async () => {
+    const backend = createMockBackend({ timing: ZERO })
+    setBackend(backend)
+    const project = (await backend.listProjects()).find((candidate) => candidate.chapters.some((chapter) => chapter.id === CHAPTER))
+    expect(await openEditorChapter(project.id, CHAPTER)).toBe(true)
+    const quiet = async () => {
+      await settled(editor.history)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await settled(editor.history)
+    }
+    for (const pageIndex of [0, 1]) {
+      let done = () => {}
+      const finished = new Promise((resolve) => { done = /** @type {any} */ (resolve) })
+      const stop = backend.subscribe((event) => { if (event.type === 'run-finished') done() })
+      await backend.runClean({ scope: 'page', chapterId: CHAPTER, pageIndex, mode: 'detect' })
+      await finished
+      stop()
+      await reloadPage(pageIndex)
+    }
+    await quiet()
+    const detectedOn = (/** @type {number} */ index) => editor.chapter.pages[index].regions
+      .find((/** @type {any} */ region) => region.outcome === 'detected')
+    const onA = detectedOn(0)
+    const onB = detectedOn(1)
+    expect(onA && onB, 'a detection on each of the first two pages').toBeTruthy()
+    const typeOf = (/** @type {any} */ region) => (region.insideBubble ? 'type:outside' : 'type:inside')
+
+    // Interleaved: page A, page B, page A.
+    goToPage(0)
+    expect(await runRegionMenuItem(typeOf(onA), current(onA.id))).toBe(true)
+    await quiet()
+    goToPage(1)
+    expect(await runRegionMenuItem(typeOf(onB), current(onB.id))).toBe(true)
+    await quiet()
+    goToPage(0)
+    expect(await runRegionMenuItem('delete', current(onA.id))).toBe(true)
+    await quiet()
+    expect(current(onA.id)).toBeFalsy()
+    const pageA = JSON.stringify(editor.history.entries.filter((/** @type {any} */ entry) => entry.page === 0))
+
+    // Undo on page B, pressed far more often than B has steps.
+    goToPage(1)
+    const move = vi.spyOn(backend, 'historyMove')
+    for (let press = 0; press < 6; press += 1) {
+      undo()
+      await quiet()
+    }
+    expect(move.mock.calls.map(([call]) => call.pageIndex)).toEqual([1, 1])
+    expect(undoAvailable()).toBe(false)
+    expect(redoLabelKey()).toBe('masks.command.detectPages')
+    // B's text type is taken back with its own steps.
+    expect(current(onB.id)?.insideBubble ?? onB.insideBubble).toBe(onB.insideBubble)
+    // Page A is as it was left: its delete stands, its steps untouched.
+    expect(current(onA.id)).toBeFalsy()
+    expect(JSON.stringify(editor.history.entries.filter((/** @type {any} */ entry) => entry.page === 0))).toBe(pageA)
+    goToPage(0)
+    expect(undoLabelKey()).toBe('masks.command.deleteDetection')
+
+    // An undo on A, then a new edit on B: A's redo is kept.
+    undo()
+    await quiet()
+    expect(current(onA.id)).toBeTruthy()
+    goToPage(1)
+    redo()
+    await quiet()
+    await reloadPage(1)
+    expect(await runRegionMenuItem('delete', current(onB.id))).toBe(true)
+    await quiet()
+    expect(redoAvailable()).toBe(false)
+    goToPage(0)
+    expect(redoLabelKey()).toBe('masks.command.deleteDetection')
+    redo()
+    await quiet()
+    expect(current(onA.id)).toBeFalsy()
     expect(app.notices.filter((notice) => notice.tone === 'warn')).toEqual([])
   })
 })

@@ -1929,7 +1929,7 @@ describe('a cloud result finished again', () => {
     expect(changed.region.mask.provenance.params_snapshot.postprocess).toMatchObject({ finishing: 'poisson', grayscale: true })
     expect(changed.history.entries.at(-1)).toMatchObject({ label: 'masks.finishing.command' })
     expect((await settle(backend.setRegionFinishing({ regionId: cloud.id, finishing: 'poisson', grayscale: true }))).history).toBeNull()
-    const step = await settle(backend.historyMove({ chapterId: CHAPTER, direction: 'undo' }))
+    const step = await settle(backend.historyMove({ chapterId: CHAPTER, pageIndex: 0, direction: 'undo' }))
     expect(step.entry).toMatchObject({ op: 'region-state', regionId: cloud.id })
     const back = await settle(backend.restoreRegion({ regionId: cloud.id, region: step.entry.before.region }))
     expect(back.mask.provenance.params_snapshot.postprocess.finishing).toBe('copy')

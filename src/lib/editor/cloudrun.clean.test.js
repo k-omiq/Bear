@@ -451,6 +451,20 @@ it('skips the question for a project that already consented, and confirms the pr
   expect(api.startCloudClean).toHaveBeenCalledWith({ grantId: 'clean-grant' })
 })
 
+it('still shows a standing project its renders when a region makes several generations', async () => {
+  const api = backend()
+  editor.toolParams.autoClean.step = 'clean'
+  api.prepareCloudClean.mockResolvedValueOnce({ ...PROPOSAL, standing: true, generations: 3, renders: 9 })
+  const started = startCleanRun('page', /** @type {any} */ (api))
+  const consent = await dialog('cloudCleanConsent')
+  expect(consent.props.proposal.renders).toBe(9)
+  expect(api.confirmCloudClean).not.toHaveBeenCalled()
+  closeModal({ rightsAttested: false, retentionAcknowledged: false, planDigest: PROPOSAL.planDigest })
+  expect(await started).toBe('run-2')
+  expect(api.confirmCloudClean).toHaveBeenCalledWith({ proposalId: 'clean-prop', planDigest: PROPOSAL.planDigest,
+    rightsAttested: false, retentionAcknowledged: false })
+})
+
 it('keeps the regions detected and adopts nothing when another run holds the slot', async () => {
   const api = backend()
   editor.toolParams.autoClean.step = 'clean'

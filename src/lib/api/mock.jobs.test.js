@@ -169,7 +169,7 @@ describe('several runs at once', () => {
     const run = await mock.runClean({ scope: 'chapter', chapterId: CHAPTER, mode: 'detect' })
     expect(await started).toBe(0)
 
-    await expect(mock.historyMove({ chapterId: CHAPTER, direction: 'undo' })).rejects.toThrow('page_busy')
+    await expect(mock.historyMove({ chapterId: CHAPTER, pageIndex: 0, direction: 'undo' })).rejects.toThrow('page_busy')
     expect((await mock.historyLoad({ chapterId: CHAPTER })).cursor).toBe(1)
     await expect(mock.restoreRegion({ regionId: region.id, region: null })).rejects.toThrow('page_busy')
     const held = (await mock.loadPages({ chapterId: CHAPTER, indices: [0] }))[0]
@@ -178,7 +178,7 @@ describe('several runs at once', () => {
     const end = ended(mock, run.runId)
     await mock.cancelRun({ runId: run.runId })
     await end
-    expect((await mock.historyMove({ chapterId: CHAPTER, direction: 'undo' })).cursor).toBe(0)
+    expect((await mock.historyMove({ chapterId: CHAPTER, pageIndex: 0, direction: 'undo' })).cursor).toBe(0)
   })
 
   // A resumed run cleans under the rule the cancelled one had (`run.rs` keeps

@@ -865,24 +865,29 @@ function syncReviewEntry(page, region) {
 /* Undo / redo - see "Undo / redo" below                               */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Every answer here is about the page on screen (`editor.pageIndex`, the
+ * strip's centre page in the long strip): undo and redo never leave it.
+ */
+
 /** @returns {boolean} */
 export function undoAvailable() {
-  return canUndo(editor.history)
+  return canUndo(editor.history, editor.pageIndex)
 }
 
 /** @returns {boolean} */
 export function redoAvailable() {
-  return canRedo(editor.history)
+  return canRedo(editor.history, editor.pageIndex)
 }
 
-/** @returns {string|null} i18n key of the action Undo would reverse */
+/** @returns {string|null} i18n key of the action Undo on the page on screen would reverse */
 export function undoLabelKey() {
-  return undoLabel(editor.history)
+  return undoLabel(editor.history, editor.pageIndex)
 }
 
-/** @returns {string|null} i18n key of the action Redo would repeat */
+/** @returns {string|null} i18n key of the action Redo on the page on screen would repeat */
 export function redoLabelKey() {
-  return redoLabel(editor.history)
+  return redoLabel(editor.history, editor.pageIndex)
 }
 
 /* ------------------------------------------------------------------ */
@@ -2436,8 +2441,18 @@ export async function renameOpenProject(name) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Undo / redo - global across every tool, persisted                    */
+/* Undo / redo - per page, across every tool, persisted                */
 /* ------------------------------------------------------------------ */
+
+/*
+ * Undo and redo never leave the page on screen. Undo on a page takes back
+ * only that page's newest step, Redo repeats only that page's steps, and a
+ * new edit on a page drops only that page's redo side. The page is read once,
+ * at the key press (`undo`, `redo`), and that same page is the one the
+ * journal is asked to move (`historyMove`). One chapter-wide stack used to
+ * walk back through edits made on other pages, off screen, and the next edit
+ * then cut them off.
+ */
 
 /*
  * A command used to be a pair of closures. It is now a **delta**: an op, a
@@ -2452,8 +2467,8 @@ export async function renameOpenProject(name) {
  *    from undo - the drift the old `recordEdit` avoided by convention is now
  *    avoided by construction.
  *
- * The interface holds only `{seq, label}` per entry; the payload is fetched by
- * `historyMove` at the moment it is replayed.
+ * The interface holds only `{seq, label, page, undone}` per entry; the payload
+ * is fetched by `historyMove` at the moment it is replayed.
  */
 
 /**
@@ -2598,30 +2613,24 @@ export async function applyCleanDelta(regionId, side, chapterId = editor.chapter
 }
 
 /**
- * Update the in-memory history once a backend push answers.
+ * Update the in-memory history once a backend push answers. With no local
+ * push or move made since, the answer is the journal as it stands and is
+ * adopted: the backend numbered the entry and gave it its page. A push or a
+ * move made since is already queued behind this one, and the answer is older
+ * than what it leaves, so the index is read again behind it instead.
  *
  * @param {import('../model/history.js').History} history
  * @param {{cursor?: number, entries?: import('../model/history.js').HistoryLabel[]}|null|undefined} view
- * @param {number} expectedCursor
+ * @param {number} expectedRevision - `history.revision` right after the local push
+ * @param {string} chapterId
  */
-function applyPushView(history, view, expectedCursor) {
+function applyPushView(history, view, expectedRevision, chapterId) {
   if (editor.history !== history) return
-  const cursorDelta = history.cursor - expectedCursor
-  if (history.entries.length === expectedCursor) {
+  if (history.revision === expectedRevision) {
     adoptHistory(history, view)
-    if (cursorDelta !== 0) {
-      history.cursor = Math.min(
-        history.entries.length,
-        Math.max(0, history.cursor + cursorDelta),
-      )
-    }
-  } else {
-    for (let i = 0; i < (view?.entries?.length ?? 0); i++) {
-      if (history.entries[i]) {
-        history.entries[i] = { seq: view.entries[i].seq, label: view.entries[i].label }
-      }
-    }
+    return
   }
+  refreshHistory(chapterId)
 }
 
 /**
@@ -2695,16 +2704,22 @@ export function recordRegionEdits(label, parts, chapterId = editor.chapter?.id ?
     return
   }
   // A provisional number, replaced by the backend's the moment it answers. It
-  // only has to be distinct from the entries already held, and the cursor is
-  // what `canUndo` actually reads.
-  const provisional = (editor.history.entries.at(-1)?.seq ?? 0) + 1
-  pushHistory(editor.history, { seq: provisional, label })
+  // only has to be distinct from the entries already held; the page and the
+  // mark are what `canUndo` actually reads. One step per page the regions
+  // are on, as the journal keeps it (`history.rs#pieces`). A region whose
+  // page the open chapter cannot name is the page on screen's, which is
+  // where the edit was made; the backend's answer says for certain.
   const history = editor.history
-  const expectedCursor = history.cursor
+  let provisional = history.entries.reduce((most, held) => Math.max(most, held.seq), 0)
+  for (const page of new Set(parts.map((part) => pageHolding(part.regionId)?.index ?? editor.pageIndex))) {
+    provisional += 1
+    pushHistory(history, { seq: provisional, label, page })
+  }
+  const expectedRevision = history.revision
   enqueueHistoryTask(history, async () => {
     try {
       const view = await pushHistoryInChapterOrder(chapter.id, entry)
-      applyPushView(history, view, expectedCursor)
+      applyPushView(history, view, expectedRevision, chapter.id)
     } catch (error) {
       if (editor.history === history) history.error = error
       if (!reportJobConflict(error)) notify({ key: 'notice.history.saveFailed', tone: 'warn' })
@@ -2771,17 +2786,22 @@ async function pushBackgroundEntry(chapterId, entry) {
 }
 
 /**
- * Move the journal's cursor on disk and replay whichever delta it names.
+ * Mark the journal's entry of `page` on disk and replay whichever delta it
+ * names. `page` is the page that was on screen at the key press, the same
+ * page the local index moved on, so the journal and the index move the same
+ * entry.
  *
- * The cursor moves on the backend *before* anything is applied, deliberately:
+ * The mark moves on the backend *before* anything is applied, deliberately:
  * re-applying a delta to a manifest already in that state is a no-op by
  * construction (`set_mask_visible` answers "it is as you asked" rather than
  * refusing), so an undo interrupted half-way resolves the same way twice.
  *
  * @param {'undo'|'redo'} direction
+ * @param {number} page
+ * @param {import('../model/history.js').HistoryEntry} [moved] - the index's entry the press marked
  * @returns {Promise<void>}
  */
-async function replayHistory(direction) {
+async function replayHistory(direction, page, moved) {
   const chapter = editor.chapter
   if (!chapter) return
   const history = editor.history
@@ -2789,23 +2809,26 @@ async function replayHistory(direction) {
   try {
     let step
     try {
-      step = await getBackend().historyMove({ chapterId: chapter.id, direction })
+      step = await getBackend().historyMove({ chapterId: chapter.id, pageIndex: page, direction })
     } catch (_firstError) {
       await delay(HISTORY_RETRY_MS)
       try {
-        step = await getBackend().historyMove({ chapterId: chapter.id, direction })
+        step = await getBackend().historyMove({ chapterId: chapter.id, pageIndex: page, direction })
       } catch (error) {
         // A run is on the entry's page, or the entry is a run's that is still
         // going. The journal refused before it moved (`history.rs#move_at`),
-        // so the step was not taken and the cursor this window moved ahead of
+        // so the step was not taken and the mark this window moved ahead of
         // it goes back.
         const conflict = jobConflictKey(error)
         if (conflict === 'notice.run.pageBusy' || conflict === 'notice.run.stepInProgress') {
-          if (editor.history === history) history.cursor += direction === 'undo' ? 1 : -1
+          if (editor.history === history && moved) {
+            moved.undone = direction === 'redo'
+            history.revision += 1
+          }
           reportJobConflict(error)
           return
         }
-        // Whether the journal moved is not known. This window's cursor did,
+        // Whether the journal moved is not known. This window's mark did,
         // so the index is read again rather than guessed back: an index one
         // step off replays the wrong entry on the next Undo.
         if (editor.history === history) {
@@ -2892,9 +2915,14 @@ function pendingEditTook(direction) {
   return false
 }
 
+/**
+ * Undo on the page on screen, read once here: the index moves on it now and
+ * the journal is asked for the same page, whatever the page is by the time
+ * the queue reaches the replay.
+ */
 export function undo() {
   if (pendingEditTook('undo')) return
-  undoHistory(editor.history, replayHistory)
+  undoHistory(editor.history, editor.pageIndex, replayHistory)
 }
 
 /**
@@ -2944,9 +2972,10 @@ export function reportJobConflict(error) {
   return true
 }
 
+/** Redo on the page on screen, read once here, as `undo` does. */
 export function redo() {
   if (pendingEditTook('redo')) return
-  redoHistory(editor.history, replayHistory)
+  redoHistory(editor.history, editor.pageIndex, replayHistory)
 }
 
 /**
@@ -2993,8 +3022,7 @@ export function refreshHistory(chapterId) {
   enqueueHistoryTask(history, async () => {
     history._reload = false
     if (editor.history !== history || editor.chapter?.id !== chapterId) return
-    const cursor = history.cursor
-    const length = history.entries.length
+    const revision = history.revision
     let view
     try {
       view = await getBackend().historyLoad({ chapterId })
@@ -3003,7 +3031,7 @@ export function refreshHistory(chapterId) {
       return
     }
     if (editor.history !== history) return
-    if (history.cursor !== cursor || history.entries.length !== length) {
+    if (history.revision !== revision) {
       refreshHistory(chapterId)
       return
     }

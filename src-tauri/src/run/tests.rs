@@ -2199,9 +2199,9 @@ fn a_history_step_onto_the_runs_page_is_refused_and_leaves_the_cursor() {
     let entries = plan(&library, "chapter", &chapter_id, None).unwrap();
     let job_path = entries[0].job_path.clone();
     let side = |present| crate::history::Side { present, page_status: None, region: None };
-    let mut journal = crate::history::load(&job_path);
+    let mut journal = crate::history::load_for(&job_path, &chapter_id);
     for page in [1, 0] {
-        journal.push(crate::history::NewDelta {
+        journal.push(&chapter_id, crate::history::NewDelta {
             parts: Vec::new(),
             label: "masks.command.deleteMask".into(),
             op: "region-state".into(),
@@ -2209,9 +2209,9 @@ fn a_history_step_onto_the_runs_page_is_refused_and_leaves_the_cursor() {
             before: side(true),
             after: side(false), ..Default::default() }, crate::history::UNDO_LIMIT_DEFAULT);
     }
-    // Page 1's edit is the past and page 0's the future: undo steps onto
-    // page 1, redo onto page 0.
-    journal.undo();
+    // Page 0's edit is undone: its redo is a step onto page 0, and page 1's
+    // undo a step onto page 1.
+    journal.undo(0);
     crate::history::save(&job_path, &journal).unwrap();
 
     let steps = Mutex::new(Vec::new());
@@ -2224,9 +2224,9 @@ fn a_history_step_onto_the_runs_page_is_refused_and_leaves_the_cursor() {
             if page_id != library::page_id(&chapter_id, 0) {
                 return;
             }
-            let redo = crate::history::move_at(&job_path, &chapter_id, "redo").unwrap_err();
+            let redo = crate::history::move_at(&job_path, &chapter_id, 0, "redo").unwrap_err();
             let after_redo = crate::history::load(&job_path).cursor;
-            let undo = crate::history::move_at(&job_path, &chapter_id, "undo").map(|step| step.cursor);
+            let undo = crate::history::move_at(&job_path, &chapter_id, 1, "undo").map(|step| step.cursor);
             steps.lock().unwrap().push((redo, after_redo, undo));
         },
         |_| {},
@@ -2238,8 +2238,8 @@ fn a_history_step_onto_the_runs_page_is_refused_and_leaves_the_cursor() {
     assert_eq!(*after_redo, 1, "the refused step moved the cursor");
     assert_eq!(*undo, Ok(0), "a step onto a page the run was not on was refused");
     // The run has left page 0: the step that was refused is taken.
-    assert_eq!(crate::history::move_at(&job_path, &chapter_id, "redo").unwrap().cursor, 1);
-    assert_eq!(crate::history::move_at(&job_path, &chapter_id, "redo").unwrap().cursor, 2);
+    assert_eq!(crate::history::move_at(&job_path, &chapter_id, 0, "redo").unwrap().cursor, 1);
+    assert_eq!(crate::history::move_at(&job_path, &chapter_id, 1, "redo").unwrap().cursor, 2);
 }
 
 /// `list_jobs` names the page a run is on from its `page-started` to its
@@ -2362,20 +2362,21 @@ fn a_live_runs_step_is_not_undone_until_the_run_ends() {
     reservation.set_jobs([&job_path]);
     assert!(reservation.run_id.strip_prefix("backend-run-").is_some_and(|rest| rest.split('-').count() == 2),
         "{} has no launch part", reservation.run_id);
-    let mut journal = crate::history::load(&job_path);
-    journal.push(crate::history::NewDelta {
+    let mut journal = crate::history::load_for(&job_path, &chapter_id);
+    journal.push(&chapter_id, crate::history::NewDelta {
         label: crate::history::DETECT_LABEL.into(),
         op: crate::history::DETECTION_OP.into(),
         group: Some(reservation.run_id.clone()),
+        page: Some(0),
         ..Default::default()
     }, 100);
     crate::history::save(&job_path, &journal).unwrap();
 
-    let refused = crate::history::move_at(&job_path, &chapter_id, "undo").unwrap_err();
+    let refused = crate::history::move_at(&job_path, &chapter_id, 0, "undo").unwrap_err();
     assert!(refused.starts_with("run_step_in_progress: "), "{refused}");
     assert_eq!(crate::history::load(&job_path).cursor, 1, "a refused undo moved the cursor");
     drop(reservation);
-    assert_eq!(crate::history::move_at(&job_path, &chapter_id, "undo").unwrap().cursor, 0);
+    assert_eq!(crate::history::move_at(&job_path, &chapter_id, 0, "undo").unwrap().cursor, 0);
 }
 
 /// A cancel heard while a page's models work writes nothing of that page:
@@ -6516,6 +6517,126 @@ fn a_clean_starts_stored_regions_from_its_own_picks() {
     assert_eq!((summary.regions_cleaned, summary.errored), (2, 0));
 }
 
+/// Local FLUX's stand-in: the fill's answer, whatever the seed. Two answers
+/// at two seeds are still two variations, told apart by their seeds.
+fn flux_stand_in(crop: &Raster, fitted: &fit::Fitted, _seed: u64) -> Result<Raster, &'static str> {
+    Ok(fill::render(crop, fitted))
+}
+
+/// A chapter detected, then cleaned on local FLUX (the stand-in) at
+/// `generations`. Answers the library, the chapter and the clean's summary.
+fn a_flux_clean(scratch: &Scratch, generations: u32) -> (Library, String, Summary) {
+    let (library, chapter_id) = a_lettered_chapter(scratch, 1);
+    let entries = plan_for(&library, "chapter", &chapter_id, None, RunMode::Detect).unwrap();
+    let recorder = Recorder::new();
+    let mut detector = lettered_pipeline(scratch);
+    execute_as(RunMode::Detect, "run-detect", &chapter_id, &entries, &mut detector, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    let entries = plan_for(&library, "chapter", &chapter_id, None, RunMode::Clean).unwrap();
+    let recorder = Recorder::new();
+    let mut cleaner = cleaning_only_pipeline(scratch)
+        .with_picks(Picks { bubble: EnginePick::Flux, outside: EnginePick::Flux })
+        .with_generations(generations);
+    cleaner.rung2.flux.test_render = Some(flux_stand_in);
+    let summary = execute_as(RunMode::Clean, "run-clean", &chapter_id, &entries, &mut cleaner, Engine::Flux,
+        &recorder.cancel, &recorder.sink());
+    (library, chapter_id, summary)
+}
+
+/// Generations per region at 3 on a local FLUX clean: each region it cleans
+/// has three variations at three seeds, the first applied, and the run's
+/// applied results, its counts and its undo steps are exactly those of the
+/// same clean at 1.
+#[test]
+fn a_flux_clean_at_three_generations_keeps_three_variations_and_applies_the_first() {
+    let one = Scratch::new("flux-generations-1");
+    let (one_library, one_chapter, at_one) = a_flux_clean(&one, 1);
+    let three = Scratch::new("flux-generations-3");
+    let (three_library, three_chapter, at_three) = a_flux_clean(&three, 3);
+    assert!(at_one.regions_cleaned > 0, "{at_one:?}");
+    assert_eq!(at_three, at_one, "progress and counts are the first generation's");
+
+    let job_one = only_job(&one_library, &one_chapter);
+    let job_three = only_job(&three_library, &three_chapter);
+    assert_eq!(job_three.project.patches.len(), job_one.project.patches.len());
+    let seed = cleaner_core::engines::flux::SEED;
+    for (live, alone) in job_three.project.patches.iter().zip(&job_one.project.patches) {
+        assert_eq!(live.provenance.engine, Engine::Flux);
+        assert_eq!(crate::variations::recorded_flux_seed(live), Some(seed), "the first generation is applied");
+        assert_eq!(job_three.load_patch(live).unwrap().pixels.data, job_one.load_patch(alone).unwrap().pixels.data);
+        let listed = crate::variations::list(&job_three.project, &live.id);
+        assert_eq!(listed.len(), 3, "{}", live.id);
+        assert_eq!(listed.iter().map(|variation| variation.current).collect::<Vec<_>>(), [true, false, false]);
+        let seeds: Vec<_> = listed.iter().map(|variation| crate::variations::recorded_flux_seed(&variation.row)).collect();
+        assert_eq!(seeds, [Some(seed), Some(seed + 1), Some(seed + 2)]);
+        assert_eq!(crate::variations::list(&job_one.project, &alone.id).len(), 1);
+    }
+    let steps = |library: &Library, chapter: &str| {
+        crate::history::load_for(&library.resolve_chapter(chapter).unwrap(), chapter).entries.iter()
+            .map(|entry| (entry.label.clone(), entry.op.clone(), entry.page, entry.parts.len()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(steps(&three_library, &three_chapter), steps(&one_library, &one_chapter),
+        "the run's undo steps are those of one generation");
+}
+
+/// An engine that answers one way ignores Generations per region: a clean
+/// on the fill at 3 keeps one result per region, no variations.
+#[test]
+fn a_clean_that_answers_one_way_ignores_generations() {
+    let scratch = Scratch::new("fill-generations-3");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 1);
+    let entries = plan_for(&library, "chapter", &chapter_id, None, RunMode::Detect).unwrap();
+    let recorder = Recorder::new();
+    let mut detector = lettered_pipeline(&scratch);
+    execute_as(RunMode::Detect, "run-detect", &chapter_id, &entries, &mut detector, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    let entries = plan_for(&library, "chapter", &chapter_id, None, RunMode::Clean).unwrap();
+    let recorder = Recorder::new();
+    let mut cleaner = cleaning_only_pipeline(&scratch).with_generations(3);
+    let summary = execute_as(RunMode::Clean, "run-clean", &chapter_id, &entries, &mut cleaner, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    assert!(summary.regions_cleaned > 0);
+    let job = only_job(&library, &chapter_id);
+    for live in &job.project.patches {
+        assert_eq!(job.project.legacy_patch_revisions.iter().filter(|row| row.id == live.id).count(), 1,
+            "one commit of {}", live.id);
+        assert!(crate::variations::list(&job.project, &live.id).is_empty(), "a fill is not a variation");
+    }
+}
+
+/// A further generation local FLUX refuses is a generation not made: the
+/// region keeps its first, cleaned, and the run goes on.
+#[test]
+fn a_refused_further_generation_keeps_the_region_cleaned() {
+    fn refuse_after_the_first(crop: &Raster, fitted: &fit::Fitted, seed: u64) -> Result<Raster, &'static str> {
+        if seed == cleaner_core::engines::flux::SEED { Ok(fill::render(crop, fitted)) } else { Err("decline.reason.rungUnavailable") }
+    }
+    let scratch = Scratch::new("flux-generations-refused");
+    let (library, chapter_id) = a_lettered_chapter(&scratch, 1);
+    let entries = plan_for(&library, "chapter", &chapter_id, None, RunMode::Detect).unwrap();
+    let recorder = Recorder::new();
+    let mut detector = lettered_pipeline(&scratch);
+    execute_as(RunMode::Detect, "run-detect", &chapter_id, &entries, &mut detector, Engine::Lama,
+        &recorder.cancel, &recorder.sink());
+    let entries = plan_for(&library, "chapter", &chapter_id, None, RunMode::Clean).unwrap();
+    let recorder = Recorder::new();
+    let mut cleaner = cleaning_only_pipeline(&scratch)
+        .with_picks(Picks { bubble: EnginePick::Flux, outside: EnginePick::Flux })
+        .with_generations(3);
+    cleaner.rung2.flux.test_render = Some(refuse_after_the_first);
+    let summary = execute_as(RunMode::Clean, "run-clean", &chapter_id, &entries, &mut cleaner, Engine::Flux,
+        &recorder.cancel, &recorder.sink());
+    assert!(summary.regions_cleaned > 0);
+    assert_eq!(summary.errored, 0);
+    let job = only_job(&library, &chapter_id);
+    assert!(!job.project.patches.is_empty());
+    for live in &job.project.patches {
+        assert_eq!(crate::variations::recorded_flux_seed(live), Some(cleaner_core::engines::flux::SEED));
+        assert_eq!(crate::variations::list(&job.project, &live.id).len(), 1, "no further generation was made");
+    }
+}
+
 #[test]
 fn detect_then_clean_leaves_what_one_pass_leaves() {
     let one = Scratch::new("one-pass");
@@ -7541,8 +7662,12 @@ fn an_undone_detect_leaves_its_pages_to_detect_again() {
     detect_chapter(&library, &chapter_id, &mut pipeline, "run-undo");
     assert!(detect_queue(&library, &chapter_id).is_empty());
     let job_path = library.resolve_chapter(&chapter_id).unwrap();
-    let step = crate::history::move_at(&job_path, &chapter_id, "undo").unwrap();
-    assert_eq!(step.refused, None);
+    // A step on each page: undo never leaves the page on screen, so each
+    // page's Undo takes back what the run found there.
+    for page in [0, 1] {
+        let step = crate::history::move_at(&job_path, &chapter_id, page, "undo").unwrap();
+        assert_eq!((step.refused, step.pages), (None, vec![page]));
+    }
     library::invalidate_manifest_cache(&job_path);
     assert!(only_job(&library, &chapter_id).project.detections.is_empty());
     assert_eq!(detect_queue(&library, &chapter_id), vec![0, 1]);
@@ -9068,13 +9193,13 @@ fn repeat_cloud_detection_preserves_existing_masks_edits_and_undo_history() {
     let path = library.resolve_chapter(&chapter_id).unwrap();
     let mut journal = Journal::default();
     for label in ["masks.command.rerunMask", "masks.command.layerStyle"] {
-        journal.push(NewDelta {
-            label: label.into(), op: "region-state".into(), region_id: patches[0].id.clone(),
+        journal.push(&chapter_id, NewDelta {
+            label: label.into(), op: "region-state".into(), region_id: patches[0].id.clone(), page: Some(0),
             before: Side { present: true, page_status: Some("cleaned".into()), region: None },
             after: Side { present: true, page_status: Some("cleaned".into()), region: None }, ..Default::default() },
             crate::history::UNDO_LIMIT_DEFAULT);
     }
-    journal.undo(); // One step in the past, one in the redo stack.
+    journal.undo(0); // One step in the past, one on the page's redo side.
     crate::history::save(&path, &journal).unwrap();
     // The page alone: a chapter run passes over a page the cloud finished.
     let (second, _) = repeat_cloud_detect_in(&scratch, &library, &chapter_id, true, "page");

@@ -724,6 +724,137 @@ never written as though it were general.
 
 ## What has not been measured
 
+**Undo per page (2026-11-16): what is still open.**
+
+Before this date a chapter had one undo list, and Undo took its newest step from any page. On a real
+chapter (17 pages, 206 steps) a run of Undo presses on page 14 took back 26 steps on pages 2, 6, 9, 10
+and 14, off screen, and the next edit cut off the redo side. The results were still in the chapter's
+kept layer revisions and were put back by hand with the library's own restore calls. Undo and redo now
+stay on the page on screen: every journal step belongs to one page, a new edit drops only its page's
+redo side, and a run over several pages is one step per page (journal version 2).
+
+- **The built app (WKWebView) was not driven.** The rule is tested in Rust, in vitest, and by calling
+  `editor.undo()` in the Vite mock (5 undos on one page took back that page's 1 step and left the other
+  page's 2). A real key press in the mock did not reach the editor in that harness, so the `U` key path
+  rests on the keyboard layer's unit tests.
+- **One real version 1 journal was read, and only read.** A copy of the 206-step file loaded as 233 steps,
+  each with a page and its own number, and undo on page 14 changed no other page's steps. Its steps were
+  not replayed against the chapter, and no second real journal was tried.
+- **Long strips.** The undo page is `editor.pageIndex`, the centre page of a long strip. No mounted test
+  presses Undo on a long strip, and an edit whose region sits on the page above or below the centre is
+  reached only when that page is the centre.
+- **A step whose region id names no page** (an id not built on `<chapter>-pNNN`) belongs to no page and
+  no Undo reaches it. No such id is known in the app; a test fixture uses one.
+- **An older build that opens a version 2 journal** reads `cursor` as its place in the list. That was not
+  tried. A chapter edited in the new build and then opened in an older one may undo the wrong step.
+- **The undo limit is still one number for the chapter.** A busy page can push another page's oldest
+  steps out. Trimming an undone step drops that page's whole redo side. Per-page limits were not built.
+- **Try again wider is LaMa only (2026-11-16).** The menu, the Layers row, Shift+B and the native check
+  agree. The native refusal is silent (no notice) when a caller asks anyway; the interface never does.
+- **LaMa has no Try again (2026-11-16), in the interface only.** The region menu and the Layers row do not
+  offer it, and `B` on a LaMa layer raises a notice. The native command and the mock still accept `retry`
+  on a LaMa layer: Clean with > LaMa and the Needs review row's Rebuild use that path, and it is what
+  cleans a LaMa layer again after an erase or a change under it. Whether users miss a one-press way to do
+  that was not asked.
+
+**Variations (2026-11-16): what is still open.**
+
+A cleaned region whose result came from Nano Banana, a cloud GPU or a local FLUX model has variations: one
+per answer the region has had, read from the layer revisions the chapter already keeps, so chapters
+cleaned before this date have them too. The region menu steps through them and makes n more (2 to 8).
+On a copy of a real chapter the list read 3, 3, 2 and 1 answers for four Nano Banana regions, left out a
+LaMa row, and a pick and its undo landed on the region's page. Later the same day LaMa rows joined the
+list (next block), so those counts are from before that change.
+
+- **LaMa variations (2026-11-16).** A LaMa result is a variation per area it was rendered through: the
+  first clean, then each Try again wider. The answer is named by the digest of the rendered mask
+  (`mask_sha256`); an erase keeps the digest from before the stroke (`lama_rendered_mask_sha256`).
+  Open: a LaMa row erased before this date counts as its own variation, and so does a LaMa row with no
+  digest; a region cleaned with LaMa and then with another model now lists the LaMa result too, which was
+  not checked on a real chapter; a changed LaMa hole mode on one area counts as the same answer (a
+  changed LaMa model does not); LaMa has no Make n. Tests and the Vite mock only.
+
+- **Not run in the built app, and no real request was sent.** Tests, and the Vite mock: the menu rows, a
+  pick as one undo step, and Make 3 variations behind one paid-request window (3 results, 1 undo step;
+  after Undo the first answer shows again and all 4 stay listed).
+- **Whether a local FLUX model answers differently at the next seed was not measured.** A re-run now asks
+  at the base seed plus the answers the region already has from that model. An older note has seeds 2 to
+  5 drifting 35 to 94 levels on the balloon fixture with an older prompt; nothing newer was run.
+- **Whether Nano Banana answers differently each time was not measured here.** It has no seed. On the real
+  chapter three requests for one region gave three different answers. An answer the region already has
+  is reported and is not a new variation; that notice's native wiring has no test, and the mock never
+  repeats an answer.
+- **Cloud: one consent per render.** A cloud grant is single use and bound to one region's bytes, so Make
+  n variations asks per render unless the project's standing consent is on. The guidance prompt is asked
+  once. A plain Try again on the same region during such a run is not blocked on the cloud path.
+- **Stopping a Make n run** (Stop Nano Banana) is untested. It should end because the withdrawn grant
+  refuses the next request.
+- **Text-shaped regions** are covered in code (their own revision list) and not tested.
+- **Edge cases not handled:** a row with no revision id (version 3 manifests) is left out; after an erase
+  on an answer is undone, the variation still points at the erased row; an old local FLUX row with no
+  recorded seed counts as its own answer.
+- **Variations are never deleted** short of deleting the layer. Their size on disk was not measured.
+- **Every local FLUX patch now records its seed**, the base seed too. Pixels do not change; the revision
+  hash of a new patch does.
+- **Making a variation is not an undo step (rule since 2026-11-16).** Undo never removes a variation; it
+  only changes which one shows. Make n is one step that shows the newest; Try again and a pick are one
+  step each. A Make n run that is stopped part way still records its one step for what landed; that path
+  is tested in the mock only.
+
+**Generations per region (2026-11-16): what is still open.**
+
+Text cleanup has a "Generations per region" choice, 1 to 8, default 1 (`generationsPerRegion`). A clean
+run makes each region that many times. The first is applied and is the run's undo step; the others are
+kept as variations with no undo step.
+
+- **Cloud GPU runs now make every generation.** The plan and stream digests bind the generation count
+  (left out at 1, so a 1 plan digest is unchanged), the window shows regions times generations renders
+  and a scaled cost, and a region gets at most that many grants (`Shared::reserve`). Further renders
+  run after the first is written, bound to its attempt id, the same source bytes and the page revision
+  it left, and are journaled with `keep_as_variation` so attach and recovery keep them through
+  `keep_generation`, never as an undo step. The choice is off with its reason only when the local
+  model is LaMa. Still open on the cloud:
+  - **Further renders are sequential per region,** in the worker that made the first, so regions that
+    wait on it wait longer. Throughput at more than 1 was not measured, and no real request was sent.
+  - **Seeds differ only where the cloud setup serves `jobs.retry_seed`.** An older setup renders the
+    same seed again and the repeat is kept as one more row of the same answer.
+  - **A stream run admits a region with all its renders or not at all,** so near the cap a region
+    can be held back that would have fit at 1.
+  - **The estimate counts every region times generations,** including regions a mixed run cleans on
+    this computer, which make no cloud extras. It over-states those runs.
+  - **A project with standing consent sees the window again** at more than 1, with the statements
+    hidden, so the render count is always shown once.
+  - **Not made is a notice only** (`notice.cloudClean.generationsNotMade`), not a field of the run
+    summary.
+  - **Recovery of a further render cut off by a crash** is tested through the attach path only, and
+    Post-processing on a kept cloud variation is untested.
+  - **The mock makes every cloud extra;** it has no way to fail one.
+- **Generations that were not made are not shown.** A local run only logs them (`eprintln`). A Nano
+  Banana run counts them (`generationsNotMade`) and its summary window does not show the count.
+- **Extra local FLUX seeds are the first seed plus 1, 2, ...** with no check against seeds the region
+  already has from an earlier run, so a second run can repeat an answer the region holds.
+- **Extras are kept whatever the quality check says.** Only the first generation goes through the hold
+  for review path.
+- **An extra generation is cut to the area the first one covers** so a pick cannot paint outside the
+  region's shown mask. One unit test; not looked at on a real page.
+- **Stop during the extras is untested** in the native run, and the mock only comes close to it.
+- **Nano Banana counts requests, not regions,** against its per-run limit and the paid window (regions
+  times generations). The cost of a full chapter at more than 1 was not measured.
+- **Not run in the built app, and no real request was sent.** Tests, and the Vite mock: the choice is off
+  for LaMa with its note, on for Nano Banana, and a pick of 3 lands in the session.
+
+**Default post-processing (2026-11-16): what is still open.**
+
+A fresh install now starts on "Tone only, fill lost dots" for cloud and Nano Banana results
+(`Finishing::SETTING_DEFAULT`, `DEFAULT_FINISHING`). Before, it started on "Copy".
+
+- **No measurement stands behind the new default.** It is the user's choice (2026-11-16). No bench
+  compared it with Copy across a chapter.
+- **A saved choice is kept.** Only a settings file with no finishing value gets the new default, so an
+  existing install that never touched the choice changes too. That was not tried on a real settings file.
+- **Two defaults now exist.** `Finishing::default()` is still Copy, because a kept result or a 3.0.0
+  recipe with no finishing recorded means Copy. A new reader of settings must use `SETTING_DEFAULT`.
+
 **Ten features in one batch (2026-11-15): what is still open.** Pixel zoom, the brush tip and opacity, the Pages
 screen and split chapter numbers, the new denoise presets, Restore mask for a failed clean, Nano Banana profiles and
 in-app version rollback were built in separate worktrees, merged, read by six read-only reviewers, and fixed. The
@@ -3867,9 +3998,10 @@ to the earlier prompt.
   intersecting and 32 outside patches, the Gray8 window was 2,611,456 B with a 45,236,224 B peak RSS
   and a 624 ms read; the RGB8 window was 7,834,368 B with a 126,812,160 B peak and a 1,462 ms read.
   No cache was added. Real page histories and GPU paths were not measured.
-- **Needs review's Undo is the chapter's last action.** It reverses the latest journal entry, not the
-  specific change that flagged the layer, and is labeled "Undo last action". Undoing the one causing
-  change is not built.
+- **Needs review's Undo is the page's last action.** It reverses the latest journal entry of the page on
+  screen (the chapter's latest before 2026-11-16, see "Undo per page" under What has not been measured),
+  not the specific change that flagged the layer, and is labeled "Undo last action". Undoing the one
+  causing change is not built.
 - **Cloud analysis (M7) ran live on Modal after this entry was written (see "Cloud detection in
   Text cleanup ran live"); the parts below were tested only with fakes.** Consent, grants, the journal, tile submission,
   validation, stitching and review-only evidence are tested with an in-process contract fake and the

@@ -302,7 +302,7 @@ describe('a Nano Banana batch on the mock', () => {
     expect(seen.filter((type) => type === 'region-done')).toHaveLength(regions.length)
     const history = await mock.historyLoad({ chapterId: CHAPTER })
     expect(history.entries.length).toBe(before + 1)
-    const step = await mock.historyMove({ chapterId: CHAPTER, direction: 'undo' })
+    const step = await mock.historyMove({ chapterId: CHAPTER, pageIndex: 0, direction: 'undo' })
     expect(step.entry).toMatchObject({ op: 'clean-state', label: 'nanoBanana.job.undo' })
     expect(step.entry.parts.map((/** @type {any} */ part) => part.regionId)).toEqual(regions.map((region) => region.id))
   })
@@ -379,7 +379,7 @@ describe('a Nano Banana batch on the mock', () => {
     mock.subscribe((/** @type {any} */ event) => { if (event.type === 'region-done') firstDone() })
     const { summary } = await batch(mock, regions, {
       onStart: () => {
-        void cleanedOne.then(() => mock.historyMove({ chapterId: CHAPTER, direction: 'undo' }).catch((/** @type {any} */ error) => { refused = error }))
+        void cleanedOne.then(() => mock.historyMove({ chapterId: CHAPTER, pageIndex: 0, direction: 'undo' }).catch((/** @type {any} */ error) => { refused = error }))
       },
     })
     expect(summary.reason).toBe('completed')
@@ -468,7 +468,7 @@ describe('Nano Banana finishing on the mock', () => {
     })
     expect(done.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'poisson', grayscale: true })
     const plain = await layer()
-    expect(plain.done.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'copy', grayscale: false })
+    expect(plain.done.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'tone-fill-dots', grayscale: false })
   })
 
   it('keeps the layer\'s finishing on Try again, whatever the setting says by then', async () => {
@@ -491,7 +491,7 @@ describe('Nano Banana finishing on the mock', () => {
     const { mock, regionId } = await layer()
     const previews = await mock.regionFinishingPreviews({ regionId })
     expect(previews.unavailable).toBeNull()
-    expect(previews.current).toMatchObject({ finishing: 'copy', grayscale: false })
+    expect(previews.current).toMatchObject({ finishing: 'tone-fill-dots', grayscale: false })
     const change = await mock.setRegionFinishing({ regionId, finishing: 'poisson', grayscale: false, strays: true })
     expect(change.history).not.toBeNull()
     expect(change.region.mask.provenance.params_snapshot.postprocess).toEqual({ finishing: 'poisson', grayscale: false, strays: true })

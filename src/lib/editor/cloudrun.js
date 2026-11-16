@@ -58,7 +58,9 @@
  * Each question is asked once per project: the first consent confirmed in a
  * project, of any of the three kinds, stands for later ones to the same
  * endpoint, and their proposals come back `standing`. That skips the dialog,
- * never the proposal or its single-use grant.
+ * never the proposal or its single-use grant. A clean plan of more than one
+ * generation per region is still shown, its statements hidden, so the renders
+ * it sends and their cost are seen first.
  *
  * There is no quiet fallback: a decline or a failure at any step leaves the
  * regions detected (nothing is lost, they wait in Layers) and says why. A
@@ -790,8 +792,10 @@ async function cleanOnCloud(where, backend) {
   // The project's first consent stands for the rest of it; the plan digest is
   // still the one prepared, so the grant covers exactly this plan. A standing
   // plan is confirmed without the statements: the native side holds the ones
-  // that consent was given with, and none is answered here for the user.
-  const answer = proposal.standing === true
+  // that consent was given with, and none is answered here for the user. A
+  // plan of more than one generation per region is still shown, statements
+  // hidden, so its renders and their cost are seen before anything is sent.
+  const answer = proposal.standing === true && !(Number(proposal.generations) > 1)
     ? { rightsAttested: false, retentionAcknowledged: false, planDigest: proposal.planDigest ?? '' }
     : await askCleanConsent(proposal, endpointHost(readiness))
   if (!answer || typeof answer !== 'object') {

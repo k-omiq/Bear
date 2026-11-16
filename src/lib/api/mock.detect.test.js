@@ -589,6 +589,55 @@ describe('cloud clean', () => {
     await expect(mock.runClean({ ...runOn('detect'), cloudCleanGrant: 'x' })).rejects.toThrow('cloud_clean_stream_unsupported')
   })
 
+  // Generations per region, as `cloud_clean.rs` makes them: the consent
+  // counts every render, each region's first is its result and its one undo
+  // step, and the further ones are kept as variations only.
+  it('makes each region its generations: counted in the plan, the first applied, the others variations', async () => {
+    const mock = await readyMock()
+    await ranToEnd(mock, () => mock.runClean(runOn('detect')))
+    const one = await mock.prepareCloudClean({ chapterId: CHAPTER, scope: 'page', pageIndices: [0] })
+    await mock.cancelCloudClean({ proposalId: one.proposalId })
+    expect(one).toMatchObject({ generations: 1, renders: one.regions })
+    await mock.writeSettings({ generationsPerRegion: 3 })
+    const proposal = await mock.prepareCloudClean({ chapterId: CHAPTER, scope: 'page', pageIndices: [0] })
+    expect(proposal.regions).toBeGreaterThan(0)
+    expect(proposal).toMatchObject({ generations: 3, renders: proposal.regions * 3 })
+    expect(proposal.totalCropPixels).toBe(one.totalCropPixels * 3)
+    expect(proposal.estimatedGpuSeconds.low).toBe(one.estimatedGpuSeconds.low * 3)
+    expect(proposal.planDigest).not.toBe(one.planDigest)
+    const before = (await mock.historyLoad({ chapterId: CHAPTER })).entries.length
+    const grant = await mock.confirmCloudClean({ proposalId: proposal.proposalId, planDigest: proposal.planDigest, ...ANSWER })
+    const { events } = await ranToEnd(mock, () => mock.startCloudClean({ grantId: grant.grantId }))
+    expect(events.filter((event) => event.type === 'region-done')).toHaveLength(proposal.regions)
+    const page = await firstPage(mock)
+    for (const id of proposal.regionIds) {
+      const region = page.regions.find((candidate) => candidate.id === id)
+      const listed = await mock.regionVariations({ regionId: id })
+      expect(listed.map((variation) => [variation.engine, variation.current]))
+        .toEqual([['cloud', true], ['cloud', false], ['cloud', false]])
+      expect(listed[0].revision).toBe(region.mask.legacyPatchRevision)
+    }
+    const after = (await mock.historyLoad({ chapterId: CHAPTER })).entries.length
+    expect(after - before).toBe(proposal.regions)
+  })
+
+  it('counts every generation of a streamed region in its cost and against the cap', async () => {
+    const mock = await readyMock()
+    const one = await mock.prepareCloudCleanStream({ chapterId: CHAPTER, scope: 'page', pageIndices: [0] })
+    await mock.cancelCloudClean({ proposalId: one.proposalId })
+    await mock.writeSettings({ generationsPerRegion: 2 })
+    const two = await mock.prepareCloudCleanStream({ chapterId: CHAPTER, scope: 'page', pageIndices: [0] })
+    expect(two).toMatchObject({ generations: 2, regionCostUsd: one.regionCostUsd * 2 })
+    expect(two.streamDigest).not.toBe(one.streamDigest)
+    const stream = await mock.confirmCloudCleanStream({ proposalId: two.proposalId, streamDigest: two.streamDigest,
+      capUsd: two.fixedCostUsd + two.regionCostUsd * 1.5, ...ANSWER })
+    await ranToEnd(mock, () => mock.runClean({ ...runOn('auto'), cloudCleanGrant: stream.grantId }))
+    const cleaned = (await firstPage(mock)).regions.filter((region) => region.outcome === 'cleaned')
+    expect(cleaned).toHaveLength(1)
+    expect((await mock.regionVariations({ regionId: cleaned[0].id })).map((variation) => variation.current))
+      .toEqual([true, false])
+  })
+
   it('refuses a stream when the endpoint states no price', async () => {
     const mock = await readyMock({ cloudCleanScenario: 'unpriced' })
     await expect(mock.prepareCloudCleanStream({ chapterId: CHAPTER, scope: 'chapter' }))
@@ -785,7 +834,7 @@ describe('a clean kept, and taken back', () => {
 
   /** One journal step, replayed as the interface replays a `clean-state` entry. */
   async function replay(mock, direction) {
-    const { entry } = await mock.historyMove({ chapterId: CHAPTER, direction })
+    const { entry } = await mock.historyMove({ chapterId: CHAPTER, pageIndex: 0, direction })
     const side = direction === 'undo' ? entry.before : entry.after
     const answer = await mock.setRegionCleaned({ regionId: entry.regionId, cleaned: side.region?.outcome !== 'detected' })
     return { entry, answer }
@@ -801,7 +850,7 @@ describe('a clean kept, and taken back', () => {
     expect(events.filter((event) => event.type === 'history-changed')).toEqual([{ type: 'history-changed', chapterId: CHAPTER }])
     const view = await mock.historyLoad({ chapterId: CHAPTER })
     expect(view).toMatchObject({ cursor: 2, entries: [DETECT, { seq: 2, label: 'masks.command.cleanRegion' }] })
-    const { entry } = await mock.historyMove({ chapterId: CHAPTER, direction: 'undo' })
+    const { entry } = await mock.historyMove({ chapterId: CHAPTER, pageIndex: 0, direction: 'undo' })
     expect(entry).toMatchObject({ op: 'clean-state', label: 'masks.command.cleanRegion', regionId: first.id })
     // Before is the detection as it was, mask and all; after is the result.
     expect(entry.before).toEqual({ present: true, pageStatus: 'detected', region: first })
@@ -982,7 +1031,7 @@ describe('a clean kept, and taken back', () => {
     await cleanHere(mock, first.id)
     const run = finished(() => mock.runClean(runOn('detect')))
     await new Promise((resolve) => setTimeout(resolve, 5))
-    await expect(mock.historyMove({ chapterId: CHAPTER, direction: 'undo' })).rejects.toThrow('page_busy')
+    await expect(mock.historyMove({ chapterId: CHAPTER, pageIndex: 0, direction: 'undo' })).rejects.toThrow('page_busy')
     expect((await mock.historyLoad({ chapterId: CHAPTER })).cursor).toBe(2)
     await run
   })

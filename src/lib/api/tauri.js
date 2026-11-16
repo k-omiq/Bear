@@ -139,6 +139,8 @@ const IMPLEMENTED = Object.freeze({
   rejectResult: 'reject_result',
   regionFinishingPreviews: 'region_finishing_previews',
   setRegionFinishing: 'set_region_finishing',
+  regionVariations: 'region_variations',
+  pickVariation: 'pick_variation',
   setLayerStyle: 'set_layer_style',
   keepDependencyResult: 'keep_dependency_result',
   setDetectionType: 'set_detection_type',
@@ -235,6 +237,8 @@ export const SEAM_METHODS = Object.freeze([
   'rejectResult',
   'regionFinishingPreviews',
   'setRegionFinishing',
+  'regionVariations',
+  'pickVariation',
   'setLayerStyle',
   'keepDependencyResult',
   'setDetectionType',
@@ -545,9 +549,10 @@ export function createTauriBackend({ fallback, invoke, listen }) {
       return call(IMPLEMENTED.nanoBananaStop, { grant: grant ?? '' })
     },
     // The batch spends the window's grant natively, region by region.
-    startNanoBananaRun: async ({ chapterId, regionIds, nanoBananaGrant: named }) => {
+    // `generations` is Generations per region, what the window priced.
+    startNanoBananaRun: async ({ chapterId, regionIds, nanoBananaGrant: named, generations = 1 }) => {
       const grant = named ?? nanoBananaGrant
-      const handle = await call(IMPLEMENTED.startNanoBananaRun, { chapterId, regionIds, nanoBananaGrant: grant })
+      const handle = await call(IMPLEMENTED.startNanoBananaRun, { chapterId, regionIds, nanoBananaGrant: grant, generations })
       if (handle?.runId && !handle.alreadyRunning) nanoBananaBatches.set(handle.runId, grant)
       return handle
     },
@@ -668,14 +673,15 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     // status travels with its regions.
     loadPages: ({ chapterId, indices }) =>
       call(IMPLEMENTED.loadPages, { chapterId, indices: indices ?? [] }),
-    // The persisted undo journal. `historyLoad` answers the index
-    // (cursor plus one `{seq, label}` per entry); `historyMove` moves the
-    // cursor on disk and answers with the one delta to replay. The payloads
-    // never all exist at once on this side, which is the whole point.
+    // The persisted undo journal, partitioned by page. `historyLoad`
+    // answers the index (one `{seq, label, page, undone}` per entry);
+    // `historyMove` marks one entry of the page on screen on disk and
+    // answers with the one delta to replay. The payloads never all exist at
+    // once on this side, which is the whole point.
     historyLoad: ({ chapterId }) => call(IMPLEMENTED.historyLoad, { chapterId }),
     historyPush: ({ chapterId, entry }) => call(IMPLEMENTED.historyPush, { chapterId, entry }),
-    historyMove: ({ chapterId, direction }) =>
-      call(IMPLEMENTED.historyMove, { chapterId, direction }),
+    historyMove: ({ chapterId, pageIndex, direction }) =>
+      call(IMPLEMENTED.historyMove, { chapterId, pageIndex, direction }),
     undoLimit: () => call(IMPLEMENTED.undoLimit),
     renameProject: (spec) => call(IMPLEMENTED.renameProject, spec),
     deleteProject: (spec) => call(IMPLEMENTED.deleteProject, spec),
@@ -711,6 +717,10 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     regionFinishingPreviews: ({ regionId }) => call(IMPLEMENTED.regionFinishingPreviews, { regionId }),
     setRegionFinishing: ({ regionId, finishing, grayscale, strays }) =>
       call(IMPLEMENTED.setRegionFinishing, { regionId, finishing, grayscale: Boolean(grayscale), strays: Boolean(strays) }),
+    // A region's variations, and the pick of one, which records its own
+    // undo step.
+    regionVariations: ({ regionId }) => call(IMPLEMENTED.regionVariations, { regionId }),
+    pickVariation: ({ regionId, revision }) => call(IMPLEMENTED.pickVariation, { regionId, revision }),
     // A deliberate layer change, judged by the layer's capabilities; history
     // replay goes through `restoreRegion` instead.
     setLayerStyle: ({ regionId, layer }) => call(IMPLEMENTED.setLayerStyle, { regionId, layer }),

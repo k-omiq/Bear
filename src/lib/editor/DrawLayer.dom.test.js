@@ -558,7 +558,7 @@ describe('a mounted long-strip drawing surface', () => {
       createRegion,
       historyPush: vi.fn().mockImplementation(async ({ entry }) => {
         journalEntry = entry
-        return { cursor: 1, entries: [{ seq: 1, label: entry.label }] }
+        return { cursor: 1, entries: [{ seq: 1, label: entry.label, page: 0 }] }
       }),
       historyMove: vi.fn().mockImplementation(async () => ({ entry: journalEntry })),
       restoreRegion,

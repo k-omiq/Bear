@@ -45,7 +45,7 @@ function chapter() {
 
 function backend(overrides = {}) {
   return {
-    historyPush: vi.fn(async ({ entry }) => ({ cursor: 1, entries: [{ seq: 1, label: entry.label }] })),
+    historyPush: vi.fn(async ({ entry }) => ({ cursor: 1, entries: [{ seq: 1, label: entry.label, page: 0 }] })),
     loadPages: vi.fn(async () => []),
     proposePatchSource: vi.fn(async () => ({ offset: { x: 30, y: 0 } })),
     fitGradient: vi.fn(async () => ({

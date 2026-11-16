@@ -4961,6 +4961,7 @@ mod tests {
         let record = AttemptRecord {
             qwen_edit: None,
             review_accepted: false,
+            keep_as_variation: false,
             lookup_evidence: None,
             schema_version: 1,
             attempt_id: "att-stale-test-1".to_string(),
@@ -5142,6 +5143,7 @@ mod tests {
         let mut record = AttemptRecord {
             qwen_edit: None,
             review_accepted: false,
+            keep_as_variation: false,
             lookup_evidence: None,
             schema_version: 1,
             attempt_id: "att-recov-proj-1".to_string(),
@@ -5222,6 +5224,7 @@ mod tests {
         let record = AttemptRecord {
             qwen_edit: None,
             review_accepted: false,
+            keep_as_variation: false,
             lookup_evidence: None,
             schema_version: 1,
             attempt_id: "att-recov-underlay".into(),

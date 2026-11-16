@@ -1,10 +1,13 @@
 <script>
-  import { regionMenuSections } from '../model/masks.js'
+  import { listsVariations, regionMenuSections } from '../model/masks.js'
   import { capabilities } from '../state/capabilities.svelte.js'
   import { cloud, cloudEntries, cloudUsable, pickCloudChoice } from '../state/cloud.svelte.js'
   import { session } from '../state/session.svelte.js'
   import { cloudProfileLabel, currentCloudModelId, engineModelLabel } from '../model/model-names.js'
-  import { offersFinishing, regionPageBusy, requestDetectedMaskPadding, runRegionMenuItem, shownMaskPadding } from './maskactions.svelte.js'
+  import {
+    offersFinishing, regionPageBusy, regionVariations, requestDetectedMaskPadding, runRegionMenuItem, setVariationCount,
+    shownMaskPadding, stepVariation, variationRuns,
+  } from './maskactions.svelte.js'
   import { editor } from '../state/editor.svelte.js'
   import { shortcutHint } from '../shortcuts.js'
   import { ContextMenu } from '../ui/index.js'
@@ -34,6 +37,12 @@
    * same printed beside it as the user has it bound. The Screentone fill is
    * among the engines only while Settings > Beta offers it.
    *
+   * A layer a model that answers differently each time made (local FLUX,
+   * Cloud, Nano Banana) gets its Variations: which one it shows, read from
+   * the backend as the menu opens and again after each step, with previous
+   * and next, which show the one before or after it and leave the menu open;
+   * how many to make, remembered for the session; and Make n variations.
+   *
    * Cloud is among the engines while a cloud endpoint is ready
    * (`state/cloud.svelte.js#cloudUsable`), and left out otherwise. Picking it,
    * or Try again on a cloud mask, asks for consent before anything is sent.
@@ -53,6 +62,32 @@
     ? editor.chapter?.pages.flatMap((page) => page.regions ?? []).find((region) => region.id === at.region.id) ?? null
     : null)
 
+  /**
+   * The menu's region's variations, as last read: which it shows and how many.
+   *
+   * @type {{regionId: string, current: number, count: number}|null}
+   */
+  let variations = $state(null)
+
+  // Read as the menu opens on a layer that has them, and again whenever its
+  // result changes under the menu (a step, an undo).
+  $effect(() => {
+    const region = live ?? at?.region
+    const revision = region?.mask?.legacyPatchRevision ?? /** @type {any} */ (region?.mask)?.textShapePatchRevision ?? region?.mask?.id
+    if (!region || !listsVariations(region.mask)) {
+      variations = null
+      return
+    }
+    void revision
+    let stale = false
+    void regionVariations(region).then((listed) => {
+      if (stale) return
+      const current = listed.findIndex((variation) => variation.current) + 1
+      variations = current > 0 ? { regionId: region.id, current, count: listed.length } : null
+    })
+    return () => { stale = true }
+  })
+
   const sections = $derived(
     at
       ? regionMenuSections(at.region, {
@@ -60,6 +95,8 @@
         cloud: cloudUsable(),
         beta: session.betaTools,
         finishing: offersFinishing(at.region),
+        variations: variations?.regionId === at.region.id ? variations : null,
+        variationCount: variationRuns.count,
       }).map((section) => ({
           id: section.id,
           label: section.labelKey ? t(section.labelKey) : null,
@@ -72,14 +109,20 @@
                     (!cloudUsable() ? at?.region?.mask?.provenance?.cloud?.model : null) :
                     item.id.endsWith(':flux') ? session.fluxModel || 'flux2-klein-4b' : null,
                   t(item.labelKey))
-                : t(item.labelKey),
+                : t(item.labelKey, item.labelParams),
               icon: item.icon,
               selected: item.selected,
               // Read through `session.shortcuts` so a rebinding redraws it.
               hint: item.shortcut && session.shortcuts ? shortcutHint([item.shortcut]) || undefined : undefined,
-              ...(item.range ? {
+              ...(item.range && item.id === 'padding' ? {
                 range: { ...item.range, value: live ? shownMaskPadding(live) : item.range.value, hint: shortcutHint(['mask.paddingDown', 'mask.paddingUp']),
                   boxLabel: t('tools.param.exactValue', { name: t(item.labelKey) }) },
+                disabled: regionPageBusy(at.region),
+              } : item.range ? {
+                range: { ...item.range, boxLabel: t('tools.param.exactValue', { name: t(item.labelKey) }) },
+              } : {}),
+              ...(item.stepper ? {
+                stepper: { ...item.stepper, previousLabel: t('masks.variations.previous'), nextLabel: t('masks.variations.next') },
                 disabled: regionPageBusy(at.region),
               } : {}),
             }
@@ -120,6 +163,19 @@
       ? editor.chapter?.pages.flatMap((page) => page.regions ?? []).find((entry) => entry.id === opened?.id) ?? opened
       : null)
     if (id === 'padding' && region) paddingSave = requestDetectedMaskPadding(region, value)
+    if (id === 'variationCount') setVariationCount(value)
+  }
+
+  /**
+   * Previous or next on the Variations row: the menu stays open on the
+   * variation it shows now.
+   *
+   * @param {string} id
+   * @param {number} delta
+   */
+  function step(id, delta) {
+    const region = live ?? at?.region
+    if (id === 'variation' && region) void stepVariation(region, delta)
   }
 
   /** The menu's last padding save, which an entry picked after it waits for. */
@@ -156,6 +212,7 @@
     {sections}
     onselect={pick}
     onrange={range}
+    onstep={step}
     {onclose}
   />
 {/if}

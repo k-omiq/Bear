@@ -18,13 +18,18 @@ import {
   provenanceFacts,
   reRunnable,
   rejectable,
+  retriesAgain,
+  listsVariations,
   retryWidens,
   regionMenuSections,
   reviewEntryActions,
+  variesEachTime,
   rowEngines,
   draftMaskColor,
   maskColorFor,
   regionInsideBubble,
+  generationsOf,
+  generationsReasonKey,
 } from './masks.js'
 import { rungLabel } from './ladder.js'
 
@@ -147,14 +152,88 @@ describe('cloud masks', () => {
 
   it('keep Cloud checked in the menu, leading the list while the cloud is not ready', () => {
     const sections = regionMenuSections(remote, { engines: { flux: false } })
-    expect(ids(sections)).toEqual(['retry', 'reject', 'engine:cloud', 'engine:fill', 'engine:lama', 'delete'])
+    expect(ids(sections)).toEqual(['retry', 'reject', 'variationCount', 'makeVariations',
+      'engine:cloud', 'engine:fill', 'engine:lama', 'delete'])
     const engines = sections.find((section) => section.id === 'engine')
     expect(engines.items.filter((item) => item.selected).map((item) => item.id)).toEqual(['engine:cloud'])
   })
 
   it('take Cloud in its own place once the cloud is ready', () => {
     const sections = regionMenuSections(remote, { engines: { flux: false }, cloud: true })
-    expect(ids(sections)).toEqual(['retry', 'reject', 'engine:fill', 'engine:lama', 'engine:cloud', 'delete'])
+    expect(ids(sections)).toEqual(['retry', 'reject', 'variationCount', 'makeVariations',
+      'engine:fill', 'engine:lama', 'engine:cloud', 'delete'])
+  })
+})
+
+describe('the region menu\'s Variations', () => {
+  const cloudResult = {
+    id: 'c1-p001-r0',
+    mask: { id: 'c1-p001-r0-m1', fillMode: 'reconstruct', provenance: { engine: 'flux', cloud: { provider: 'modal', request_id: 'r' } } },
+  }
+  /** @param {any} region @param {any} [options] */
+  const variations = (region, options) => regionMenuSections(region, options).find((section) => section.id === 'variations')
+
+  it('come right after Try again for a FLUX, cloud or Nano Banana result', () => {
+    for (const region of [masked('flux'), masked('nanobanana'), cloudResult]) {
+      const sections = regionMenuSections(region, { engines: { flux: true } })
+      expect(sections.map((section) => section.id).slice(0, 2)).toEqual(['rerun', 'variations'])
+      expect(variesEachTime(region.mask)).toBe(true)
+    }
+  })
+
+  it('are absent for fill, screentone, paint and clone results, and Try again wider stays LaMa\'s', () => {
+    for (const engine of ['fill', 'screentone', 'paint', 'clone']) {
+      expect(variations(masked(engine), { beta: true, variations: { current: 2, count: 3 } })).toBeUndefined()
+      expect(variesEachTime(masked(engine).mask)).toBe(false)
+      expect(listsVariations(masked(engine).mask)).toBe(false)
+    }
+    expect(ids(regionMenuSections(masked('flux'))).includes('retryWider')).toBe(false)
+    expect(ids(regionMenuSections(masked('lama'))).includes('retryWider')).toBe(true)
+  })
+
+  // LaMa answers one hole one way: its variations are the first clean and
+  // each Try again wider, stepped through, with nothing to make n of.
+  it('are a LaMa result\'s wider tries: the position row once there are two, and no Make n', () => {
+    expect(variesEachTime(masked('lama').mask)).toBe(false)
+    expect(listsVariations(masked('lama').mask)).toBe(true)
+    expect(variations(masked('lama'))).toBeUndefined()
+    expect(variations(masked('lama'), { variations: { current: 1, count: 1 } })).toBeUndefined()
+    const section = variations(masked('lama'), { variations: { current: 2, count: 3 }, variationCount: 5 })
+    expect(ids([section])).toEqual(['variation'])
+    expect(section.items[0]).toMatchObject({ labelKey: 'masks.variations.position', stepper: { current: 2, count: 3 } })
+    const all = ids(regionMenuSections(masked('lama'), { variations: { current: 2, count: 3 } }))
+    expect(all.indexOf('variation')).toBe(all.indexOf('reject') + 1)
+  })
+
+  // Plain Try again on LaMa showed the same result again, so it is not offered.
+  it('leave Try again to every re-runnable engine but LaMa', () => {
+    expect(retriesAgain(masked('lama').mask)).toBe(false)
+    expect(ids(regionMenuSections(masked('lama'))).includes('retry')).toBe(false)
+    for (const engine of ['fill', 'screentone', 'flux', 'nanobanana']) {
+      expect(retriesAgain(masked(engine).mask)).toBe(true)
+      expect(ids(regionMenuSections(masked(engine), { beta: true }))[0]).toBe('retry')
+    }
+    for (const engine of ['paint', 'clone']) expect(retriesAgain(masked(engine).mask)).toBe(false)
+    expect(retriesAgain(null)).toBe(false)
+  })
+
+  it('offer the count and Make n variations, and the position row once there are two', () => {
+    expect(ids([variations(masked('nanobanana'))])).toEqual(['variationCount', 'makeVariations'])
+    expect(ids([variations(masked('nanobanana'), { variations: { current: 1, count: 1 } })]))
+      .toEqual(['variationCount', 'makeVariations'])
+    const section = variations(masked('nanobanana'), { variations: { current: 2, count: 3 }, variationCount: 5 })
+    expect(ids([section])).toEqual(['variation', 'variationCount', 'makeVariations'])
+    const [row, count, make] = section.items
+    expect(row).toMatchObject({ labelKey: 'masks.variations.position', labelParams: { current: 2, count: 3 },
+      stepper: { current: 2, count: 3 } })
+    expect(count.range).toEqual({ min: 2, max: 8, step: 1, value: 5, unit: '' })
+    expect(make).toMatchObject({ labelKey: 'masks.variations.make', labelParams: { n: 5 } })
+  })
+
+  it('make 3 until a count is chosen, and keep the count between 2 and 8', () => {
+    expect(variations(masked('flux')).items.at(-1).labelParams).toEqual({ n: 3 })
+    expect(variations(masked('flux'), { variationCount: 1 }).items.at(-1).labelParams).toEqual({ n: 2 })
+    expect(variations(masked('flux'), { variationCount: 20 }).items.at(-1).labelParams).toEqual({ n: 8 })
   })
 })
 
@@ -285,19 +364,23 @@ describe('regionMenuSections', () => {
     expect(ids(regionMenuSections(region))).toEqual(['delete'])
   })
 
-  it('offers Try again wider for a local mask only, never a cloud or text-shaped one', () => {
+  it('offers Try again wider for a LaMa mask only, never another engine, a cloud or a text-shaped one', () => {
     const local = masked('lama')
     expect(retryWidens(local.mask)).toBe(true)
+    for (const engine of ['fill', 'screentone', 'flux', 'nanobanana']) {
+      expect(retryWidens(masked(engine).mask)).toBe(false)
+      expect(ids(regionMenuSections(masked(engine), { engines: { flux: true, nanobanana: true } }))).not.toContain('retryWider')
+    }
     expect(retryWidens(masked('cloud').mask)).toBe(false)
+    expect(retryWidens({ ...local.mask, provenance: { engine: 'lama', cloud: { provider: 'modal' } } })).toBe(false)
     expect(retryWidens({ ...local.mask, geometryPolicy: 'text_shape' })).toBe(false)
     expect(retryWidens(masked('paint').mask)).toBe(false)
     expect(retryWidens(null)).toBe(false)
   })
 
-  it('offers Try again, the engines and Delete for an ordinary mask', () => {
+  it('offers Try again wider, the engines and Delete for a LaMa mask, and no Try again', () => {
     const sections = regionMenuSections(masked('lama'), { engines: { flux: false } })
     expect(ids(sections)).toEqual([
-      'retry',
       'retryWider',
       'reject',
       'engine:fill',
@@ -339,7 +422,6 @@ describe('regionMenuSections', () => {
       engines: { flux: false, lama: false },
     })
     expect(ids(sections)).toEqual([
-      'retry',
       'retryWider',
       'reject',
       'engine:lama',
@@ -366,7 +448,7 @@ describe('regionMenuSections', () => {
 
   it('offers Post-processing… on a layer whose post-processing can change, with its shortcut', () => {
     const sections = regionMenuSections(masked('lama'), { engines: { flux: false }, finishing: true })
-    expect(ids(sections)).toEqual(['retry', 'retryWider', 'reject', 'engine:fill', 'engine:lama', 'finishing', 'delete'])
+    expect(ids(sections)).toEqual(['retryWider', 'reject', 'engine:fill', 'engine:lama', 'finishing', 'delete'])
     const item = sections.find((section) => section.id === 'finishing').items[0]
     expect(item).toMatchObject({ labelKey: 'masks.finishing.menu', shortcut: 'layers.finishingSelected' })
     expect(ids(regionMenuSections(masked('lama'), { engines: { flux: false } }))).not.toContain('finishing')
@@ -388,7 +470,6 @@ describe('regionMenuSections', () => {
 
   it('offers Cloud last for a local mask when the cloud is ready, and not otherwise', () => {
     expect(ids(regionMenuSections(masked('lama'), { engines: { flux: false }, cloud: true }))).toEqual([
-      'retry',
       'retryWider',
       'reject',
       'engine:fill',
@@ -444,10 +525,10 @@ describe('Reject result', () => {
   /** A result as a clean of a detection leaves it: `source: 'auto'`, the detection's id. */
   const cleaned = (engine = 'lama') => ({ ...masked(engine), id: 'c1-p001-d3', source: 'auto', detected: true, outcome: 'cleaned' })
 
-  it('is offered beside Try again for a result an automatic clean made', () => {
+  it('is offered beside the re-runs for a result an automatic clean made', () => {
     expect(rejectable(cleaned())).toBe(true)
     const rerun = regionMenuSections(cleaned(), { engines: { flux: false } }).find((section) => section.id === 'rerun')
-    expect(rerun.items.map((item) => item.id)).toEqual(['retry', 'retryWider', 'reject'])
+    expect(rerun.items.map((item) => item.id)).toEqual(['retryWider', 'reject'])
     expect(rerun.items.at(-1)).toEqual({ id: 'reject', labelKey: 'masks.action.rejectResult', icon: 'undo' })
   })
 
@@ -468,7 +549,7 @@ describe('Reject result', () => {
     const hand = { ...cleaned(), id: 'c1-p001-h1', source: 'hand' }
     expect(rejectable(hand)).toBe(true)
     expect(ids(regionMenuSections(hand, { engines: { flux: false } }))).toEqual([
-      'retry', 'retryWider', 'reject', 'engine:fill', 'engine:lama', 'delete',
+      'retryWider', 'reject', 'engine:fill', 'engine:lama', 'delete',
     ])
     for (const engine of ['paint', 'clone']) {
       expect(rejectable({ ...cleaned(engine), source: 'auto' })).toBe(false)
@@ -637,5 +718,22 @@ describe('the colour a mask is drawn in', () => {
     // Only a detection is joined: a cleaned layer under the gesture is not.
     const layer = /** @type {any} */ ({ id: 'l1', outcome: 'cleaned', bbox: { x: 60, y: 60, w: 10, h: 10 }, insideBubble: true })
     expect(draftMaskColor([layer], { x: 60, y: 60, w: 5, h: 5 }, colors)).toBe('#c2410c')
+  })
+})
+
+describe('Generations per region', () => {
+  it('is a whole number from 1 to 8, and 1 for anything else', () => {
+    for (const count of [1, 2, 8]) expect(generationsOf(count)).toBe(count)
+    for (const bad of [0, 9, 2.5, '3', null, undefined, NaN]) expect(generationsOf(bad), String(bad)).toBe(1)
+  })
+
+  it('is made by a Nano Banana batch and a run here with a FLUX pick, and says why not elsewhere', () => {
+    expect(generationsReasonKey('nanoBanana', ['fill', 'lama'])).toBeNull()
+    expect(generationsReasonKey('local', ['fill', 'flux'])).toBeNull()
+    expect(generationsReasonKey('local', ['ladder.rung.flux', 'lama'])).toBeNull()
+    expect(generationsReasonKey('local', ['fill', 'lama'])).toBe('tools.target.generationsOneWay')
+    expect(generationsReasonKey('local', ['solid'])).toBe('tools.target.generationsOneWay')
+    expect(generationsReasonKey('cloud', ['flux', 'flux'])).toBeNull()
+    expect(generationsReasonKey('cloud', ['fill', 'lama'])).toBeNull()
   })
 })

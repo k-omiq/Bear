@@ -199,7 +199,7 @@ sequenceDiagram
 2. The backend reads a bounded window around the region ([`underlay.rs`](../src-tauri/src/underlay.rs)), runs the named engine, and commits through `Job::complete_region`. A hand-drawn mask is authoritative: no detector snaps it.
 3. The reply carries the updated region. The interface swaps it in and calls `history_push` with a before and after snapshot of the region's metadata.
 4. The layer URL changes because its `v` hash changes, so the canvas loads the new patch only.
-5. **Undo** calls `history_move`. The journal reads one entry from `history.json` and replays it as a state restore (`restoreRegion`, or `setRegionCleaned` for a clean the backend recorded itself). Masks are soft-deleted, so nothing renders again. An edit of a page's detections (`detection-state`) is replayed by `history_move` itself, from page states kept by digest in `<chapter>.mtclean.d/history/`, and the interface reads the pages again.
+5. **Undo** calls `history_move` with the page on screen. Undo and redo never leave that page: the journal is one file per chapter, every entry a step of one page, and an undone entry is marked rather than placed after a cursor, so a new edit drops only its own page's redo. The journal reads that page's entry from `history.json` and replays it as a state restore (`restoreRegion`, or `setRegionCleaned` for a clean the backend recorded itself). Masks are soft-deleted, so nothing renders again. An edit of a page's detections (`detection-state`) is replayed by `history_move` itself, from page states kept by digest in `<chapter>.mtclean.d/history/`, and the interface reads the pages again.
 
 ```mermaid
 sequenceDiagram

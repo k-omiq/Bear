@@ -434,7 +434,11 @@ pub fn half_inside(bbox: Rect, other: Rect) -> bool {
 /// set, `mask ∪ ink`, and its mask digest recomputed; `None` when nothing lay
 /// outside it. The bounds and the pixels stay as they were: a pixel with no
 /// coverage is never composited ([`Job::complete_detection`]).
-fn clipped_to_display(patch: &Patch, mask: &crate::mask::Mask, ink: &crate::mask::Mask) -> Option<Patch> {
+///
+/// Public for a further generation of a region a run keeps as a variation:
+/// it is cut to the first generation's own coverage, which this function cut
+/// when the first was committed, so every variation writes the same pixels.
+pub fn clipped_to_display(patch: &Patch, mask: &crate::mask::Mask, ink: &crate::mask::Mask) -> Option<Patch> {
     let shows = |x: i64, y: i64| mask.contains(x, y) || ink.contains(x, y);
     let clip = |source: &crate::mask::Mask| {
         let mut out = source.clone();
@@ -2093,6 +2097,36 @@ impl Job {
         };
         if *current != selected {
             *current = selected;
+            self.flush()?;
+        }
+        Ok(true)
+    }
+
+    /// Make `row`, one of the region's kept legacy rows exactly as it is kept,
+    /// the live one: a variation picked by name. [`Job::restore_legacy_revision`]
+    /// takes the first row of a revision; a revision kept more than once
+    /// (a layer change on it, then a re-run) is picked here as the row the
+    /// caller chose. `false`, and nothing changed, for a row this job does not
+    /// keep or one without a revision.
+    pub fn restore_legacy_row(&mut self, row: &PatchRecord) -> Result<bool, StoreError> {
+        let _write = self.begin_write()?;
+        let kept = self.project.patches.iter()
+            .chain(self.project.legacy_patch_revisions.iter())
+            .any(|kept| kept == row);
+        if !kept || row.legacy_revision_id().is_none() {
+            return Ok(false);
+        }
+        // The compatibility ink is the stored one, as `complete_region` writes it.
+        let patch = self.load_stored_patch(row)?;
+        buffers::write_atomic(
+            &self.dir.join(format!("{}.ink", row.id)),
+            &buffers::encode_mask(&patch.ink),
+        )?;
+        let Some(current) = self.project.patches.iter_mut().find(|live| live.id == row.id) else {
+            return Ok(false);
+        };
+        if current != row {
+            *current = row.clone();
             self.flush()?;
         }
         Ok(true)

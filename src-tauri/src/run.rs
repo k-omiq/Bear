@@ -1324,6 +1324,38 @@ pub trait Cleaner: Send {
     fn stop_reason(&self) -> Option<String> {
         None
     }
+
+    /// The further generations of `region_id`, one of the regions the page
+    /// just cleaned, beyond the first ([`crate::variations::GENERATIONS_KEY`]):
+    /// rendered now, before the page is written, with the job free, and
+    /// stopped by `cancel` between two of them. Nothing for a region whose
+    /// engine answers one way, and nothing at one generation.
+    fn render_generations(&mut self, _region_id: &str, _cancel: &AtomicBool) -> Generations {
+        Generations::default()
+    }
+}
+
+/// What [`Cleaner::render_generations`] made of one region: the patches to
+/// keep as its variations, and how many it was asked for and could not make.
+#[derive(Default)]
+pub struct Generations {
+    pub patches: Vec<Patch>,
+    pub not_made: u32,
+}
+
+/// What a further generation of one FLUX region is rendered from
+/// ([`Pipeline::hold_generation`]).
+struct PendingGeneration {
+    crop: Raster,
+    fitted: fit::Fitted,
+    /// From the engine crop's origin to the page's.
+    shift: (i64, i64),
+    pad: strip::EdgePad,
+    noise: f32,
+    /// The seed the first generation was asked at: the next ones ask at the
+    /// seeds after it, so each is an answer of its own.
+    seed: u64,
+    first: Patch,
 }
 
 /// The notice an engine fault is said with. On the CPU already, "choose CPU"
@@ -1956,6 +1988,15 @@ pub struct Pipeline {
     /// run, like `picks`.
     area: Option<DetectArea>,
     area_resume_settings: Option<serde_json::Value>,
+    /// Text cleanup's Generations per region (`variations.rs`): how many
+    /// generations of each region this run makes on local FLUX, the one
+    /// engine of a run here that answers differently each time. One is the
+    /// region's result alone, as a run always made.
+    generations: u32,
+    /// What a further generation of each FLUX region the current page
+    /// cleaned is rendered from, by the region's id, until the walk asks for
+    /// them ([`Cleaner::render_generations`]). Empty at one generation.
+    pending_generations: std::collections::HashMap<String, PendingGeneration>,
     #[cfg(test)]
     test_vision: Option<TestVision>,
     /// How many later pages' answers [`Pipeline::gather_below`] has read.
@@ -2627,6 +2668,8 @@ impl Pipeline {
             solid_bubbles_only: false,
             area: None,
             area_resume_settings: None,
+            generations: crate::variations::DEFAULT_GENERATIONS,
+            pending_generations: std::collections::HashMap::new(),
             #[cfg(test)]
             test_vision: None,
             #[cfg(test)]
@@ -2643,6 +2686,35 @@ impl Pipeline {
     pub fn with_picks(mut self, picks: Picks) -> Pipeline {
         self.picks = Some(picks);
         self
+    }
+
+    /// How many generations of each region this run makes on local FLUX,
+    /// held to the setting's bounds (`variations.rs`).
+    #[cfg(test)]
+    pub(crate) fn with_generations(mut self, count: u32) -> Pipeline {
+        self.generations = count.clamp(crate::variations::MIN_GENERATIONS, crate::variations::MAX_GENERATIONS);
+        self
+    }
+
+    /// Keep what a further generation of `patch`, a FLUX result just made on
+    /// this page, is rendered from: the crop and the fit the first was made
+    /// from, where it sits on the page, and the seed it was asked at. Nothing
+    /// at one generation, and nothing for any other engine.
+    #[allow(clippy::too_many_arguments)]
+    fn hold_generation(&mut self, patch: &Patch, engine: Engine, crop: &Raster, fitted: &fit::Fitted, shift: (i64, i64),
+        pad: strip::EdgePad, noise: f32) {
+        if engine != Engine::Flux || self.generations <= 1 {
+            return;
+        }
+        self.pending_generations.insert(patch.id.clone(), PendingGeneration {
+            crop: crop.clone(),
+            fitted: fitted.clone(),
+            shift,
+            pad,
+            noise,
+            seed: self.rung2.flux.seed(),
+            first: patch.clone(),
+        });
     }
 
     /// The run's granted cloud stages. Before [`Pipeline::with_model_preferences`],
@@ -2759,6 +2831,7 @@ impl Pipeline {
         self.rung2.hole = lama_hole_from_settings(settings)?;
         self.rung2.sharing = lama_sharing_from_settings(settings)?;
         self.rung2.flux = crate::region::LocalFlux::from_settings(Some(settings), self.app_data.clone());
+        self.generations = crate::variations::generations_from_settings(settings)?;
         self.reader.preference = reader_preference(settings, host)?;
         self.reader.key = session_key(registry::Kind::Ocr, &self.reader.models, self.reader.preference);
         for (id, enabled, preference) in [
@@ -3629,6 +3702,67 @@ impl Cleaner for Pipeline {
     fn stop_reason(&self) -> Option<String> {
         self.remote_stop.clone()
     }
+
+    /// Each further generation asks local FLUX again at the next seed, and
+    /// is kept whatever the quality metric says of it: it is a variation the
+    /// person may pick, not the result, and its verdict is recorded with it.
+    /// A refusal or a fault is a generation not made, and the region keeps
+    /// its first.
+    fn render_generations(&mut self, region_id: &str, cancel: &AtomicBool) -> Generations {
+        let mut out = Generations::default();
+        let Some(pending) = self.pending_generations.remove(region_id) else { return out };
+        let wanted = self.generations.saturating_sub(1);
+        let seed_before = self.rung2.flux.seed_setting();
+        for step in 1..=wanted {
+            if cancel.load(Ordering::SeqCst) {
+                out.not_made += wanted + 1 - step;
+                break;
+            }
+            let started = Instant::now();
+            self.rung2.flux.set_seed(Some(pending.seed + u64::from(step)));
+            let rendered = match render_rung_with_color(&mut self.rung2, Engine::Flux, &pending.crop, &pending.fitted, None) {
+                Ok(Rendered::Made(made)) => Some(*made),
+                Ok(Rendered::Refused(_)) => None,
+                Err(detail) => {
+                    eprintln!("manga-cleaner: a further generation of {region_id} failed: {detail}");
+                    None
+                }
+            };
+            let Some(rendered) = rendered else {
+                out.not_made += 1;
+                continue;
+            };
+            let verdict = quality::assess(&pending.crop, &rendered.mask, &rendered.pixels, pending.noise);
+            let (dx, dy) = pending.shift;
+            let mask = translated(rendered.mask, dx, dy);
+            let ink = translated(rendered.ink, dx, dy);
+            let pad = if rendered.pad == strip::EdgePad::None { pending.pad } else { rendered.pad };
+            let mut snapshot = params_snapshot(Engine::Flux, &pending.fitted, started.elapsed(), pad, rendered.tiles, &verdict);
+            record_made(&mut self.rung2, Engine::Flux, rendered.matched.as_ref(), rendered.tone.as_ref(), &mut snapshot);
+            if let Some(group) = pending.first.provenance.params_snapshot.get("group") {
+                snapshot["group"] = group.clone();
+            }
+            let mut provenance = pending.first.provenance.clone();
+            provenance.model_sha256 = rendered.model_sha256;
+            if let Some(provider) = rendered.provider {
+                provenance.execution_provider = provider;
+            }
+            provenance.params_snapshot = snapshot;
+            provenance.mask_sha256 = mask_digest(&mask);
+            provenance.created = now();
+            out.patches.push(Patch {
+                id: pending.first.id.clone(),
+                mask,
+                ink,
+                pixels: rendered.pixels,
+                order: pending.first.order,
+                visible: true,
+                provenance,
+            });
+        }
+        self.rung2.flux.set_seed(seed_before);
+        out
+    }
 }
 
 impl Pipeline {
@@ -3675,6 +3809,7 @@ impl Pipeline {
         // read straight after a failed `clean_page` and must answer for that
         // page only, so the slot is emptied before anything can fill it.
         self.fault = None;
+        self.pending_generations.clear();
         let page = match input { Some(page) => page, None => cleaner_core::image::orientation::from_bytes(bytes).raster(&decode(bytes).map_err(|e| e.to_string())?) };
         cleaner_core::image::color::validate_editing(&page).map_err(|e| e.to_string())?;
         let source_sha256 = sha256_hex(bytes);
@@ -4339,33 +4474,33 @@ impl Pipeline {
             }
         }
         at.outcome.detected_boxes.insert(id.clone(), on_page);
-        at.outcome.regions.push(RegionOutcome::Cleaned(
-            Box::new(Patch {
-                id,
-                mask,
-                ink,
-                pixels: made.pixels,
-                order,
-                visible: true,
-                provenance: Provenance {
-                    engine: made.engine,
-                    engine_version: self.engine_version.into(),
-                    model_sha256: made.model_sha256,
-                    // A rung with a session of its own names where that
-                    // session landed; rung 0 has none, and the
-                    // run's provider is the only one there is to give.
-                    execution_provider: made
-                        .provider
-                        .unwrap_or_else(|| at.provider.clone()),
-                    params_snapshot: snapshot,
-                    mask_sha256,
-                    source_sha256: at.source_sha256.to_owned(),
-                    cloud: None,
-                    created: now(),
-                },
-            }),
-            review_state,
-        ));
+        let engine = made.engine;
+        let patch = Box::new(Patch {
+            id,
+            mask,
+            ink,
+            pixels: made.pixels,
+            order,
+            visible: true,
+            provenance: Provenance {
+                engine: made.engine,
+                engine_version: self.engine_version.into(),
+                model_sha256: made.model_sha256,
+                // A rung with a session of its own names where that
+                // session landed; rung 0 has none, and the
+                // run's provider is the only one there is to give.
+                execution_provider: made
+                    .provider
+                    .unwrap_or_else(|| at.provider.clone()),
+                params_snapshot: snapshot,
+                mask_sha256,
+                source_sha256: at.source_sha256.to_owned(),
+                cloud: None,
+                created: now(),
+            },
+        });
+        self.hold_generation(&patch, engine, engine_crop, &fitted, (engine_x - page_x, engine_y - page_y), pad, at.noise);
+        at.outcome.regions.push(RegionOutcome::Cleaned(patch, review_state));
         Ok(true)
     }
 
@@ -4401,6 +4536,7 @@ impl Pipeline {
         detections: &[LoadedDetection],
     ) -> Result<DetectionsOutcome, String> {
         self.fault = None;
+        self.pending_generations.clear();
         // Solid bubbles only is rung 0 and nothing above it. Under that
         // ceiling a LaMa pick starts on the routed fill, and a region routed
         // to the inpainter declines without any rung being asked
@@ -4570,31 +4706,31 @@ impl Pipeline {
             if let Some(group) = record.group.as_ref() {
                 snapshot["group"] = group.snapshot();
             }
-            outcome.regions.push((record.id.clone(), RegionOutcome::Cleaned(
-                Box::new(Patch {
-                    id: record.id.clone(),
-                    mask,
-                    ink,
-                    pixels: made.pixels,
-                    order: record.order,
-                    visible: true,
-                    provenance: Provenance {
-                        engine: made.engine,
-                        engine_version: self.engine_version.into(),
-                        model_sha256: made.model_sha256,
-                        // No detector ran, so there is no run provider to stand
-                        // in for a rung without a session: rung 0 is
-                        // arithmetic on this machine's processor.
-                        execution_provider: made.provider.unwrap_or_else(|| "cpu".to_owned()),
-                        params_snapshot: snapshot,
-                        mask_sha256,
-                        source_sha256: source_sha256.clone(),
-                        cloud: None,
-                        created: now(),
-                    },
-                }),
-                record.review_state.clone(),
-            )));
+            let engine = made.engine;
+            let patch = Box::new(Patch {
+                id: record.id.clone(),
+                mask,
+                ink,
+                pixels: made.pixels,
+                order: record.order,
+                visible: true,
+                provenance: Provenance {
+                    engine: made.engine,
+                    engine_version: self.engine_version.into(),
+                    model_sha256: made.model_sha256,
+                    // No detector ran, so there is no run provider to stand
+                    // in for a rung without a session: rung 0 is
+                    // arithmetic on this machine's processor.
+                    execution_provider: made.provider.unwrap_or_else(|| "cpu".to_owned()),
+                    params_snapshot: snapshot,
+                    mask_sha256,
+                    source_sha256: source_sha256.clone(),
+                    cloud: None,
+                    created: now(),
+                },
+            });
+            self.hold_generation(&patch, engine, engine_crop, &fitted, (engine_x - page_x, engine_y - page_y), pad, noise);
+            outcome.regions.push((record.id.clone(), RegionOutcome::Cleaned(patch, record.review_state.clone())));
         }
         Ok(outcome)
     }
@@ -6547,6 +6683,25 @@ impl<'w> Walker<'w> {
                         outcome.pressure, Vec::new()))
                 }
             });
+        // A region's further generations (Generations per region), with the
+        // job still free: each is a FLUX render, and the page waits for none
+        // of them under its lock. Stop ends them between two renders. The
+        // first generation of each region is its result whatever they come
+        // to.
+        let mut generations: std::collections::HashMap<String, Generations> = std::collections::HashMap::new();
+        if let Ok((regions, _, _)) = &worked {
+            for (_, region, _) in regions {
+                if cancel.load(Ordering::SeqCst) {
+                    break;
+                }
+                if let RegionOutcome::Cleaned(patch, _) = region {
+                    let made = cleaner.render_generations(&patch.id, cancel);
+                    if !made.patches.is_empty() || made.not_made > 0 {
+                        generations.insert(patch.id.clone(), made);
+                    }
+                }
+            }
+        }
 
         // A cancel heard while the models worked writes nothing of the page,
         // whatever they found: a Detect that found no text would otherwise
@@ -6729,6 +6884,30 @@ impl<'w> Walker<'w> {
                         page_index: entry.page_index as u32,
                         region: Box::new(library::region_of_patch(&record, &page)),
                     });
+                    // The region counts as cleaned above, with its first
+                    // generation. The others are kept as its variations, the
+                    // first left live, and journaled nowhere: the run's undo
+                    // steps are what they are at one generation.
+                    if let Some(made) = generations.remove(&patch.id) {
+                        let first = job.project.patches.iter().find(|row| row.id == patch.id).cloned();
+                        let mut not_made = made.not_made;
+                        for extra in &made.patches {
+                            let kept = match (&first, cancel.load(Ordering::SeqCst)) {
+                                (Some(first), false) => crate::variations::keep_generation(job, entry.source_idx, first, extra)
+                                    .unwrap_or_else(|error| {
+                                        eprintln!("manga-cleaner: a further generation of {} was not kept: {error}", patch.id);
+                                        false
+                                    }),
+                                _ => false,
+                            };
+                            if !kept {
+                                not_made += 1;
+                            }
+                        }
+                        if not_made > 0 {
+                            eprintln!("manga-cleaner: {} of {}'s further generations were not made", not_made, patch.id);
+                        }
+                    }
                 }
                 // Held, never cleaned: written with the page's other
                 // untouched rows below, or with its detections.

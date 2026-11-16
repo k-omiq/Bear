@@ -19,13 +19,20 @@
  * undo step. How it ended arrives as `nano-banana-report`, which the jobs
  * store keeps on the job for the summary (`NanoBananaSummaryDialog.svelte`)
  * and for `retryNanoBanana`.
+ *
+ * **Generations per region** (`session.generationsPerRegion`) asks for each
+ * region that many times: the window counts and prices requests, regions
+ * times generations, the grant covers that many, and the batch is handed
+ * the count it was priced at. The first answer of each region is its result;
+ * the rest are its variations, and add no undo step.
  */
 import { notify, pushModal } from '../state/app.svelte.js'
 import { adoptRun, claimRunStart, editor, pages, releaseRunStart } from '../state/editor.svelte.js'
 import { jobById, refreshJobs } from '../state/jobs.svelte.js'
 import { getBackend } from '../api/backend.js'
 import { hasKey } from '../i18n/index.js'
-import { isDetected } from '../model/masks.js'
+import { generationsOf, isDetected } from '../model/masks.js'
+import { session } from '../state/session.svelte.js'
 import { confirmNanoBanana } from './nanobananaask.svelte.js'
 
 /**
@@ -74,7 +81,9 @@ async function startBatch(chapter, regionIds, scope, backend) {
     notify({ key: 'notice.run.nothingDetected', tone: 'warn' })
     return null
   }
-  const grant = await confirmNanoBanana(regionIds.length, chapter.id, backend)
+  // Read once: the window prices this many, and the batch makes this many.
+  const generations = generationsOf(session.generationsPerRegion)
+  const grant = await confirmNanoBanana(regionIds.length * generations, chapter.id, backend)
   if (!grant) return null
   // The grant names this chapter's regions, and the run is followed as the
   // open chapter's: a chapter changed meanwhile starts nothing.
@@ -85,7 +94,7 @@ async function startBatch(chapter, regionIds, scope, backend) {
   /** @type {import('../api/backend.js').RunHandle} */
   let handle
   try {
-    handle = await backend.startNanoBananaRun({ chapterId: chapter.id, regionIds, nanoBananaGrant: grant })
+    handle = await backend.startNanoBananaRun({ chapterId: chapter.id, regionIds, nanoBananaGrant: grant, generations })
   } catch (error) {
     const reason = (error instanceof Error ? error.message : String(error ?? '')).replace(/^Error:\s*/, '')
     console.error('a Nano Banana batch could not start', error)

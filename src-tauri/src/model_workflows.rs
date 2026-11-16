@@ -3252,8 +3252,9 @@ mod tests {
             Some(prepared.underlay_sha256.as_str())
         );
 
-        let mut journal = crate::history::load(&path);
-        journal.push(crate::history::NewDelta {
+        let mut journal = crate::history::load_for(&path, &chapter.id);
+        let page = crate::region::page_index_in(&chapter.id, &applied.region_id).expect("a region id names its page");
+        journal.push(&chapter.id, crate::history::NewDelta {
             parts: Vec::new(),
             label: "canvas.command.applyTool".into(),
             op: "region-state".into(),
@@ -3269,9 +3270,9 @@ mod tests {
                 region: Some(serde_json::to_value(applied.region).unwrap()),
             }, ..Default::default() }, crate::history::UNDO_LIMIT_DEFAULT);
         crate::history::save(&path, &journal).unwrap();
-        let mut reopened = crate::history::load(&path);
+        let mut reopened = crate::history::load_for(&path, &chapter.id);
         assert_eq!(reopened.cursor, 1);
-        assert_eq!(reopened.undo().unwrap().region_id, applied.region_id);
+        assert_eq!(reopened.undo(page).unwrap().region_id, applied.region_id);
         crate::history::save(&path, &reopened).unwrap();
         library.set_mask_visible(&applied.region_id, false).unwrap();
         let undone = Job::open(&path).unwrap();
@@ -3287,9 +3288,9 @@ mod tests {
                 .bytes,
             baseline.bytes
         );
-        let mut reopened = crate::history::load(&path);
+        let mut reopened = crate::history::load_for(&path, &chapter.id);
         assert_eq!(reopened.cursor, 0);
-        assert_eq!(reopened.redo().unwrap().region_id, applied.region_id);
+        assert_eq!(reopened.redo(page).unwrap().region_id, applied.region_id);
         crate::history::save(&path, &reopened).unwrap();
         library.set_mask_visible(&applied.region_id, true).unwrap();
         let redone = Job::open(&path).unwrap();

@@ -140,11 +140,18 @@ function consentFailureKey(cause) {
  * still gets its own proposal and single-use grant, confirmed without the
  * statements, which the native side holds from the first.
  *
+ * A run of renders of one region (Make variations) asks its guidance once:
+ * `options.guidance` holds the answer the first render was given, and every
+ * later one is sent with it rather than asked again. The consent itself is
+ * still asked per render, since a grant covers one attempt; a standing
+ * consent skips the dialog for all but the first.
+ *
  * @param {{regionId: string, chapterId: string, pageIndex: number, intent: import('../model/types.js').OperationIntent}} request
  * @param {import('../api/backend.js').Backend} [backend]
+ * @param {{guidance?: {edit?: {target: string, description: string}}}} [options]
  * @returns {Promise<CloudGrant|null>}
  */
-export async function requestCloudConsent(request, backend = getBackend()) {
+export async function requestCloudConsent(request, backend = getBackend(), options = {}) {
   const readiness = await refreshCloudReadiness(backend)
   if (!readiness.ready || !readiness.target || !readiness.profile) {
     notify({ key: readiness.allowed ? 'notice.cloud.notReady' : 'notice.cloud.blocked', tone: 'warn' })
@@ -174,9 +181,10 @@ export async function requestCloudConsent(request, backend = getBackend()) {
     }
     if (!qwenSupported(model)) return null
     if (asksGuidance(model, request.regionId)) {
-      const edit = await askQwenEdit({ regionId: request.regionId, flux: !isQwen(recipe.model_id) })
+      const edit = options.guidance?.edit ?? await askQwenEdit({ regionId: request.regionId, flux: !isQwen(recipe.model_id) })
       if (!edit) return null
       recipe.qwen_edit = edit
+      if (options.guidance) options.guidance.edit = edit
     }
     proposal = await backend.prepareCloudConsent({
       target,
