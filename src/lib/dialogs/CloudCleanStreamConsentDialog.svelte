@@ -18,6 +18,10 @@
    * number from the fixed cost to the maximum. Start resolves with the
    * answers, the stream digest shown, and the cap; the native side mints the
    * run's grant only for that digest and that cap.
+   *
+   * At more than one generation per region each region is sent that many
+   * times, and the dialog says so; the cost per region and the cap count
+   * every one.
    */
   import { untrack } from 'svelte'
   import { Button, Modal } from '../ui/index.js'
@@ -44,6 +48,7 @@
   const mixed = proposal.execution === 'mixed'
   const fixed = money(proposal.fixedCostUsd) ?? 0
   const region = money(proposal.regionCostUsd)
+  const generations = Number.isInteger(proposal.generations) && proposal.generations > 1 ? proposal.generations : 1
   const max = money(proposal.maxCapUsd) ?? 0
   const perHour = money(proposal.gpuUsdPerHour)
   const digest = typeof proposal.streamDigest === 'string' ? proposal.streamDigest : ''
@@ -117,6 +122,9 @@
         <dt>{t('cloud.analysis.consent.cost')}</dt>
         <dd data-fact="cost">
           {#if region !== null}<span>{t('cloud.clean.stream.costValue', { region, fixed })}</span>{/if}
+          {#if generations > 1}
+            <span data-fact="generations">{t('cloud.clean.stream.generationsValue', { generations })}</span>
+          {/if}
           <span class="quiet">{t('cloud.clean.costBasis')}</span>
         </dd>
       </div>

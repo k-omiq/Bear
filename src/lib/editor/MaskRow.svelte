@@ -1,6 +1,6 @@
 <script>
   import { editor, isHighlighted, hover, select, undo, undoAvailable, undoLabelKey } from '../state/editor.svelte.js'
-  import { MAX_MASK_PADDING, rowEngines, engineChoiceLabel, retryWidens } from '../model/masks.js'
+  import { MAX_MASK_PADDING, rowEngines, engineChoiceLabel, retriesAgain, retryWidens } from '../model/masks.js'
   import { shortcutHint } from '../shortcuts.js'
   import { capabilities } from '../state/capabilities.svelte.js'
   import { cloud, cloudEntries, cloudUsable, pickCloudChoice } from '../state/cloud.svelte.js'
@@ -84,8 +84,9 @@
   // `reRunnable` refuses (an approved text-shape component) keep Delete alone.
   const retryBlocked = $derived(!row.reRunnable && (row.engine === 'paint' || row.engine === 'clone'))
 
-  // Undo here is the editor's global undo, not an undo of the change that put
-  // this layer in review, so its tooltip names what it would reverse.
+  // Undo here is the editor's undo of the page on screen, not an undo of the
+  // change that put this layer in review, so its tooltip names what it would
+  // reverse.
   const undoKey = $derived(undoLabelKey())
   const undoHint = $derived(undoKey ? t('editor.action.undoCommand', { commandKey: undoKey }) : undefined)
   const title = $derived(engineModelLabel(row.engine, row.modelId, t(row.titleKey)))
@@ -314,17 +315,20 @@
           onclick={() => cleanDetected(region)}
         />
       {:else if row.reRunnable}
-        <IconButton
-          icon="refresh"
-          label={t('masks.action.retry')}
-          title={t('masks.action.retryHint')}
-          size={21}
-          iconSize={13}
-          onclick={() => rerunMask(region, 'retry')}
-        />
+        {#if retriesAgain(region.mask)}
+          <IconButton
+            icon="refresh"
+            label={t('masks.action.retry')}
+            title={t('masks.action.retryHint')}
+            size={21}
+            iconSize={13}
+            onclick={() => rerunMask(region, 'retry')}
+          />
+        {/if}
         {#if retryWidens(region.mask)}
-          <!-- Plain Try again repeats the last result exactly; this one grows
-               the area the model redraws on each press. -->
+          <!-- A LaMa layer has this in place of Try again, which on LaMa
+               repeated the last result exactly: it grows the area the model
+               redraws on each press, and each result is a variation. -->
           <IconButton
             icon="mask-add"
             label={t('masks.action.retryWider')}

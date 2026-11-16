@@ -1303,8 +1303,16 @@ pub(crate) struct CleanPlanTerms<'a> {
     pub execution: &'a str,
     /// Consecutive runs of at most this many regions, in plan order.
     pub chunk_regions: u32,
+    /// Renders of each region (Generations per region). Left out at one, so
+    /// a plan of one generation has the digest it always had.
+    #[serde(skip_serializing_if = "one_generation")]
+    pub generations: u32,
     pub regions: Vec<PlanRegionTerms<'a>>,
     pub estimate: PlanEstimateTerms<'a>,
+}
+
+fn one_generation(generations: &u32) -> bool {
+    *generations == 1
 }
 
 /// The digest a cloud clean consent is given for. A change to any term (one
@@ -1335,6 +1343,9 @@ pub(crate) struct CleanStreamTerms<'a> {
     pub page_indices: &'a [u32],
     pub gpu: &'a str,
     pub gpu_micro_usd_per_hour: u64,
+    /// Renders of each region, left out at one as in [`CleanPlanTerms`].
+    #[serde(skip_serializing_if = "one_generation")]
+    pub generations: u32,
 }
 
 /// The digest a streaming cloud clean consent is given for. Its own domain, so

@@ -3,7 +3,7 @@
  * settings, apart from the finishing LaMa and local FLUX share
  * (`inference/nano_banana_finishing.rs`).
  *
- * - `nanoBananaFinishing`: one of `FINISHINGS`, null for the default (`copy`).
+ * - `nanoBananaFinishing`: one of `FINISHINGS`, null for the default (`tone-fill-dots`).
  * - `nanoBananaFinishingGrayscale`: whether a colour answer is made grey first.
  * - `nanoBananaStrays`: whether small marks the model drew on its own inside
  *   the mask are filled from the tone round them first. Off by default.
@@ -12,7 +12,7 @@
  * (`params_snapshot.postprocess`), and Try again on it finishes the new answer
  * the same way.
  */
-import { FINISHINGS, FINISHING_ALIASES } from './model-names.js'
+import { DEFAULT_FINISHING, FINISHINGS, FINISHING_ALIASES } from './model-names.js'
 
 export const NANO_BANANA_FINISHING_KEY = 'nanoBananaFinishing'
 export const NANO_BANANA_GRAYSCALE_KEY = 'nanoBananaFinishingGrayscale'
@@ -40,7 +40,7 @@ function currentName(name) {
 export function nanoBananaFinishing(settings) {
   const finishing = currentName(settings?.[NANO_BANANA_FINISHING_KEY])
   return {
-    finishing: typeof finishing === 'string' && FINISHINGS.includes(/** @type {any} */ (finishing)) ? finishing : 'copy',
+    finishing: typeof finishing === 'string' && FINISHINGS.includes(/** @type {any} */ (finishing)) ? finishing : DEFAULT_FINISHING,
     grayscale: settings?.[NANO_BANANA_GRAYSCALE_KEY] === true,
     strays: settings?.[NANO_BANANA_STRAYS_KEY] === true,
   }

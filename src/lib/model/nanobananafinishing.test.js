@@ -17,6 +17,6 @@ describe('Nano Banana finishing names', () => {
 
   it('still refuses a name no build had', () => {
     expect(nanoBananaFinishingRefusal({ nanoBananaFinishing: 'blur' })).not.toBeNull()
-    expect(nanoBananaFinishing({ nanoBananaFinishing: 'blur' }).finishing).toBe('copy')
+    expect(nanoBananaFinishing({ nanoBananaFinishing: 'blur' }).finishing).toBe('tone-fill-dots')
   })
 })

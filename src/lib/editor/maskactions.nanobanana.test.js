@@ -77,7 +77,15 @@ afterEach(() => {
 })
 
 describe('re-running a Nano Banana layer', () => {
-  for (const kind of /** @type {const} */ (['retry', 'retryWider'])) {
+  // Try again wider is LaMa's alone: it asks nothing and sends nothing here.
+  it('retryWider is refused on a Nano Banana layer before anything is asked', async () => {
+    const adapter = backend()
+    expect(await rerunMask(open(region()), 'retryWider')).toBe(false)
+    expect(asked.confirm).not.toHaveBeenCalled()
+    expect(adapter.rerunMask).not.toHaveBeenCalled()
+  })
+
+  for (const kind of /** @type {const} */ (['retry'])) {
     it(`${kind} asks first and sends nothing when the answer is no`, async () => {
       const adapter = backend()
       asked.confirm.mockResolvedValue(null)
@@ -137,7 +145,7 @@ describe('re-running a Nano Banana layer', () => {
     expect(adapter.rerunMask).toHaveBeenCalledTimes(1)
   })
 
-  for (const kind of /** @type {const} */ (['retry', 'retryWider'])) {
+  for (const kind of /** @type {const} */ (['retry'])) {
     it(`${kind} opens no window when Nano Banana cannot run here, and says why`, async () => {
       const adapter = backend()
       const cloudWas = session.cloudAllowed

@@ -1197,13 +1197,13 @@ export const en = {
       grayscale: 'Make colour results grey',
       grayscaleHint: 'On a colour page, the result is made grey before it is finished.',
       option: {
-        copy: 'Copy page dots (default)',
+        copy: 'Copy page dots',
         copyHops: 'Copy page dots, wide patches',
         redraw: 'Redraw dots',
         redrawSharpContours: 'Redraw dots, keep lines',
         repeatOffsets: 'Repeat dots (first version)',
         toneOnly: 'Tone only',
-        toneFillDots: 'Tone only, fill lost dots',
+        toneFillDots: 'Tone only, fill lost dots (default)',
         toneFix: 'Tone fix (older default)',
         globalTone: 'Simple tone match',
         localTone: 'Local tone match',
@@ -2991,7 +2991,7 @@ export const en = {
       // 5 px wider than last time, growing again on each press. Plain Try
       // again repeats the last result exactly; this one changes it.
       retryWider: 'Try again wider',
-      retryWiderHint: 'Clean again with the same engine over a slightly larger area. Each press grows it a little more.',
+      retryWiderHint: 'Clean again with LaMa over a slightly larger area. Each press grows it a little more.',
       stopNanoBanana: 'Stop Nano Banana',
       stopNanoBananaHint: 'Stop this region\'s Nano Banana request. A request already sent may still be billed.',
       // Beside Try again on a result an automatic clean made: the result is
@@ -3058,6 +3058,14 @@ export const en = {
       cleanDetected: 'Clean this region on this computer, from the mask already found',
       cleanDetectedCloud: 'Clean this region on your cloud GPU. The first time in a project, you see the cost and confirm.',
     },
+    // The region menu's Variations (`model/masks.js#regionMenuSections`).
+    variations: {
+      position: 'Variation {current} of {count}',
+      previous: 'Previous variation',
+      next: 'Next variation',
+      count: 'Variations to make',
+      make: 'Make {n} variations',
+    },
     command: {
       deleteMask: 'a mask deleted',
       deleteRegion: 'a region dismissed',
@@ -3072,6 +3080,9 @@ export const en = {
       // of a detected region, whoever started it, and a rejected result.
       cleanRegion: 'a region cleaned',
       rejectResult: 'a mask restored',
+      pickVariation: 'a variation shown',
+      // A Make variations run, one step however many it made.
+      makeVariations: 'variations made',
       // The edits of a page's detections and held rows, which the backend
       // records with the page as it was (`history.rs#record_pages`).
       deleteDetection: 'a detected mask deleted',
@@ -3161,6 +3172,10 @@ export const en = {
       // (`run.rs`, the solid-bubbles-only run).
       solidOnly: 'Solid bubbles only',
       solidOnlyHint: 'Cleans only speech bubbles on plain paper, with a flat fill. Every other region stays detected, for a later Clean here or on the cloud GPU.',
+      // Under Generations per region (`variations.rs#GENERATIONS_KEY`): what it does,
+      // and why it is off where the run's engine answers one way.
+      generationsHint: 'Each region is made this many times. The first is applied; the others are kept as variations in the region menu.',
+      generationsOneWay: 'Only FLUX, the cloud GPU and Nano Banana make more than one. Pick FLUX above for more generations.',
     },
     // Where the panel's engine picks send each region (`run.rs`). They are
     // the clean's: drawn for Clean and Detect & clean, and read for every
@@ -3193,6 +3208,7 @@ export const en = {
       detectOn: 'Detect on',
       cleanOn: 'Clean on',
       workLongSide: 'FLUX 3 working size',
+      generations: 'Generations per region',
       scope: 'Scope',
       // Normal or Advanced (`session.detectionMode`).
       detectionMode: 'Detection',
@@ -3514,6 +3530,7 @@ export const en = {
       regionSkippedUnresolved: 'A region on page {page} was not sent: an earlier cloud request for it has not been resolved.',
       capReached: 'The cloud clean reached its spending cap at page {page}. Nothing more was sent. The regions not yet sent stay detected.',
       regionSkippedTooLarge: 'A region on page {page} is too large for your cloud GPU to take in one piece, so it was not sent. It stays detected.',
+      generationsNotMade: { one: '1 further generation was not made. Its region keeps its first.', other: '{count} further generations were not made. Their regions keep their first.' },
       stopped: 'The cloud clean stopped at page {page}. The regions not yet cleaned stay detected.',
       stoppedBecause: 'The cloud clean stopped at page {page}: {codeKey}. The regions not yet cleaned stay detected.',
       code: {
@@ -3758,6 +3775,7 @@ export const en = {
       consentFailed: 'The cloud request could not be prepared. Nothing was sent.',
       permissionFailed: 'The cloud setting could not be saved. It is unchanged.',
       workSizeFailed: 'The FLUX 3 working size could not be saved. It is unchanged.',
+      generationsFailed: 'Generations per region could not be saved. It is unchanged.',
       finishingFailed: 'The post-processing setting could not be saved. It is unchanged.',
       generationFailed: 'The FLUX 3 options could not be saved. They are unchanged.',
       // How a render ended: exactly one of these per render.
@@ -3826,6 +3844,10 @@ export const en = {
         firstRun: 'The first render can take 1 to 3 minutes while the GPU starts.',
       },
     },
+    variations: {
+      sameAnswer: 'Nano Banana answered with a result this layer already has. No new variation was made.',
+      stopped: 'Made {made} of {count} variations. The rest were not made.',
+    },
     mask: {
       deleted: 'Mask deleted. The original text under it is back.',
       rerunStronger: 'Region re-run one rung stronger: {rungKey}.',
@@ -3835,7 +3857,8 @@ export const en = {
       // is a record of what ran.
       rerunAgain: 'Region cleaned again: {rungKey}.',
       rerunWider: 'Region cleaned again over a larger area: {rungKey}.',
-      widerOff: 'Try again wider does not work on this layer. It works on a layer cleaned on this computer, and not on a paint or clone stroke, a cloud result or a text-shaped patch.',
+      widerOff: 'Try again wider does not work on this layer. It works only on a layer cleaned with LaMa, and not on a text-shaped patch.',
+      retryOff: 'Try again changes nothing on a LaMa layer: LaMa gives the same result each time. Use Try again wider.',
       rerunEngine: 'Region cleaned again with {rungKey}.',
       fillMode: 'Fill mode is now {fillModeKey}.',
       reopened: 'Mask kept, reopened in {toolKey}.',
@@ -4372,9 +4395,10 @@ export const en = {
       promptHint: 'Your words are added to the built-in removal instruction and sent to Google. The edit stays inside the marked region.',
       promptNotSaved: 'The note could not be saved, so nothing was sent.',
       readFailed: 'The regions to clean could not be read, so nothing was sent.',
-      tooMany: 'Nano Banana takes at most {max} regions at once, so nothing was sent. Clean one page at a time.',
+      tooMany: 'Nano Banana takes at most {max} requests at once, so nothing was sent. Clean one page at a time, or make fewer generations.',
       title: 'Clean with Nano Banana',
-      regions: 'Regions to clean: {count}. One paid request each, or one for several regions close together.',
+      // Requests, not regions: a region made more than once is a request each time.
+      regions: 'Requests to send: {count}. Each is one paid request, and regions close together can share one.',
       cost: 'Estimated cost: {low} to {high}.',
       sent: 'Each region sends one crop of your page to Google. Free-tier keys let Google use it to improve its products.',
       cancel: 'Cancel',
@@ -4604,6 +4628,8 @@ export const en = {
       batchCount: { one: '1 batch', other: '{count} batches' },
       batchesValue: '{batches} of up to {size} regions, one after another.',
       batchesNote: 'This one consent covers every batch. Before each batch your cloud setup, key and GPU are checked again; if any has changed, or you cancel, the batches not yet sent stop and their regions stay detected.',
+      generations: 'Generations',
+      generationsValue: 'Each region is made {generations} times, {renders} renders in all. The first is applied; the others are kept as variations in the region menu. The pixels, GPU time and cost range count every render.',
       heldBack: 'Left out',
       heldBackValue: {
         one: '1 region is not included: an earlier cloud request for it has not been resolved. Recover it first.',
@@ -4630,6 +4656,7 @@ export const en = {
         executionMixed: 'Flat-colour regions are tried on this computer first. Those that clean here are not sent and do not count against the cap.',
         price: '{gpu}, {price:currency} an hour',
         costValue: 'About {region:currency} for each region of a usual size, plus {fixed:currency} once for start-up and idle time.',
+        generationsValue: 'Each region is made {generations} times: the first is applied, the others are kept as variations. The cost per region and the cap count every one.',
         cap: 'Spending cap',
         capHelp: 'In US dollars. The app stops sending when its own cost estimate reaches this amount. Regions not sent stay detected. Your provider bills actual use, which can be different.',
         capInvalid: 'Enter an amount from {min:currency} to {max:currency}. The least is the start-up and idle time, which is counted once.',

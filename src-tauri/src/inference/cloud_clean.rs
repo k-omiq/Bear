@@ -436,7 +436,7 @@ pub(crate) fn apply_flux3_generation(recipe: &mut RenderRecipe, generation: Opti
 /// Strict: each key null or of its type, the version one the client has.
 pub fn finishing_from_settings(settings: &serde_json::Value) -> Result<FinishingSetting, String> {
     let finishing = match settings.get(FINISHING_KEY).filter(|value| !value.is_null()) {
-        None => Finishing::default(),
+        None => Finishing::SETTING_DEFAULT,
         Some(value) => serde_json::from_value(value.clone()).map_err(|_| {
             let names: Vec<String> = Finishing::ALL.iter().map(|f| serde_json::json!(f).as_str().unwrap_or_default().to_owned()).collect();
             format!("{FINISHING_KEY} must be one of {names:?}")
@@ -540,6 +540,12 @@ pub struct CloudCleanProposal {
     /// Every region the consent covers, in the order the run takes them.
     pub region_ids: Vec<String>,
     pub regions: u32,
+    /// Renders of each region the consent covers (Generations per region):
+    /// the first is the region's result, the others are kept as variations.
+    pub generations: u32,
+    /// Every render the consent covers, `regions` times `generations`: what
+    /// the estimate counts and the most the run sends.
+    pub renders: u32,
     /// How many pages `pageIndices` names.
     pub pages: u32,
     pub page_indices: Vec<u32>,
@@ -623,13 +629,20 @@ pub(crate) struct Estimate {
 
 impl Estimate {
     fn of(regions: &[GrantedRegion], rate: RenderRate) -> Self {
+        Self::of_renders(regions, rate, 1)
+    }
+
+    /// Every region rendered `generations` times (Generations per region):
+    /// each render is a job of its own, sent and paid for as the first is.
+    fn of_renders(regions: &[GrantedRegion], rate: RenderRate, generations: u32) -> Self {
         let empty = Self { cold_start_seconds: rate.cold_start_seconds, ..Self::default() };
+        let times = u64::from(generations.max(1));
         regions.iter().fold(empty, |mut total, region| {
             let job = Self::job(region.crop, rate);
-            total.crop_pixels += job.crop_pixels;
-            total.work_pixels += job.work_pixels;
-            total.gpu_seconds += job.gpu_seconds;
-            total.retry_gpu_seconds += job.retry_gpu_seconds;
+            total.crop_pixels += job.crop_pixels * times;
+            total.work_pixels += job.work_pixels * times;
+            total.gpu_seconds += job.gpu_seconds * times as f64;
+            total.retry_gpu_seconds += job.retry_gpu_seconds * times as f64;
             total
         })
     }
@@ -669,6 +682,11 @@ pub(crate) struct CleanGrantScope {
     pub recipe: RenderRecipe,
     pub execution: CleanExecution,
     pub chunk_regions: usize,
+    /// How many renders the consent covers of each region (Generations per
+    /// region, 1 to 8): the first is the region's result, each further one
+    /// is kept as a variation only. Every one is its own render with its own
+    /// region grant, counted against this ([`Shared::reserve`]).
+    pub generations: u32,
     pub estimate: Estimate,
     /// The GPU and its list price the estimate used, as the gateway stated them.
     pub price: Option<(String, f64)>,
@@ -687,6 +705,7 @@ impl CleanGrantScope {
             recipe: &self.recipe,
             execution: self.execution.key(),
             chunk_regions: self.chunk_regions as u32,
+            generations: self.generations,
             regions: self.regions.iter().map(|region| PlanRegionTerms {
                 id: &region.id,
                 page_index: region.page_index,
@@ -828,6 +847,8 @@ pub(crate) struct PrepareRequest {
     pub finishing: FinishingSetting,
     /// The `cloudFlux3Generation` setting.
     pub flux3_generation: Option<Flux3Generation>,
+    /// The `generationsPerRegion` setting ([`crate::variations::GENERATIONS_KEY`]).
+    pub generations: u32,
 }
 
 /// Where the batch would go: the selected profile.
@@ -897,14 +918,19 @@ fn prepare_with_cache<G: CleanGateway + ?Sized>(
         (Some(recipe), bound)
     };
     let execution = if request.local_first { CleanExecution::Mixed } else { CleanExecution::Cloud };
+    let generations = request.generations
+        .clamp(crate::variations::MIN_GENERATIONS, crate::variations::MAX_GENERATIONS);
     let page_indices: Vec<u32> = regions.iter().map(|region| region.page_index)
         .collect::<BTreeSet<_>>().into_iter().collect();
-    let estimate = recipe.as_ref().map_or_else(Estimate::default, |recipe| Estimate::of(&regions, RenderRate::of(recipe)));
+    let estimate = recipe.as_ref().map_or_else(Estimate::default,
+        |recipe| Estimate::of_renders(&regions, RenderRate::of(recipe), generations));
     let mut proposal = CloudCleanProposal {
         proposal_id: None,
         chapter_id: request.chapter_id,
         region_ids: regions.iter().map(|region| region.id.clone()).collect(),
         regions: regions.len() as u32,
+        generations,
+        renders: regions.len() as u32 * generations,
         pages: page_indices.len() as u32,
         page_indices,
         total_crop_pixels: estimate.crop_pixels,
@@ -931,7 +957,8 @@ fn prepare_with_cache<G: CleanGateway + ?Sized>(
     };
     let Some(recipe) = recipe.filter(|_| !regions.is_empty()) else { return Ok(proposal) };
     let price = gateway.gpu_price();
-    let estimate = price.as_ref().map_or(estimate, |(gpu, _)| Estimate::of(&regions, RenderRate::on_gpu(&recipe, gpu)));
+    let estimate = price.as_ref().map_or(estimate,
+        |(gpu, _)| Estimate::of_renders(&regions, RenderRate::on_gpu(&recipe, gpu), generations));
     // Recheck after the network reads: another prepare could have taken the
     // last slot in the meantime.
     let mut cache = proposals.lock().map_err(|e| e.to_string())?;
@@ -948,6 +975,7 @@ fn prepare_with_cache<G: CleanGateway + ?Sized>(
         recipe,
         execution,
         chunk_regions: CHUNK_REGIONS,
+        generations,
         estimate,
         price,
         cost,
@@ -1320,8 +1348,12 @@ pub struct CloudCleanStreamProposal {
     /// The cold start and the idle window, counted once at the first region
     /// sent, as a plan's high bound counts them. The least a cap may be.
     pub fixed_cost_usd: f64,
-    /// One region at the size the worker edits a typical crop at, retries included.
+    /// One region at the size the worker edits a typical crop at, retries
+    /// included, and every one of its generations.
     pub region_cost_usd: f64,
+    /// Renders of each region the run sends (Generations per region): the
+    /// first is the region's result, the others are kept as variations.
+    pub generations: u32,
     /// The fixed cost and [`SUGGESTED_REGIONS_PER_PAGE`] such regions a page,
     /// rounded up to ten cents and held to [`MAX_STREAM_CAP_USD`].
     pub suggested_cap_usd: f64,
@@ -1350,6 +1382,8 @@ pub(crate) struct StreamRequest {
     pub finishing: FinishingSetting,
     /// The `cloudFlux3Generation` setting.
     pub flux3_generation: Option<Flux3Generation>,
+    /// The `generationsPerRegion` setting ([`crate::variations::GENERATIONS_KEY`]).
+    pub generations: u32,
 }
 
 /// State what a streaming cloud clean would send. Nothing is cleaned, written
@@ -1399,9 +1433,11 @@ fn prepare_stream_with_cache<G: CleanGateway + ?Sized>(
     let (gpu, per_hour) = gateway.gpu_price().ok_or("cloud_clean_stream_unpriced")?;
     let execution = if request.local_first { CleanExecution::Mixed } else { CleanExecution::Cloud };
     let page_indices: Vec<u32> = pages.iter().copied().collect();
+    let generations = request.generations
+        .clamp(crate::variations::MIN_GENERATIONS, crate::variations::MAX_GENERATIONS);
     let budget = Budget::new(&recipe, destination.provider, &gpu, per_hour, 0.0);
     let side = budget.rate.work_long_side;
-    let region_cost_usd = budget.job_usd(Rect::new(0, 0, side, side));
+    let region_cost_usd = budget.job_usd(Rect::new(0, 0, side, side)) * f64::from(generations);
     let suggested = budget.fixed_usd + page_indices.len() as f64 * SUGGESTED_REGIONS_PER_PAGE * region_cost_usd;
     let suggested_cap_usd = ((suggested * 10.0).ceil() / 10.0).min(MAX_STREAM_CAP_USD).max(budget.fixed_usd);
     let mut cache = proposals.lock().map_err(|e| e.to_string())?;
@@ -1417,6 +1453,7 @@ fn prepare_stream_with_cache<G: CleanGateway + ?Sized>(
         recipe,
         execution,
         chunk_regions: CHUNK_REGIONS,
+        generations,
         estimate: Estimate::default(),
         price: Some((gpu.clone(), per_hour)),
         cost: None,
@@ -1432,6 +1469,7 @@ fn prepare_stream_with_cache<G: CleanGateway + ?Sized>(
         page_indices: &page_indices,
         gpu: &gpu,
         gpu_micro_usd_per_hour: (per_hour * 1e6).round() as u64,
+        generations,
     }).map_err(|e| e.to_string())?;
     let proposal = CloudCleanStreamProposal {
         proposal_id: proposal_id.clone(),
@@ -1443,6 +1481,7 @@ fn prepare_stream_with_cache<G: CleanGateway + ?Sized>(
         gpu_usd_per_hour: per_hour,
         fixed_cost_usd: budget.fixed_usd,
         region_cost_usd,
+        generations,
         suggested_cap_usd,
         max_cap_usd: MAX_STREAM_CAP_USD,
         provider: destination.provider,
@@ -1487,11 +1526,12 @@ impl Budget {
         (job.gpu_seconds + job.retry_gpu_seconds) * self.per_second
     }
 
-    /// Count `crop`'s job, or answer `false` and count nothing when it would
-    /// take the estimate past the cap.
-    fn take(&mut self, crop: Rect) -> bool {
+    /// Count `renders` jobs of `crop` (a region and its further generations),
+    /// or answer `false` and count nothing when they would take the estimate
+    /// past the cap.
+    fn take(&mut self, crop: Rect, renders: u32) -> bool {
         let fixed = if self.spent_usd == 0.0 { self.fixed_usd } else { 0.0 };
-        let next = self.spent_usd + fixed + self.job_usd(crop);
+        let next = self.spent_usd + fixed + self.job_usd(crop) * f64::from(renders.max(1));
         if next > self.cap_usd { return false; }
         self.spent_usd = next;
         true
@@ -1509,6 +1549,16 @@ pub(crate) trait RegionRenderer: Sync {
     /// is the stable code it failed with ([`InferenceServiceError::code`]).
     fn render(&self, nonce: &str, page_index: u32, region_id: &str, recipe: &RenderRecipe,
         submitted: &dyn Fn()) -> Result<ApiRegion, String>;
+
+    /// Render a further generation of a region the run has just cleaned
+    /// (Generations per region), with the region grant `nonce`, and keep it
+    /// as a variation of the region's live result, which stays as it is
+    /// ([`InferenceService::execute_cloud_variation_queued`]). `Err` is the
+    /// stable code it failed with. A renderer that cannot keep one refuses.
+    fn render_variation(&self, _nonce: &str, _page_index: u32, _region_id: &str, _recipe: &RenderRecipe,
+        _submitted: &dyn Fn()) -> Result<(), String> {
+        Err("cloud_variation_unsupported".into())
+    }
 
     /// The deployment as it is now: its recipe, and its GPU and list price
     /// read exactly as [`prepare`] reads them ([`CleanGateway::gpu_price`]: a
@@ -1597,6 +1647,17 @@ enum Message {
         /// Its failure withdrew the run's authority.
         stops: bool,
     },
+    /// A cleaned region's further generations are over, made or not
+    /// ([`generations`]). Its first was reported by `Finished`.
+    Generations {
+        index: usize,
+        /// Asked for and not kept: refused, failed, or stopped.
+        not_made: u32,
+        /// One of them reached the renderer.
+        reached: bool,
+        /// The code of a failure that withdrew the run's authority.
+        stop: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1619,6 +1680,9 @@ struct Schedule {
     stop: bool,
     /// The attempt each region in flight renders under.
     attempts: HashMap<usize, String>,
+    /// Region grants minted for each region so far, its first and its
+    /// further generations: never more than the consent's `generations`.
+    minted: HashMap<usize, u32>,
     /// More regions may still be queued: a worker with nothing ready waits
     /// rather than ends. A plan's chunk is never open; a stream is until its
     /// detection has handed on every page.
@@ -1635,6 +1699,16 @@ impl Shared {
     /// panicked has already given up its region.
     fn lock(&self) -> MutexGuard<'_, Schedule> {
         self.schedule.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Count one more region grant for the region at `index`, or answer
+    /// `false` when it has had the `generations` the consent covers.
+    fn reserve(&self, index: usize, generations: u32) -> bool {
+        let mut schedule = self.lock();
+        let minted = schedule.minted.entry(index).or_default();
+        if *minted >= generations.max(1) { return false; }
+        *minted += 1;
+        true
     }
 
     /// No region will be queued after these: workers end once they are done.
@@ -1721,6 +1795,9 @@ struct Progress<'a> {
     /// Pages with a region the run's end left unrendered: where a resume starts.
     unfinished: BTreeSet<u32>,
     regions_cleaned: u32,
+    /// Further generations (Generations per region) asked for and not kept:
+    /// refused, failed, or stopped. Their regions stay cleaned by the first.
+    generations_not_made: u32,
     /// Anything reached the renderer.
     sent: bool,
     /// The run stopped, for whatever reason, and said so once.
@@ -1746,7 +1823,8 @@ impl<'a> Progress<'a> {
         Self {
             run_id, chapter_id: &scope.chapter_id, job_path, emit, remaining: BTreeMap::new(),
             started: BTreeSet::new(), cleaned_pages: BTreeSet::new(), failed_pages: BTreeSet::new(),
-            unfinished: BTreeSet::new(), regions_cleaned: 0, sent: false, stopped: false, authority_lost: false,
+            unfinished: BTreeSet::new(), regions_cleaned: 0, generations_not_made: 0, sent: false, stopped: false,
+            authority_lost: false,
         }
     }
 
@@ -1837,7 +1915,25 @@ impl<'a> Progress<'a> {
         }
     }
 
+    /// A cleaned region's further generations are over: count the ones not
+    /// made, and stop the run on a failure that withdrew its authority.
+    fn generations(&mut self, page: u32, not_made: u32, stop: Option<&str>) {
+        self.generations_not_made += not_made;
+        if let Some(code) = stop {
+            self.stop(page, code);
+        }
+    }
+
     fn finish(mut self, cancelled: bool) -> Summary {
+        // Said once for the run. The regions they belong to are cleaned.
+        if self.generations_not_made > 0 {
+            eprintln!("manga-cleaner: {} further generations of a cloud clean were not made", self.generations_not_made);
+            (self.emit)(events::notice_event(
+                "notice.cloudClean.generationsNotMade",
+                serde_json::json!({ "count": self.generations_not_made }),
+                "info",
+            ));
+        }
         // A page the run started and did not finish still ends, so its mark clears.
         for (&page, &left) in &self.remaining {
             if left > 0 {
@@ -1955,7 +2051,7 @@ pub(crate) fn run_stream<T>(
     let mut capped = false;
     let shared = Shared {
         schedule: Mutex::new(Schedule { regions: Vec::new(), slots: Vec::new(), preparing: 0, stop: false,
-            attempts: HashMap::new(), open: true }),
+            attempts: HashMap::new(), minted: HashMap::new(), open: true }),
         changed: Condvar::new(),
     };
     let (tx, rx) = mpsc::channel();
@@ -2027,6 +2123,12 @@ pub(crate) fn run_stream<T>(
                         }
                     }
                     progress.settle(region.page_index);
+                }
+                Ok(Message::Generations { index, not_made, reached, stop }) => {
+                    progress.sent |= reached;
+                    let page = shared.lock().regions[index].page_index;
+                    halting |= stop.is_some();
+                    progress.generations(page, not_made, stop.as_deref());
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => workers_done = true,
@@ -2101,7 +2203,9 @@ fn admit(
     let mut queued = Vec::with_capacity(regions.len());
     for region in regions {
         if *capped { break; }
-        if !budget.take(region.crop) {
+        // A region is counted with every generation it may make, so the
+        // cap is never passed by a further one.
+        if !budget.take(region.crop, scope.generations) {
             *capped = true;
             (progress.emit)(events::notice_event(
                 "notice.cloudClean.capReached",
@@ -2133,6 +2237,7 @@ fn page_detections(job_path: &Path, chapter_id: &str, page: u32) -> Result<Vec<S
         work_long_side: None,
         flux3_generation: None,
         finishing: Default::default(),
+        generations: crate::variations::DEFAULT_GENERATIONS,
     };
     Ok(detections_in_scope(&job, &request)?.into_iter().map(|(_, id)| id).collect())
 }
@@ -2235,7 +2340,7 @@ fn run_chunk(
     }
     let shared = Shared {
         schedule: Mutex::new(Schedule { regions: regions.clone(), slots: std::mem::take(slots), preparing: 0,
-            stop: false, attempts: HashMap::new(), open: false }),
+            stop: false, attempts: HashMap::new(), minted: HashMap::new(), open: false }),
         changed: Condvar::new(),
     };
     let mut halting = progress.stopped;
@@ -2268,6 +2373,11 @@ fn run_chunk(
                         }
                     }
                     progress.settle(region.page_index);
+                }
+                Ok(Message::Generations { index, not_made, reached, stop }) => {
+                    progress.sent |= reached;
+                    halting |= stop.is_some();
+                    progress.generations(regions[index].page_index, not_made, stop.as_deref());
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -2302,54 +2412,211 @@ fn work(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared, cance
         };
         let preparing = Preparing { shared, released: AtomicBool::new(false) };
         let _ = tx.send(Message::Started(index));
-        let (outcome, reached) = attempt(batch, renderer, shared, cancel, index, &region, &|| preparing.release());
+        let (outcome, reached, first) = attempt(batch, renderer, shared, cancel, index, &region, &|| preparing.release());
         let stops = matches!(&outcome, Outcome::Failed(code) if stops_run(code) || batch.lost_authority());
+        // A cleaned region's further generations are made right after its
+        // first, while its slot stays in flight: a region above it waits for
+        // them as it waits for any commit below it.
+        let further = first.filter(|_| matches!(outcome, Outcome::Cleaned(_)) && !stops && batch.scope.generations > 1);
         {
             // Stopped here, under the lock the next pick takes, and not when
             // the run's thread reads the message: this worker must not start
             // another region on authority it just found gone.
             let mut schedule = shared.lock();
-            schedule.slots[index] = Slot::Done;
+            if further.is_none() { schedule.slots[index] = Slot::Done; }
             schedule.attempts.remove(&index);
             schedule.stop |= stops;
         }
         shared.changed.notify_all();
         drop(preparing);
         let _ = tx.send(Message::Finished { index, outcome, reached, stops });
+        let Some(first) = further else { continue };
+        let made = generations(batch, renderer, shared, cancel, index, &region, &first);
+        {
+            let mut schedule = shared.lock();
+            schedule.slots[index] = Slot::Done;
+            schedule.attempts.remove(&index);
+            schedule.stop |= made.stop.is_some();
+        }
+        shared.changed.notify_all();
+        let _ = tx.send(Message::Generations { index, not_made: made.not_made, reached: made.reached, stop: made.stop });
     }
 }
 
-/// One region: re-check it against the grant, mint and spend its own grant,
-/// render. Answers whether it reached the renderer.
-fn attempt(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared,
-    cancel: &AtomicBool, index: usize, region: &GrantedRegion, submitted: &dyn Fn()) -> (Outcome, bool) {
+/// What a region's first render sent, which its further generations are
+/// bound to: the attempt its result carries, and the page bytes it read.
+struct First {
+    attempt: String,
+    source_hash: String,
+}
+
+/// A cleaned region's further generations, as [`Message::Generations`] carries them.
+struct Further {
+    not_made: u32,
+    reached: bool,
+    stop: Option<String>,
+}
+
+/// Where one further generation ended.
+enum Generation {
+    Kept,
+    /// Not made, and the next one may still be.
+    Failed(String),
+    /// The region is not its first any more, or the run is stopping: no
+    /// further one is asked.
+    Over,
+}
+
+/// A preparation slot for a further generation, waited for as a region's
+/// first waits for one. `None` once the run stops.
+fn take_preparation<'a>(shared: &'a Shared, cancel: &AtomicBool) -> Option<Preparing<'a>> {
+    let mut schedule = shared.lock();
+    loop {
+        if schedule.stop || cancel.load(Ordering::SeqCst) { return None; }
+        if schedule.preparing < MAX_PREPARING {
+            schedule.preparing += 1;
+            return Some(Preparing { shared, released: AtomicBool::new(false) });
+        }
+        schedule = shared.changed.wait(schedule).unwrap_or_else(|poisoned| poisoned.into_inner());
+    }
+}
+
+/// Make a cleaned region's further generations, one after another
+/// (Generations per region). Each is bound to the region exactly as its
+/// first left it: the live result must be the one the first render
+/// committed, on the page bytes it read, and every one is read again, given
+/// its own region grant and sent through the one render path, as the first
+/// was. The region's grants never pass the consent's count
+/// ([`Shared::reserve`]). Nothing here fails the region: a generation not
+/// made is counted, and the region keeps its first.
+fn generations(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared, cancel: &AtomicBool,
+    index: usize, region: &GrantedRegion, first: &First) -> Further {
+    let wanted = batch.scope.generations.saturating_sub(1);
+    let mut further = Further { not_made: wanted, reached: false, stop: None };
+    let base = match (batch.read)(batch.job_path, region.page_index, &region.id, &batch.scope.recipe) {
+        Ok(input) => input,
+        Err(_) => return further,
+    };
+    if base.cloud_attempt.as_deref() != Some(first.attempt.as_str()) || base.source_hash != first.source_hash {
+        return further;
+    }
+    let revision = base.revision_hash.clone();
+    drop(base);
+    for _ in 0..wanted {
+        let Some(preparing) = take_preparation(shared, cancel) else { break };
+        let (ended, reached) = generation(batch, renderer, shared, cancel, index, region, &revision,
+            &|| preparing.release());
+        drop(preparing);
+        further.reached |= reached;
+        match ended {
+            Generation::Kept => further.not_made -= 1,
+            Generation::Failed(code) => {
+                if stops_run(&code) || batch.lost_authority() {
+                    further.stop = Some(code);
+                    break;
+                }
+                eprintln!("manga-cleaner: a further generation of {} was not made: {code}", region.id);
+            }
+            Generation::Over => break,
+        }
+    }
+    further
+}
+
+/// One further generation of a cleaned region, as [`attempt`] renders a
+/// first: re-checked, its own grant, the one render path, kept as a variation.
+#[allow(clippy::too_many_arguments)]
+fn generation(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared, cancel: &AtomicBool,
+    index: usize, region: &GrantedRegion, revision: &str, submitted: &dyn Fn()) -> (Generation, bool) {
     let scope = batch.scope;
     if let Err(code) = (batch.allowed)() {
-        return (Outcome::Failed(code.to_owned()), false);
+        return (Generation::Failed(code.to_owned()), false);
     }
     let input = match (batch.read)(batch.job_path, region.page_index, &region.id, &scope.recipe) {
         Ok(input) => input,
         Err(InferenceServiceError::Consent(
             ConsentError::RegionNotFound(_) | ConsentError::PageNotFound(..) | ConsentError::PageMismatch,
-        )) => return (Outcome::Skipped("gone"), false),
-        Err(error) => return (Outcome::Failed(error.code().to_owned()), false),
+        )) => return (Generation::Over, false),
+        Err(error) => return (Generation::Failed(error.code().to_owned()), false),
     };
-    if input.revision_hash != region.revision_hash {
-        return (Outcome::Skipped("changed"), false);
+    // Edited, undone or deleted since its first: what consent covered is gone.
+    if input.revision_hash != revision {
+        return (Generation::Over, false);
     }
     let Ok(digest) = compute_operation_digest(&OperationIntent::CloudClean) else {
-        return (Outcome::Failed("consent_invalid".into()), false);
+        return (Generation::Failed("consent_invalid".into()), false);
     };
     let grant_scope = input.scope(scope.provider, &scope.profile_id, &scope.endpoint_fingerprint, digest,
         &scope.recipe, &region.id);
-    // The renderer rereads and validates the grant at dispatch. Holding this
-    // first read's image payloads through the GPU wait multiplies crop memory.
     drop(input);
+    if !shared.reserve(index, scope.generations) {
+        return (Generation::Over, false);
+    }
     let grant = match batch.grants.issue_grant_with_epoch(grant_scope, scope.profile_epoch, REGION_GRANT_TTL, 1) {
         Ok(grant) => grant,
         Err(GrantError::ProfileMutated | GrantError::Revoked) =>
-            return (Outcome::Failed("cloud_run_profile_changed".into()), false),
-        Err(_) => return (Outcome::Failed("consent_invalid".into()), false),
+            return (Generation::Failed("cloud_run_profile_changed".into()), false),
+        Err(_) => return (Generation::Failed("consent_invalid".into()), false),
+    };
+    {
+        let mut schedule = shared.lock();
+        if schedule.stop || cancel.load(Ordering::SeqCst) {
+            drop(schedule);
+            let _ = batch.grants.revoke_grant(&grant.nonce);
+            return (Generation::Over, false);
+        }
+        schedule.attempts.insert(index, attempt_id_for_nonce(&grant.nonce));
+    }
+    if cancel.load(Ordering::SeqCst) {
+        let _ = batch.grants.revoke_grant(&grant.nonce);
+        return (Generation::Over, false);
+    }
+    let ended = match renderer.render_variation(&grant.nonce, region.page_index, &region.id, &scope.recipe, submitted) {
+        Ok(()) => Generation::Kept,
+        Err(code) => match code.as_str() {
+            "cancelled" | "remote_cancelled" | "region_changed" | "region_not_found" => Generation::Over,
+            _ => Generation::Failed(code),
+        },
+    };
+    shared.lock().attempts.remove(&index);
+    (ended, true)
+}
+
+/// One region: re-check it against the grant, mint and spend its own grant,
+/// render. Answers whether it reached the renderer, and what it sent.
+fn attempt(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared,
+    cancel: &AtomicBool, index: usize, region: &GrantedRegion, submitted: &dyn Fn()) -> (Outcome, bool, Option<First>) {
+    let scope = batch.scope;
+    if let Err(code) = (batch.allowed)() {
+        return (Outcome::Failed(code.to_owned()), false, None);
+    }
+    let input = match (batch.read)(batch.job_path, region.page_index, &region.id, &scope.recipe) {
+        Ok(input) => input,
+        Err(InferenceServiceError::Consent(
+            ConsentError::RegionNotFound(_) | ConsentError::PageNotFound(..) | ConsentError::PageMismatch,
+        )) => return (Outcome::Skipped("gone"), false, None),
+        Err(error) => return (Outcome::Failed(error.code().to_owned()), false, None),
+    };
+    if input.revision_hash != region.revision_hash {
+        return (Outcome::Skipped("changed"), false, None);
+    }
+    let Ok(digest) = compute_operation_digest(&OperationIntent::CloudClean) else {
+        return (Outcome::Failed("consent_invalid".into()), false, None);
+    };
+    let grant_scope = input.scope(scope.provider, &scope.profile_id, &scope.endpoint_fingerprint, digest,
+        &scope.recipe, &region.id);
+    let source_hash = input.source_hash.clone();
+    // The renderer rereads and validates the grant at dispatch. Holding this
+    // first read's image payloads through the GPU wait multiplies crop memory.
+    drop(input);
+    if !shared.reserve(index, scope.generations) {
+        return (Outcome::Left, false, None);
+    }
+    let grant = match batch.grants.issue_grant_with_epoch(grant_scope, scope.profile_epoch, REGION_GRANT_TTL, 1) {
+        Ok(grant) => grant,
+        Err(GrantError::ProfileMutated | GrantError::Revoked) =>
+            return (Outcome::Failed("cloud_run_profile_changed".into()), false, None),
+        Err(_) => return (Outcome::Failed("consent_invalid".into()), false, None),
     };
     {
         // Registered under the lock the halt takes, so a halt either sees this
@@ -2358,14 +2625,15 @@ fn attempt(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared,
         if schedule.stop || cancel.load(Ordering::SeqCst) {
             drop(schedule);
             let _ = batch.grants.revoke_grant(&grant.nonce);
-            return (Outcome::Left, false);
+            return (Outcome::Left, false, None);
         }
         schedule.attempts.insert(index, attempt_id_for_nonce(&grant.nonce));
     }
     if cancel.load(Ordering::SeqCst) {
         let _ = batch.grants.revoke_grant(&grant.nonce);
-        return (Outcome::Left, false);
+        return (Outcome::Left, false, None);
     }
+    let first = First { attempt: attempt_id_for_nonce(&grant.nonce), source_hash };
     let outcome = match renderer.render(&grant.nonce, region.page_index, &region.id, &scope.recipe, submitted) {
         Ok(api) => Outcome::Cleaned(Box::new(api)),
         Err(code) => match code.as_str() {
@@ -2376,7 +2644,7 @@ fn attempt(batch: &Batch<'_>, renderer: &dyn RegionRenderer, shared: &Shared,
             _ => Outcome::Failed(code),
         },
     };
-    (outcome, true)
+    (outcome, true, Some(first))
 }
 
 /// The app's render path: [`InferenceService::execute_cloud_render`] with the
@@ -2396,6 +2664,15 @@ impl RegionRenderer for ServiceRenderer {
         self.service.execute_cloud_render_queued(nonce, &self.job_path, page_index, region_id, &self.target,
             recipe, &OperationIntent::CloudClean, &self.config, crate::inference::cloud_allowed(&self.app),
             &PollOptions::interactive(), submitted)
+            .map_err(|e| e.code().to_owned())
+    }
+
+    fn render_variation(&self, nonce: &str, page_index: u32, region_id: &str, recipe: &RenderRecipe,
+        submitted: &dyn Fn()) -> Result<(), String> {
+        self.service.execute_cloud_variation_queued(nonce, &self.job_path, page_index, region_id, &self.target,
+            recipe, &OperationIntent::CloudClean, &self.config, crate::inference::cloud_allowed(&self.app),
+            &PollOptions::interactive(), submitted)
+            .map(|_| ())
             .map_err(|e| e.code().to_owned())
     }
 
@@ -2555,10 +2832,11 @@ pub async fn prepare_cloud_clean(
         let work_long_side = work_long_side_from_value(settings.get(WORK_LONG_SIDE_KEY))?;
         let finishing = finishing_from_settings(&settings)?;
         let flux3_generation = flux3_generation_from_settings(&settings)?;
+        let generations = crate::variations::generations_from_settings(&settings)?;
         let mut proposal = prepare(&path, PrepareRequest {
             // Strictly the cloud unless mixed is asked for by name.
             chapter_id, scope, page_indices, region_ids, local_first: local_first.unwrap_or(false), picks, qwen_edit,
-            work_long_side, finishing, flux3_generation,
+            work_long_side, finishing, flux3_generation, generations,
         }, Destination {
             provider: selected.provider,
             profile_id: selected.profile_id.clone(),
@@ -2754,9 +3032,10 @@ pub async fn prepare_cloud_clean_stream(
         let work_long_side = work_long_side_from_value(settings.get(WORK_LONG_SIDE_KEY))?;
         let finishing = finishing_from_settings(&settings)?;
         let flux3_generation = flux3_generation_from_settings(&settings)?;
+        let generations = crate::variations::generations_from_settings(&settings)?;
         let mut proposal = prepare_stream(&path, StreamRequest {
             chapter_id, scope, page_indices, local_first: local_first.unwrap_or(false), picks, qwen_edit,
-            work_long_side, finishing, flux3_generation,
+            work_long_side, finishing, flux3_generation, generations,
         }, Destination {
             provider: selected.provider,
             profile_id: selected.profile_id.clone(),

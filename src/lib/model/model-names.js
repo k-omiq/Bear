@@ -73,8 +73,8 @@ export const WORK_LONG_SIDES = /** @type {const} */ ([768, 1024, 1280])
 /**
  * How the app finishes an answer before it is written
  * (`postprocess.rs#Finishing`, the `cloudFinishing` setting): a cloud FLUX 3
- * one always, the others when `finishingEveryModel` is on. The first is
- * the default. The four tone ones and `dots-only` are ported from Manga
+ * one always, the others when `finishingEveryModel` is on. The default is
+ * `DEFAULT_FINISHING`. The four tone ones and `dots-only` are ported from Manga
  * Cleaner Reproduction's finishing v2. `tone-fix` is the tone alignment the
  * other models get when `finishingEveryModel` is off.
  */
@@ -93,6 +93,13 @@ export const FINISHINGS = /** @type {const} */ ([
   'dots-only',
   'as-is',
 ])
+
+/**
+ * The finishing a new install starts with, and the one a settings file that
+ * names none means (`postprocess.rs#Finishing`'s default): Tone only, fill
+ * lost dots. Copy page dots was the default until 2026-11-16.
+ */
+export const DEFAULT_FINISHING = /** @type {typeof FINISHINGS[number]} */ ('tone-fill-dots')
 
 /**
  * Names older settings files saved for a finishing, and the one each is now.

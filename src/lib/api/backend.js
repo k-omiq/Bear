@@ -179,13 +179,25 @@ import { createTauriBackend, isTauri } from './tauri.js'
  */
 
 /**
+ * One of a region's variations (`regionVariations`). Its position is its
+ * place in the list.
+ *
+ * @typedef {Object} RegionVariation
+ * @property {string} revision - what `pickVariation` names it by
+ * @property {'flux'|'cloud'|'nanobanana'} engine - as `model/masks.js#maskEngine` says
+ * @property {string|null} model - the model that answered, where the result says
+ * @property {number} created - seconds since the Unix epoch the answer was made
+ * @property {boolean} current - whether the region shows it now
+ */
+
+/**
  * The undo journal's index - everything the interface holds about a history.
  * The deltas themselves stay on disk.
  *
  * @typedef {Object} HistoryView
  * @property {number} limit - how many entries the journal keeps: the `undoLimit` setting as the backend reads it
- * @property {number} cursor - how many entries are in the past
- * @property {Array<{seq: number, label: string}>} entries
+ * @property {number} cursor - how many entries are not undone; nothing steers by it
+ * @property {Array<{seq: number, label: string, page: number|null, undone: boolean}>} entries - oldest first, every page's: `page` is the 0-based page index the entry is a step of, `undone` puts it on that page's redo side
  */
 
 /**
@@ -207,6 +219,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @typedef {Object} HistoryEntry
  * @property {number} seq
  * @property {string} label - i18n key for the Undo/Redo tooltip
+ * @property {number|null} [page] - the page the entry is a step of
  * @property {'region-state'|'clean-state'|'detection-state'} op
  * @property {string} regionId
  * @property {{present: boolean, pageStatus?: string|null, region?: ApiRegion|null}} before
@@ -361,6 +374,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {Array<{regionId: string, pageIndex: number}>} left - not reached, because the batch stopped first
  * @property {string} [stopped] - why it stopped early, a reason key
  * @property {boolean} byUser - the stop was the person's Stop
+ * @property {number} [generationsNotMade] - further generations (Generations per region) asked for and not kept: refused, failed, stopped, or an answer the region had
  *
  * @typedef {Object} NanoBananaReportEvent
  * @property {'nano-banana-report'} type
@@ -471,9 +485,9 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(spec: {projectId: string, name: string, number?: number, sourcePath?: string}) => Promise<ApiChapter|null>} createChapter - `number` is the chapter's number and is stored verbatim; omitted, the backend numbers it `max + 1`. `sourcePath` omitted means "wherever the project's own folder implies", and a backend must refuse rather than give one folder to two chapters
  * @property {(spec: {projectId: string, chapterId: string, convert?: boolean}) => Promise<{project: ApiProject, chapter: ApiChapter, pendingConversion: {from: string, to: string, fileCount: number}|null}|null>} openChapter - the chapter arrives as page **headers** plus its review index; `loadPages` brings a window's regions
  * @property {(spec: {chapterId: string, indices: number[]}) => Promise<ApiPage[]>} loadPages - the regions of a window of pages. Indices that are not there are skipped, never refused
- * @property {(spec: {chapterId: string}) => Promise<HistoryView>} historyLoad - the chapter's undo journal as an index: a cursor and one `{seq, label}` per entry, no payloads
- * @property {(spec: {chapterId: string, entry: Object}) => Promise<HistoryView>} historyPush - record a delta that has already been applied; truncates the redo stack, caps the journal, and answers with the index as it now stands
- * @property {(spec: {chapterId: string, direction: 'undo'|'redo'}) => Promise<{cursor: number, entry: HistoryEntry|null, pages?: number[], refused?: string}>} historyMove - move the journal's cursor and answer with the one delta to replay. A `detection-state` entry is replayed by the backend before it answers: `pages` are the page indices it wrote, and `refused` is `history_stale` when a page was not in the state the entry left it in, so nothing was written (the cursor moved all the same)
+ * @property {(spec: {chapterId: string}) => Promise<HistoryView>} historyLoad - the chapter's undo journal as an index: one `{seq, label, page, undone}` per entry, no payloads
+ * @property {(spec: {chapterId: string, entry: Object}) => Promise<HistoryView>} historyPush - record a delta that has already been applied, on the page its region is on (one entry per page when its `parts` are on several); drops that page's redo side only, caps the journal, and answers with the index as it now stands
+ * @property {(spec: {chapterId: string, pageIndex: number, direction: 'undo'|'redo'}) => Promise<{cursor: number, entry: HistoryEntry|null, pages?: number[], refused?: string}>} historyMove - one step on `pageIndex`, the page on screen: undo marks that page's newest entry not undone, redo clears the mark of its oldest undone one, and the one delta to replay is the answer. Entries of other pages are never answered or changed. A `detection-state` entry is replayed by the backend before it answers: `pages` are the page indices it wrote, and `refused` is `history_stale` when a page was not in the state the entry left it in, so nothing was written (the entry was marked all the same). Refused before anything is marked with `page_busy` or `run_step_in_progress`
  * @property {() => Promise<{value: number, min: number, max: number, default: number}>} undoLimit - how many undo steps a chapter keeps and the bounds a new value must be in. The backend owns all four numbers; a new value is written as `writeSettings({undoLimit})`, which refuses one outside the bounds
  * @property {(spec: {projectId: string, name: string}) => Promise<ApiProject|null>} renameProject
  * @property {(spec: {projectId: string}) => Promise<boolean>} deleteProject
@@ -496,6 +510,8 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(spec: {regionId: string}) => Promise<{region: ApiRegion, pageStatus: string, history: HistoryView}|null>} rejectResult - reject a generated result: the region comes back as detected with its mask, as `setRegionCleaned` with `cleaned: false` does, and the backend records one `clean-state` undo step (`masks.command.rejectResult`) under the same lock. `history` is the chapter's index after that push, so the caller records nothing itself. The same refusals as `setRegionCleaned`
  * @property {(spec: {regionId: string}) => Promise<FinishingPreviews>} regionFinishingPreviews - one small preview of a model result per finishing there is (`postprocess.rs#Finishing::ALL`, in its order), and the finishing its pixels were made by: a cloud result's composited from its saved answer with no request, a LaMa or FLUX result from this computer rendered again by its model (one run the first time, the rest from the session's kept answer), a Nano Banana result from the answer its chapter kept (no request). The previews are made at the result's grey and stray choices (`grayscale`, `strays`). A region that cannot be finished again answers `unavailable` with why and no previews: not a model's result (`notCloud`), its saved answer gone (`noResult`), the page under a cloud result gone or no longer the size of its answer's crop (`pageChanged`; a page edited since is no refusal, the answer is composited onto it as it is), a preparation that cannot be (`unsupported`), or another local FLUX model set since (`modelChanged`). Rejects with `refinish_no_patch` for a region with no cleaned result
  * @property {(spec: {regionId: string, finishing: string, grayscale: boolean, strays?: boolean}) => Promise<{region: ApiRegion, pageStatus: string, history: HistoryView|null}>} setRegionFinishing - finish a model result again by another finishing (`strays`: fill the marks the model drew on its own first, as `FinishingPreviews.strays` says the result was made; absent is no): its pixels, mask and post-processing record are replaced, everything else of it is kept, and the backend records one `region-state` undo step (`masks.finishing.command`) under the same lock; `history` is the index after it, or null when the finishing asked for is the one it has and nothing was written. Refused with `refinish_not_cloud`, `refinish_no_result`, `refinish_page_changed`, `refinish_unsupported`, `refinish_model_changed`, `refinish_declined` (a local model would not render it), `refinish_busy`, or the busy code a run on the page holds
+ * @property {(spec: {regionId: string}) => Promise<RegionVariation[]>} regionVariations - a region's variations, in the order they were first made: one per answer a model that answers differently each time (local FLUX, a cloud render, Nano Banana) has given it, read from the results the region keeps; a finishing change or an erase on an answer is that answer, shown as its newest result. LaMa, fills, paint and clone results are none. Empty for a region with no live result
+ * @property {(spec: {regionId: string, revision: string}) => Promise<{region: ApiRegion, pageStatus: string, history: HistoryView|null}|null>} pickVariation - make one of the region's variations its live result: nothing is rendered or lost, and the backend records one `region-state` undo step (`masks.command.pickVariation`) of its page under the same lock; `history` is the index after it, or null when it already shows that one. `null` for a revision that is not one of its variations. Refused with the busy code a run on the page holds
  * @property {(spec: {regionId: string, layer: {opacity: number, offsetX: number, offsetY: number, rotation: number, locked: boolean, feather?: number, edgeOpacity?: number}}) => Promise<ApiRegion|null>} setLayerStyle - change one layer's opacity, placement or lock; rejects with a `masks.refused.*` key when the layer's `mask.capabilities` do not allow it (a fixed redraw moved, a locked layer moved, a detection styled)
  * @property {(spec: {regionId: string}) => Promise<ApiRegion|null>} keepDependencyResult - accept a later committed result after its earlier input changed
  * @property {(spec: {regionId: string, inside: boolean}) => Promise<ApiRegion>} setDetectionType - set a stored detection's text type, inside a speech bubble or outside one, before it is cleaned; answers the region as it now is. The balloon colour Detect measured is cleared, and a Fill or Solid pick moved outside a balloon becomes LaMa; any other pick stays. The page's status does not move. One undo step the backend records, as with `editDetectionMask`. Rejects with `not_a_detection` for an id that is not a stored detection (a cleaned layer, a held row, a region gone), or with the chapter-busy code a run holds
@@ -514,7 +530,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {() => Promise<void>} deleteNanoBananaKey - remove the stored Gemini key
  * @property {(spec: { model: string, count: number, chapterId: string }) => Promise<{ grant: string, model: string, count: number }>} grantNanoBanana - the grant for a Nano Banana window the person just confirmed: `count` regions of `chapterId` on `model` (the model the window showed), with the instruction as saved now. Each window's grant is its own and another window does not end it. The caller sends it with the request it confirmed (`params.nanoBananaGrant`, or `startNanoBananaRun`'s); the backend keeps the last one for an edit that names Nano Banana and carries none. Rejects with a `decline.reason.*` key while cloud engines are off or settings name another model
  * @property {(spec: { grant: string }) => Promise<void>} nanoBananaStop - stop the single region's Nano Banana request `grant` was made for, whether it is in flight, waiting for its turn or not sent yet, and withdraw the rest of that grant. Every other request goes on; a batch stops with `cancelRun`
- * @property {(spec: { chapterId: string, regionIds: string[], nanoBananaGrant?: string }) => Promise<RunHandle>} startNanoBananaRun - clean these stored detections of the chapter with Nano Banana, on the grant the window made for them (the last one when none is named). A run in the ordinary run slot, kind `nanoBanana`: ordinary run events, then `nano-banana-report` before `run-finished`; `cancelRun` stops it and withdraws its grant, and so does its end. Rejects with a `decline.reason.*` key while cloud engines are off or the grant is another chapter's or does not cover every region, and with `nanoBanana.job.requestOut` while a single region's request is out on the chapter
+ * @property {(spec: { chapterId: string, regionIds: string[], nanoBananaGrant?: string, generations?: number }) => Promise<RunHandle>} startNanoBananaRun - clean these stored detections of the chapter with Nano Banana, on the grant the window made for them (the last one when none is named), asking for each `generations` times (Generations per region, 1 to 8, 1 when not sent): the first answer is the region's result and the rest are its variations, each a request of its own that the grant must cover. A run in the ordinary run slot, kind `nanoBanana`: ordinary run events, then `nano-banana-report` before `run-finished`; `cancelRun` stops it and withdraws its grant, and so does its end. Rejects with a `decline.reason.*` key while cloud engines are off or the grant is another chapter's or does not cover every region, and with `nanoBanana.job.requestOut` while a single region's request is out on the chapter
  * @property {(spec: { id: string, answer: 'send'|'skip'|'stop', keep: number[][]|null }) => Promise<void>} answerNanoBananaCrop - the answer to a `nano-banana-crop` event: Send it, Skip this region (not cleaned, reason `decline.reason.nanoBananaSkipped`; a batch goes on) or Stop the request and its grant (a batch stops). `keep` is meaningful only for a restrictive crop: the kept areas as `[x, y, w, h]` in crop pixels, or null for the suggested ones; native always adds the marked regions and clips to the crop. Rejects with `nanoBanana.crop.gone` when the request already ended, `nanoBanana.crop.badAnswer` for another answer
  * @property {(spec: { provider: 'beam'|'modal', profileId: string, role: SecretRole, secret: string, tokenId?: string, sessionOnly?: boolean }) => Promise<SecretSummary>} storeCloudSecret - store cloud credential into OS keyring or session store (write-only)
  * @property {(spec: { provider: 'beam'|'modal', profileId: string, role: SecretRole }) => Promise<SecretSummary>} deleteCloudSecret - delete cloud credential from OS keyring and session store

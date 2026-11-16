@@ -1,6 +1,8 @@
 <script>
   /**
-   * `↶ ↷` - undo and redo, global across every tool.
+   * `↶ ↷` - undo and redo of the page on screen, across every tool. Undo
+   * and redo never leave that page, so both buttons and both labels are the
+   * page's own, and they change with it when the page does.
    *
    * The pending command's label is part of the control's name, not only of its
    * tooltip: "Undo - delete mask" tells a keyboard user what is about to be

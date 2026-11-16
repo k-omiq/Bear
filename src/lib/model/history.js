@@ -1,9 +1,13 @@
 /**
- * Global undo/redo: one stack across every tool, **persisted
- * to the project folder**. Plain data plus free
- * functions rather than a class, so a `History` can live directly inside a
- * component's `$state` - mutating the arrays in place is what makes that
- * reactive without extra plumbing.
+ * Undo/redo, one index per chapter, **persisted to the project folder** and
+ * **partitioned by page**: Undo and Redo never leave the page on screen. Undo
+ * on a page takes back only that page's newest step, Redo repeats only that
+ * page's steps, and a new edit on a page drops only that page's redo side. A
+ * chapter-wide stack walked back through edits on pages the user could not
+ * see, and the next edit cut that work off. Plain data plus free functions
+ * rather than a class, so a `History` can live directly inside a component's
+ * `$state` - mutating the arrays in place is what makes that reactive
+ * without extra plumbing.
  *
  * ## What changed, and why the shape did
  *
@@ -17,21 +21,25 @@
  *    closure over page 140 was still on the stack.
  *  - **A closure cannot be written down**, so nothing survived a restart.
  *
- * So a history is now an **index**: a cursor over `{seq, label}` pairs, and
- * nothing else. That is enough to answer `canUndo`, `canRedo` and both
- * tooltips, which is everything the interface reads. The payload - the delta
- * that says what to reverse - lives on disk and is fetched one entry at a time,
- * at the moment it is replayed. RAM is flat in edit count.
+ * So a history is now an **index**: one `{seq, label, page, undone}` record
+ * per entry of the chapter's journal, oldest first, and nothing else. An entry
+ * belongs to one page, and `undone` puts it on that page's redo side; within a
+ * page the undone entries are always its newest. That is enough to answer
+ * `canUndo`, `canRedo` and both tooltips for any page, which is everything the
+ * interface reads. The payload - the delta that says what to reverse - lives
+ * on disk and is fetched one entry at a time, at the moment it is replayed.
+ * RAM is flat in edit count.
  *
- * ## The stacks still move synchronously
+ * ## The marks still move synchronously
  *
  * `canUndo` and the undo label must never lag behind the click that changed
- * them, so the cursor moves at call time and the backend round trip is queued
+ * them, so the mark moves at call time and the backend round trip is queued
  * behind whatever is already in flight. `running` is the tail of that chain:
  * each replay is queued behind the one before it, and a rejection is caught
- * there - the cursor has already moved, and an unhandled rejection on top of
+ * there - the mark has already moved, and an unhandled rejection on top of
  * that helps nobody. The failure is kept on `error` for a caller that wants to
- * say so.
+ * say so. `revision` counts the local moves, so an index read while one was
+ * made can be told to be older than it.
  *
  * Two fast undos would otherwise put two adapter calls in flight with no
  * ordering guarantee, and whichever settled last would win.
@@ -47,12 +55,22 @@
  * @typedef {Object} HistoryLabel
  * @property {number} seq - the entry's number in the chapter's journal
  * @property {string} label - i18n key describing the action, for the tooltip
+ * @property {number|null} [page] - the 0-based page index the entry is a step of
+ * @property {boolean} [undone] - whether it is on its page's redo side
+ */
+
+/**
+ * @typedef {Object} HistoryEntry
+ * @property {number} seq
+ * @property {string} label
+ * @property {number|null} page
+ * @property {boolean} undone
  */
 
 /**
  * @typedef {Object} History
- * @property {HistoryLabel[]} entries - the whole journal, oldest first
- * @property {number} cursor - how many entries are in the past
+ * @property {HistoryEntry[]} entries - the whole journal, oldest first, every page's
+ * @property {number} revision - how many local pushes and moves were made, to tell a stale read
  * @property {number} limit - how many entries the backend keeps; unbounded until it has said
  * @property {Promise<void>} running - the tail of the task chain; await it to settle
  * @property {number} pending - how many tasks are queued or running
@@ -63,14 +81,16 @@
  * @returns {History}
  */
 export function createHistory() {
-  return { entries: [], cursor: 0, limit: Infinity, running: Promise.resolve(), pending: 0, error: null }
+  return { entries: [], revision: 0, limit: Infinity, running: Promise.resolve(), pending: 0, error: null }
 }
 
 /**
  * Take on the journal a backend just reported - on opening a chapter, and after
- * every write, since the backend is the one that numbers entries and applies
- * the cap. The cap itself comes with the index (`limit`, the `undoLimit`
- * setting as the backend reads it), so this side keeps no copy of the number.
+ * every write, since the backend is the one that numbers entries, gives them
+ * their pages and applies the cap. The cap itself comes with the index
+ * (`limit`, the `undoLimit` setting as the backend reads it), so this side
+ * keeps no copy of the number. An index from a backend that sends no marks
+ * is read by its `cursor`, as one stack.
  *
  * @param {History} history
  * @param {{limit?: number, cursor?: number, entries?: HistoryLabel[]}|null|undefined} view
@@ -78,27 +98,37 @@ export function createHistory() {
  */
 export function adopt(history, view) {
   const entries = Array.isArray(view?.entries) ? view.entries : []
-  history.entries = entries.map((entry) => ({ seq: entry.seq, label: entry.label }))
-  history.cursor = clampCursor(view?.cursor, history.entries.length)
+  const cursor = clampCursor(view?.cursor, entries.length)
+  history.entries = entries.map((entry, at) => ({
+    seq: entry.seq,
+    label: entry.label,
+    page: Number.isInteger(entry.page) ? /** @type {number} */ (entry.page) : null,
+    undone: typeof entry.undone === 'boolean' ? entry.undone : at >= cursor,
+  }))
   if (Number.isInteger(view?.limit) && view.limit > 0) history.limit = view.limit
   return history
 }
 
 /**
- * Records a just-performed command, locally. Clears the redo stack - once a new
- * action happens, the old future is no longer reachable - and applies the cap
- * the backend last reported, so the index cannot describe entries the file has
- * already dropped.
+ * Records a just-performed command on its page, locally. Clears that page's
+ * redo side - once a new action happens on a page, its old future is no
+ * longer reachable - and leaves every other page's alone. Applies the cap the
+ * backend last reported, so the index cannot describe entries the file has
+ * already dropped, and a page whose undone entry is trimmed loses its whole
+ * redo side, as the journal does.
  *
  * @param {History} history
- * @param {HistoryLabel} entry
+ * @param {{seq: number, label: string, page: number|null}} entry
  * @returns {History}
  */
 export function push(history, entry) {
-  history.entries.length = history.cursor
-  history.entries.push({ seq: entry.seq, label: entry.label })
-  history.entries.splice(0, Math.max(0, history.entries.length - history.limit))
-  history.cursor = history.entries.length
+  const page = Number.isInteger(entry.page) ? entry.page : null
+  const kept = history.entries.filter((held) => held.page !== page || !held.undone)
+  kept.push({ seq: entry.seq, label: entry.label, page, undone: false })
+  const excess = Math.max(0, kept.length - history.limit)
+  const cut = new Set(kept.slice(0, excess).filter((held) => held.undone).map((held) => held.page))
+  history.entries = kept.slice(excess).filter((held) => !(held.undone && cut.has(held.page)))
+  history.revision = (history.revision ?? 0) + 1
   return history
 }
 
@@ -151,31 +181,64 @@ export function busy(history) {
 }
 
 /**
- * Step back one entry. `replay` is handed the direction and does the backend
- * round trip: move the journal's cursor on disk, take the delta it answers
- * with, apply it.
+ * Step back one entry **of `page`**: its newest that is not undone is marked
+ * undone. Entries of other pages are never touched. `replay` is handed the
+ * direction, the page and the entry, and does the backend round trip: mark
+ * the journal's entry on disk, take the delta it answers with, apply it.
  *
  * @param {History} history
- * @param {(direction: 'undo'|'redo') => void|Promise<void>} replay
+ * @param {number} page - the page on screen
+ * @param {(direction: 'undo'|'redo', page: number, entry: HistoryEntry) => void|Promise<void>} replay
  * @returns {History}
  */
-export function undo(history, replay) {
-  if (history.cursor === 0) return history
-  history.cursor -= 1
-  enqueue(history, () => replay('undo'))
+export function undo(history, page, replay) {
+  const entry = newestDone(history, page)
+  if (!entry) return history
+  entry.undone = true
+  history.revision = (history.revision ?? 0) + 1
+  enqueue(history, () => replay('undo', page, entry))
+  return history
+}
+
+/**
+ * Repeat the oldest undone entry **of `page`**.
+ *
+ * @param {History} history
+ * @param {number} page - the page on screen
+ * @param {(direction: 'undo'|'redo', page: number, entry: HistoryEntry) => void|Promise<void>} replay
+ * @returns {History}
+ */
+export function redo(history, page, replay) {
+  const entry = oldestUndone(history, page)
+  if (!entry) return history
+  entry.undone = false
+  history.revision = (history.revision ?? 0) + 1
+  enqueue(history, () => replay('redo', page, entry))
   return history
 }
 
 /**
  * @param {History} history
- * @param {(direction: 'undo'|'redo') => void|Promise<void>} replay
- * @returns {History}
+ * @param {number|null|undefined} page
+ * @returns {HistoryEntry|null}
  */
-export function redo(history, replay) {
-  if (history.cursor >= history.entries.length) return history
-  history.cursor += 1
-  enqueue(history, () => replay('redo'))
-  return history
+function newestDone(history, page) {
+  if (!Number.isInteger(page)) return null
+  for (let at = history.entries.length - 1; at >= 0; at--) {
+    const entry = history.entries[at]
+    if (entry.page === page && !entry.undone) return entry
+  }
+  return null
+}
+
+/**
+ * @param {History} history
+ * @param {number|null|undefined} page
+ * @returns {HistoryEntry|null}
+ */
+function oldestUndone(history, page) {
+  if (!Number.isInteger(page)) return null
+  return history.entries.find((entry) => entry.page === page && entry.undone) ?? null
 }
 
 /**
@@ -191,36 +254,40 @@ export function settled(history) {
 
 /**
  * @param {History} history
+ * @param {number|null|undefined} page - the page on screen
  * @returns {boolean}
  */
-export function canUndo(history) {
-  return history.cursor > 0
+export function canUndo(history, page) {
+  return newestDone(history, page) !== null
 }
 
 /**
  * @param {History} history
+ * @param {number|null|undefined} page - the page on screen
  * @returns {boolean}
  */
-export function canRedo(history) {
-  return history.cursor < history.entries.length
+export function canRedo(history, page) {
+  return oldestUndone(history, page) !== null
 }
 
 /**
- * The i18n key of the action Undo would reverse.
+ * The i18n key of the action Undo on `page` would reverse.
  * @param {History} history
+ * @param {number|null|undefined} page
  * @returns {string|null}
  */
-export function undoLabel(history) {
-  return history.entries[history.cursor - 1]?.label ?? null
+export function undoLabel(history, page) {
+  return newestDone(history, page)?.label ?? null
 }
 
 /**
- * The i18n key of the action Redo would repeat.
+ * The i18n key of the action Redo on `page` would repeat.
  * @param {History} history
+ * @param {number|null|undefined} page
  * @returns {string|null}
  */
-export function redoLabel(history) {
-  return history.entries[history.cursor]?.label ?? null
+export function redoLabel(history, page) {
+  return oldestUndone(history, page)?.label ?? null
 }
 
 /**

@@ -29,7 +29,7 @@
   } from '../editor/maskactions.svelte.js'
   import { draft } from '../editor/draft.svelte.js'
   import { applySelection } from '../editor/retouch.svelte.js'
-  import { isDetected, retryWidens } from '../model/masks.js'
+  import { isDetected, reRunnable, retriesAgain, retryWidens } from '../model/masks.js'
   import { isRegionCopy } from '../model/layers.js'
   import { isCopyMode } from '../editor/tools.js'
   import { cloudParts, runStep, startCleanRun } from '../editor/cloudrun.js'
@@ -290,7 +290,10 @@
     const region = editorState.selectedRegion()
     if (!region || draft.active) return
     if (isDetected(region)) void runMaskAction('cleanDetected', region)
-    else void runRegionMenuItem('retry', region)
+    // A LaMa layer has no Try again (`retriesAgain`), so the key says why.
+    else if (region.mask && reRunnable(region.mask) && !retriesAgain(region.mask)) {
+      notify({ key: 'notice.mask.retryOff', tone: 'warn' })
+    } else void runRegionMenuItem('retry', region)
   }
 
   /**

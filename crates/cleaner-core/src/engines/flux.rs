@@ -351,12 +351,29 @@ impl Inpainter {
         finishing: Option<Choice>,
         guidance: Option<&QwenEdit>,
     ) -> Result<Rendered, Error> {
+        self.render_seeded(page, fitted, finishing, guidance, SEED)
+    }
+
+    /// [`Inpainter::render_guided`] at `seed`. [`SEED`] is a first clean's;
+    /// Try again on a FLUX result asks at the next seed the region has not had
+    /// yet, so each one is a new answer (a variation) and not this one again.
+    ///
+    /// The seed is part of what an answer is remembered by, as the prompt is:
+    /// the same crop asked at another seed is a new request.
+    pub fn render_seeded(
+        &mut self,
+        page: &Raster,
+        fitted: &Fitted,
+        finishing: Option<Choice>,
+        guidance: Option<&QwenEdit>,
+        seed: u64,
+    ) -> Result<Rendered, Error> {
         let mut prepared = PreparedRender::prepare_as(page, fitted, self.recipe.preprocessing)?;
         prepared.set_finishing(finishing);
         let (w, h) = (prepared.crop().w, prepared.crop().h);
         let prompt = self.recipe.prompt_for(prepared.hint_gray8(), w, h, guidance);
         let key = input_digest(&[&w.to_le_bytes(), &h.to_le_bytes(), prepared.image_rgb8(), prepared.hint_gray8(),
-            prompt.as_bytes()]);
+            prompt.as_bytes(), &seed.to_le_bytes()]);
         if let Some((width, height, edited)) = self.answers.get(&key) {
             return prepared.composite(&GeneratedCrop::new(width, height, &edited));
         }
@@ -383,7 +400,7 @@ impl Inpainter {
             ),
             prompt,
             steps: self.recipe.steps,
-            seed: SEED,
+            seed,
             guidance: self.recipe.guidance,
             deadline_ms: self.recipe.render_timeout.as_millis() as u64,
         };
@@ -455,6 +472,8 @@ mod tests {
         /// instrument for [`one_prompt_reaches_the_model_whatever_the_page_mode_is`]:
         /// which prompt the model is given is a fact about the wire too.
         prompts: Arc<std::sync::Mutex<Vec<String>>>,
+        /// Every seed that has arrived on `/v1/render`, in order.
+        seeds: Arc<std::sync::Mutex<Vec<u64>>>,
     }
 
     impl Fake {
@@ -464,13 +483,15 @@ mod tests {
             let requests = Arc::new(AtomicU32::new(0));
             let opens = Arc::new(AtomicU32::new(0));
             let prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let seeds = Arc::new(std::sync::Mutex::new(Vec::new()));
             let counter = requests.clone();
             let opened = opens.clone();
             let said = prompts.clone();
+            let sown = seeds.clone();
             std::thread::spawn(move || {
                 for stream in listener.incoming().flatten() {
                     counter.fetch_add(1, Ordering::Relaxed);
-                    serve(stream, behaviour, &opened, &said);
+                    serve(stream, behaviour, &opened, &said, &sown);
                 }
             });
             Fake {
@@ -479,6 +500,7 @@ mod tests {
                 requests,
                 opens,
                 prompts,
+                seeds,
             }
         }
 
@@ -500,6 +522,7 @@ mod tests {
         behaviour: Behaviour,
         opens: &Arc<AtomicU32>,
         prompts: &Arc<std::sync::Mutex<Vec<String>>>,
+        seeds: &Arc<std::sync::Mutex<Vec<u64>>>,
     ) {
         let mut raw = Vec::new();
         let mut buffer = [0u8; 8192];
@@ -522,7 +545,7 @@ mod tests {
                 .unwrap_or(0);
             if raw.len() >= split + 4 + length {
                 let body = raw[split + 4..split + 4 + length].to_vec();
-                let (status, reply) = answer(&head, &body, behaviour, opens, prompts);
+                let (status, reply) = answer(&head, &body, behaviour, opens, prompts, seeds);
                 let _ = stream.write_all(
                     format!(
                         "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
@@ -543,6 +566,7 @@ mod tests {
         behaviour: Behaviour,
         opens: &Arc<AtomicU32>,
         prompts: &Arc<std::sync::Mutex<Vec<String>>>,
+        seeds: &Arc<std::sync::Mutex<Vec<u64>>>,
     ) -> (u16, Vec<u8>) {
         let path = head.split(' ').nth(1).unwrap_or("");
         let json = |value: &serde_json::Value| serde_json::to_vec(value).unwrap();
@@ -609,6 +633,7 @@ mod tests {
                 let request: crate::sidecar::wire::RenderRequest =
                     serde_json::from_slice(body).unwrap();
                 prompts.lock().unwrap().push(request.prompt.clone());
+                seeds.lock().unwrap().push(request.seed);
                 let (w, h) = match behaviour {
                     Behaviour::WrongShape => (request.image.width / 2, request.image.height),
                     _ => (request.image.width, request.image.height),
@@ -1024,6 +1049,28 @@ mod tests {
         inpainter.render_guided(&page, &fitted, None, Some(&auto)).unwrap();
         assert_eq!(fake.requests.load(Ordering::Relaxed), sent + 1,
             "the same words, and Automatic with nothing described, are the answers already had");
+    }
+
+    /// A first clean asks at [`SEED`], as it always has; another seed is a
+    /// request of its own, sent at that seed, and asked again it is the
+    /// answer already had.
+    #[test]
+    fn another_seed_is_a_new_request_and_the_first_clean_keeps_the_base_seed() {
+        let fake = Fake::start(Behaviour::Blacken);
+        let page = gray_page(600, 700, 200);
+        let fitted = fitted_over(&page, Rect::new(240, 300, 60, 40));
+        let mut inpainter = fake.inpainter(generous());
+        inpainter.render(&page, &fitted).unwrap();
+        inpainter.render_guided(&page, &fitted, None, None).unwrap();
+        assert_eq!(*fake.seeds.lock().unwrap(), vec![SEED], "a first clean is asked at the base seed, once");
+        let sent = fake.requests.load(Ordering::Relaxed);
+
+        inpainter.render_seeded(&page, &fitted, None, None, SEED + 1).unwrap();
+        assert_eq!(fake.requests.load(Ordering::Relaxed), sent + 1, "another seed was answered from the memo");
+        assert_eq!(*fake.seeds.lock().unwrap(), vec![SEED, SEED + 1]);
+        inpainter.render_seeded(&page, &fitted, None, None, SEED + 1).unwrap();
+        inpainter.render_seeded(&page, &fitted, None, None, SEED).unwrap();
+        assert_eq!(fake.requests.load(Ordering::Relaxed), sent + 1, "a seed asked before is the answer already had");
     }
 
     /* -- the shared vocabulary ----------------------------------------- */

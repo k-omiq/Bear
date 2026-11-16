@@ -177,6 +177,9 @@ fn check_known_shapes(patch: &Value) -> Result<(), String> {
     }
     crate::run::lama_hole_from_settings(patch)?;
     crate::run::lama_sharing_from_settings(patch)?;
+    // How many generations a clean run makes of each region: a whole number
+    // in range, or null for the default (`variations.rs`).
+    crate::variations::generations_from_settings(patch)?;
     check_undo_limit(patch)?;
     check_denoise_defaults(patch)?;
     check_export_defaults(patch)
@@ -733,6 +736,30 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Generations per region is a whole number from 1 to 8, 1 when it is not
+    /// set or cleared, and anything else is refused whole.
+    #[test]
+    fn generations_per_region_is_strict_and_defaults_to_one() {
+        use crate::variations::{generations_from_settings, GENERATIONS_KEY};
+        assert_eq!(generations_from_settings(&serde_json::json!({})).unwrap(), 1);
+        assert_eq!(generations_from_settings(&serde_json::json!({ GENERATIONS_KEY: null })).unwrap(), 1);
+        for good in 1..=8u32 {
+            assert_eq!(generations_from_settings(&serde_json::json!({ GENERATIONS_KEY: good })).unwrap(), good);
+        }
+        for bad in [serde_json::json!(0), serde_json::json!(9), serde_json::json!(-1), serde_json::json!(2.5),
+            serde_json::json!("3"), serde_json::json!(true), serde_json::json!([3])] {
+            assert!(generations_from_settings(&serde_json::json!({ GENERATIONS_KEY: bad })).is_err(), "{bad}");
+        }
+
+        let dir = std::env::temp_dir().join(format!("mc-settings-generations-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        assert_eq!(write_patch(&path, serde_json::json!({ GENERATIONS_KEY: 3 })).unwrap()[GENERATIONS_KEY], 3);
+        assert!(write_patch(&path, serde_json::json!({ GENERATIONS_KEY: 9 })).is_err());
+        assert!(write_patch(&path, serde_json::json!({ GENERATIONS_KEY: 0 })).is_err());
+        assert_eq!(read_file(&path).unwrap()[GENERATIONS_KEY], 3, "a refused patch writes nothing");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn cloud_work_long_side_is_one_of_the_measured_sizes() {
         let dir = std::env::temp_dir().join(format!("mc-settings-work-side-{}", std::process::id()));
@@ -771,7 +798,7 @@ mod tests {
         assert_eq!((&stored[FINISHING_KEY], &stored[STRAYS_KEY]), (&serde_json::json!("tone-only"), &serde_json::json!(true)),
             "a refused patch writes nothing");
         assert!(write_patch(&path, serde_json::json!({FINISHING_KEY: null, GRAYSCALE_KEY: null, STRAYS_KEY: null})).is_ok());
-        assert_eq!(from_settings(&read_file(&path).unwrap()).unwrap(), Choice::default());
+        assert_eq!(from_settings(&read_file(&path).unwrap()).unwrap(), Choice::SETTING_DEFAULT);
         std::fs::remove_dir_all(&dir).ok();
     }
 

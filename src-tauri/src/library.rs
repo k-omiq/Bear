@@ -2655,6 +2655,78 @@ impl Library {
         Ok(region_and_status(&chapter_id, &job.project, source_idx, region_id))
     }
 
+    /// A region's variations, as [`crate::variations::list`] reads them from
+    /// its manifest. Empty for a region no chapter holds.
+    pub fn region_variations(&self, region_id: &str) -> Result<Vec<crate::variations::Variation>, LibraryError> {
+        let index = self.index()?;
+        let Some(chapter_id) = chapter_holding(&index, region_id) else { return Ok(Vec::new()) };
+        let path = self.resolve_chapter(&chapter_id)?;
+        let job = Job::open(&path).map_err(|error| LibraryError::Manifest {
+            path: path.clone(), detail: error.to_string(),
+        })?;
+        Ok(crate::variations::list(&job.project, region_id))
+    }
+
+    /// Make the variation `revision` names the region's live result, and
+    /// record that as one undo step of its page, under the lock of the write
+    /// (`history::record_region_step`). Its replay is `restore_region`'s, as
+    /// any region-state step's is. Nothing is rendered and nothing is
+    /// archived: the result left is one of the region's kept rows already, and
+    /// stays one. The region keeps its place in the layer order.
+    ///
+    /// `None` for a region no chapter holds, one with no live result, and a
+    /// revision that is not one of its variations. The variation it already
+    /// shows answers with the region and no step.
+    pub fn pick_variation(
+        &self,
+        region_id: &str,
+        revision: &str,
+    ) -> Result<Option<(ApiRegion, String, Option<crate::history::HistoryView>)>, LibraryError> {
+        let index = self.index()?;
+        let Some(chapter_id) = chapter_holding(&index, region_id) else { return Ok(None) };
+        let path = self.resolve_chapter(&chapter_id)?;
+        let _lock = lock_region(&path, &chapter_id, region_id)?;
+        let manifest = |detail: String| LibraryError::Manifest { path: path.clone(), detail };
+        let mut job = Job::open(&path).map_err(|error| manifest(error.to_string()))?;
+        let Some(live) = job.project.patches.iter().find(|row| row.id == region_id && row.visible).cloned() else {
+            return Ok(None);
+        };
+        let source_idx = live.source_idx;
+        let Some(chosen) = crate::variations::list(&job.project, region_id)
+            .into_iter().find(|variation| variation.revision == revision) else {
+            return Ok(None);
+        };
+        if chosen.current {
+            return Ok(region_and_status(&chapter_id, &job.project, source_idx, region_id)
+                .map(|(region, status)| (region, status, None)));
+        }
+        let Some(before) = crate::history::side_now(&chapter_id, &job.project, source_idx, region_id) else {
+            return Ok(None);
+        };
+        let restored = match chosen.row.geometry_policy {
+            cleaner_core::text_shape::GeometryPolicy::TextShape => job.restore_text_shape_revision(region_id, revision),
+            _ => job.restore_legacy_row(&chosen.row),
+        }.map_err(|error| manifest(error.to_string()))?;
+        if !restored {
+            return Ok(None);
+        }
+        let Some(record) = job.project.patches.iter_mut().find(|row| row.id == region_id) else {
+            return Ok(None);
+        };
+        record.visible = true;
+        record.order = live.order;
+        job.flush().map_err(|error| manifest(error.to_string()))?;
+        crate::underlay::refresh_dependencies(&mut job, region_id).map_err(manifest)?;
+        invalidate_manifest_cache(&path);
+        let Some(after) = crate::history::side_now(&chapter_id, &job.project, source_idx, region_id) else {
+            return Ok(None);
+        };
+        let view = crate::history::record_region_step(&path, &chapter_id, crate::variations::PICK_LABEL,
+            region_id, before, after).map_err(manifest)?;
+        Ok(region_and_status(&chapter_id, &job.project, source_idx, region_id)
+            .map(|(region, status)| (region, status, Some(view))))
+    }
+
     pub fn keep_dependency_result(
         &self,
         region_id: &str,
@@ -4751,6 +4823,210 @@ mod tests {
         assert!(reopened.load_patch(&reopened.project.patches[0]).unwrap().pixels.data.iter().all(|&p| p == 201));
     }
 
+    /// Three Nano Banana answers on one region, and a LaMa result before them:
+    /// four variations. Picking the first answer makes it live with its own pixels, loses none
+    /// of the others and makes no new one, and is one undo step of the
+    /// region's page whose before side puts the last answer back.
+    #[test]
+    fn picking_a_variation_makes_it_live_keeps_the_rest_and_is_one_step_of_its_page() {
+        let scratch = Scratch::new("pick-variation");
+        let library = library(&scratch);
+        let project = a_project(&library, &scratch, 1);
+        let chapter = library.create_chapter(&project.id, "Ch 1", None, None)
+            .unwrap().created().unwrap();
+        let path = library.resolve_chapter(&chapter.id).unwrap();
+        let region_id = format!("{}-r1", page_id(&chapter.id, 0));
+        let mut job = Job::open(&path).unwrap();
+        let mut lama = a_patch(&region_id, Rect::new(10, 10, 4, 4), Engine::Lama);
+        lama.pixels.data.fill(5);
+        job.complete_region(0, &lama, None).unwrap();
+        let mut patch = a_patch(&region_id, Rect::new(10, 10, 4, 4), Engine::NanoBanana);
+        for (fill, answer) in [(17u8, "A"), (90, "B"), (201, "C")] {
+            patch.pixels.data.fill(fill);
+            patch.provenance.params_snapshot["nano_banana"] = serde_json::json!({ "answer_sha256": answer });
+            job.complete_region(0, &patch, None).unwrap();
+        }
+        let kept = job.project.legacy_patch_revisions.len();
+        drop(job);
+
+        let listed = library.region_variations(&region_id).unwrap();
+        assert_eq!(listed.iter().map(|variation| variation.current).collect::<Vec<_>>(), [false, false, false, true],
+            "the LaMa result is the first variation, then the three answers");
+        assert_eq!(listed.iter().map(|variation| variation.engine).collect::<Vec<_>>(),
+            ["lama", "nanobanana", "nanobanana", "nanobanana"]);
+        let (region, _, history) = library.pick_variation(&region_id, &listed[1].revision).unwrap().unwrap();
+        assert_eq!(region.mask.unwrap().legacy_patch_revision.as_deref(), Some(listed[1].revision.as_str()));
+        assert!(history.is_some());
+        let reopened = Job::open(&path).unwrap();
+        assert!(reopened.load_patch(&reopened.project.patches[0]).unwrap().pixels.data.iter().all(|&p| p == 17));
+        assert_eq!(reopened.project.legacy_patch_revisions.len(), kept, "nothing was archived or lost");
+        drop(reopened);
+        let again = library.region_variations(&region_id).unwrap();
+        assert_eq!(again.iter().map(|variation| (variation.revision.clone(), variation.current)).collect::<Vec<_>>(),
+            listed.iter().enumerate().map(|(at, variation)| (variation.revision.clone(), at == 1)).collect::<Vec<_>>(),
+            "the same variations, the first answer shown");
+
+        let journal = crate::history::load_for(&path, &chapter.id);
+        let picks: Vec<_> = journal.entries.iter().filter(|entry| entry.label == crate::variations::PICK_LABEL).collect();
+        assert_eq!(picks.len(), 1);
+        assert_eq!((picks[0].page, picks[0].op.as_str()), (Some(0), crate::history::REGION_OP));
+
+        // Picking the one it shows is no step; a revision that is no variation is refused.
+        let (_, _, history) = library.pick_variation(&region_id, &listed[1].revision).unwrap().unwrap();
+        assert!(history.is_none());
+        assert!(library.pick_variation(&region_id, &"0".repeat(64)).unwrap().is_none());
+        assert_eq!(crate::history::load_for(&path, &chapter.id).entries.len(), journal.entries.len());
+
+        // Undo replays the step's before side, as the interface does.
+        let step = crate::history::move_at(&path, &chapter.id, 0, "undo").unwrap();
+        let before = step.entry.unwrap().before.region.unwrap();
+        let revision = before.pointer("/mask/legacyPatchRevision").and_then(serde_json::Value::as_str).unwrap().to_owned();
+        assert_eq!(revision, listed[3].revision);
+        library.restore_legacy_mask(&region_id, &revision).unwrap().unwrap();
+        let reopened = Job::open(&path).unwrap();
+        assert!(reopened.load_patch(&reopened.project.patches[0]).unwrap().pixels.data.iter().all(|&p| p == 201));
+    }
+
+    /// Try again on a Nano Banana result makes a new variation and applies
+    /// it, one undo step. Undo puts the earlier answer back, as the interface
+    /// replays the step (`history::move_at`, then `restore_legacy_mask` with
+    /// the before side's revision), and the new answer stays on the region's
+    /// list, not current; redo shows it again. Neither takes a variation off.
+    #[test]
+    fn undo_of_a_try_again_keeps_the_new_variation_listed() {
+        let scratch = Scratch::new("try-again-undo-keeps-variation");
+        let library = library(&scratch);
+        let project = a_project(&library, &scratch, 1);
+        let chapter = library.create_chapter(&project.id, "Ch 1", None, None)
+            .unwrap().created().unwrap();
+        let path = library.resolve_chapter(&chapter.id).unwrap();
+        let region_id = format!("{}-r1", page_id(&chapter.id, 0));
+        let mut job = Job::open(&path).unwrap();
+        let mut patch = a_patch(&region_id, Rect::new(10, 10, 4, 4), Engine::NanoBanana);
+        patch.pixels.data.fill(17);
+        patch.provenance.params_snapshot["nano_banana"] = serde_json::json!({ "answer_sha256": "A" });
+        job.complete_region(0, &patch, None).unwrap();
+        let before = crate::history::side_now(&chapter.id, &job.project, 0, &region_id).unwrap();
+        // Try again: a new answer committed over it, the step the interface records.
+        patch.pixels.data.fill(201);
+        patch.provenance.params_snapshot["nano_banana"] = serde_json::json!({ "answer_sha256": "B" });
+        job.complete_region(0, &patch, None).unwrap();
+        let after = crate::history::side_now(&chapter.id, &job.project, 0, &region_id).unwrap();
+        drop(job);
+        crate::history::record_region_step(&path, &chapter.id, "masks.command.rerunMask", &region_id, before, after)
+            .unwrap();
+        let listed = library.region_variations(&region_id).unwrap();
+        assert_eq!(listed.iter().map(|variation| variation.current).collect::<Vec<_>>(), [false, true]);
+
+        let revision_of = |side: &crate::history::Side| side.region.as_ref().unwrap()
+            .pointer("/mask/legacyPatchRevision").and_then(serde_json::Value::as_str).unwrap().to_owned();
+        let step = crate::history::move_at(&path, &chapter.id, 0, "undo").unwrap();
+        let undone = step.entry.unwrap();
+        library.restore_legacy_mask(&region_id, &revision_of(&undone.before)).unwrap().unwrap();
+        let after_undo = library.region_variations(&region_id).unwrap();
+        assert_eq!(after_undo.iter().map(|variation| (variation.revision.clone(), variation.current)).collect::<Vec<_>>(),
+            vec![(listed[0].revision.clone(), true), (listed[1].revision.clone(), false)],
+            "the new answer is still a variation after the undo, and the earlier one is shown");
+        let reopened = Job::open(&path).unwrap();
+        assert!(reopened.load_patch(&reopened.project.patches[0]).unwrap().pixels.data.iter().all(|&p| p == 17));
+        drop(reopened);
+
+        let step = crate::history::move_at(&path, &chapter.id, 0, "redo").unwrap();
+        library.restore_legacy_mask(&region_id, &revision_of(&step.entry.unwrap().after)).unwrap().unwrap();
+        let after_redo = library.region_variations(&region_id).unwrap();
+        assert_eq!(after_redo.iter().map(|variation| variation.current).collect::<Vec<_>>(), [false, true]);
+        assert_eq!(after_redo.len(), 2);
+    }
+
+    /// Further generations of a region kept by a run (`variations::keep_generation`)
+    /// are on its list in the order they were made, the first stays live
+    /// with its own pixels and is shown as current, and nothing is journaled.
+    #[test]
+    fn further_generations_are_kept_as_variations_and_the_first_stays_live() {
+        let scratch = Scratch::new("keep-generations");
+        let library = library(&scratch);
+        let project = a_project(&library, &scratch, 1);
+        let chapter = library.create_chapter(&project.id, "Ch 1", None, None)
+            .unwrap().created().unwrap();
+        let path = library.resolve_chapter(&chapter.id).unwrap();
+        let region_id = format!("{}-r1", page_id(&chapter.id, 0));
+        let mut job = Job::open(&path).unwrap();
+        let generation = |seed: u64, fill: u8| {
+            let mut patch = a_patch(&region_id, Rect::new(10, 10, 4, 4), Engine::Flux);
+            patch.order = 3;
+            patch.pixels.data.fill(fill);
+            patch.provenance.params_snapshot = serde_json::json!({ "flux_model": "flux2-klein-4b",
+                crate::variations::FLUX_SEED_KEY: seed });
+            patch
+        };
+        let seed = cleaner_core::engines::flux::SEED;
+        job.complete_display_region(0, &generation(seed, 17), Some("review.reason.checkGeneratedTexture".into())).unwrap();
+        let first = job.project.patches[0].clone();
+        for (step, fill) in [(1u64, 90u8), (2, 201)] {
+            assert!(crate::variations::keep_generation(&mut job, 0, &first, &generation(seed + step, fill)).unwrap());
+        }
+        assert_eq!(job.project.patches, vec![first.clone()], "the first is live exactly as it was");
+        drop(job);
+
+        let listed = library.region_variations(&region_id).unwrap();
+        assert_eq!(listed.len(), 3);
+        assert_eq!(listed.iter().map(|variation| variation.current).collect::<Vec<_>>(), [true, false, false]);
+        assert_eq!(listed[0].revision, first.legacy_revision_id().unwrap());
+        let reopened = Job::open(&path).unwrap();
+        assert!(reopened.load_patch(&reopened.project.patches[0]).unwrap().pixels.data.iter().all(|&p| p == 17));
+        assert!(crate::history::load_for(&path, &chapter.id).entries.is_empty(), "making a variation is no step");
+        drop(reopened);
+
+        // Picking the third shows its own pixels.
+        library.pick_variation(&region_id, &listed[2].revision).unwrap().unwrap();
+        let reopened = Job::open(&path).unwrap();
+        assert!(reopened.load_patch(&reopened.project.patches[0]).unwrap().pixels.data.iter().all(|&p| p == 201));
+        // A first that is no longer the live row keeps nothing.
+        let mut job = reopened;
+        assert!(!crate::variations::keep_generation(&mut job, 0, &first, &generation(seed + 3, 5)).unwrap());
+    }
+
+    /// A further generation is rendered through the first one's hole and its
+    /// ring. It is kept cut to what the first covers, so picking it writes
+    /// no pixel the first did not.
+    #[test]
+    fn a_further_generation_is_cut_to_what_the_first_covers() {
+        let scratch = Scratch::new("keep-generation-cut");
+        let library = library(&scratch);
+        let project = a_project(&library, &scratch, 1);
+        let chapter = library.create_chapter(&project.id, "Ch 1", None, None)
+            .unwrap().created().unwrap();
+        let path = library.resolve_chapter(&chapter.id).unwrap();
+        let region_id = format!("{}-r1", page_id(&chapter.id, 0));
+        let mut job = Job::open(&path).unwrap();
+        let generation = |seed: u64, bounds: Rect| {
+            let mut patch = a_patch(&region_id, bounds, Engine::Flux);
+            patch.provenance.params_snapshot = serde_json::json!({ "flux_model": "flux2-klein-4b",
+                crate::variations::FLUX_SEED_KEY: seed });
+            patch
+        };
+        let seed = cleaner_core::engines::flux::SEED;
+        let inner = Rect::new(10, 10, 4, 4);
+        job.complete_display_region(0, &generation(seed, inner), None).unwrap();
+        let first = job.project.patches[0].clone();
+        // The ring: two pixels wider on every side.
+        assert!(crate::variations::keep_generation(&mut job, 0, &first, &generation(seed + 1, Rect::new(8, 8, 8, 8))).unwrap());
+        drop(job);
+
+        let listed = library.region_variations(&region_id).unwrap();
+        assert_eq!(listed.len(), 2);
+        library.pick_variation(&region_id, &listed[1].revision).unwrap().unwrap();
+        let reopened = Job::open(&path).unwrap();
+        let picked = reopened.load_patch(&reopened.project.patches[0]).unwrap();
+        for y in 8..16 {
+            for x in 8..16 {
+                let inside = (10..14).contains(&x) && (10..14).contains(&y);
+                assert_eq!(picked.mask.coverage(x, y) != 0, inside, "mask at {x},{y}");
+                assert_eq!(picked.ink.coverage(x, y) != 0, inside, "lettering at {x},{y}");
+            }
+        }
+    }
+
     #[test]
     fn hard_remove_deletes_legacy_rerun_sidecars_but_keeps_other_regions() {
         let scratch = Scratch::new("legacy-hard-remove");
@@ -6131,7 +6407,7 @@ mod tests {
         assert_eq!(Job::open(&path).unwrap().project.redetect, vec![0]);
         assert_eq!(queued(&library), 1);
 
-        let step = crate::history::move_at(&path, &chapter.id, "undo").unwrap();
+        let step = crate::history::move_at(&path, &chapter.id, 0, "undo").unwrap();
         assert_eq!(step.refused, None);
         invalidate_manifest_cache(&path);
         let job = Job::open(&path).unwrap();
@@ -6140,7 +6416,7 @@ mod tests {
         drop(job);
         assert_eq!(queued(&library), 0, "every item is back, so the page is skipped again");
 
-        crate::history::move_at(&path, &chapter.id, "redo").unwrap();
+        crate::history::move_at(&path, &chapter.id, 0, "redo").unwrap();
         invalidate_manifest_cache(&path);
         assert_eq!(queued(&library), 1);
     }
@@ -6367,7 +6643,7 @@ mod tests {
             (crate::history::CLEAN_OP, crate::history::CLEAN_LABEL));
         let detected_side = journal.entries[0].before.region.clone().unwrap();
         assert_eq!(detected_side["outcome"], "detected");
-        let step = crate::history::move_at(&path, &chapter_id, "undo").unwrap().entry.unwrap();
+        let step = crate::history::move_at(&path, &chapter_id, 0, "undo").unwrap().entry.unwrap();
         assert_eq!(step.op, crate::history::CLEAN_OP);
         let (region, _) = library.set_region_cleaned(&id, false).unwrap().unwrap();
         assert_eq!(json(&region), detected_side, "the region the commit replaced");
@@ -6382,7 +6658,7 @@ mod tests {
         assert_eq!(json(&library.set_region_cleaned(&id, false).unwrap().unwrap().0), detected_side);
 
         // Redo.
-        assert!(crate::history::move_at(&path, &chapter_id, "redo").unwrap().entry.is_some());
+        assert!(crate::history::move_at(&path, &chapter_id, 0, "redo").unwrap().entry.is_some());
         let (region, _) = library.set_region_cleaned(&id, true).unwrap().unwrap();
         assert_eq!(json(&region), json(&cleaned));
         assert_eq!(Job::open(&path).unwrap().project.patches, patches, "the same patch record");
@@ -6399,7 +6675,7 @@ mod tests {
         assert_eq!(crate::history::load(&path).entries.len(), 2);
 
         // Undo of the reject is the result again: the entry's earlier side.
-        let step = crate::history::move_at(&path, &chapter_id, "undo").unwrap().entry.unwrap();
+        let step = crate::history::move_at(&path, &chapter_id, 0, "undo").unwrap().entry.unwrap();
         assert_eq!(step.before.region.as_ref().unwrap()["outcome"], "cleaned");
         let (region, _) = library.set_region_cleaned(&id, true).unwrap().unwrap();
         assert_eq!(json(&region), json(&cleaned));
@@ -6449,7 +6725,7 @@ mod tests {
         let mask = job.load_detection(&id).unwrap().unwrap().mask;
         assert_eq!(mask.bounds, Rect::new(20, 10, 8, 6));
         // Undo is the result again, with no render.
-        crate::history::move_at(&path, &chapter_id, "undo").unwrap();
+        crate::history::move_at(&path, &chapter_id, 0, "undo").unwrap();
         let (region, _) = library.set_region_cleaned(&id, true).unwrap().unwrap();
         assert_eq!(region.outcome, "cleaned");
         let pages = library.load_pages(&chapter_id, &[0]).unwrap();

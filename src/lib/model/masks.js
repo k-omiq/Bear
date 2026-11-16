@@ -240,20 +240,117 @@ export function reRunnable(mask) {
 }
 
 /**
- * Whether a mask offers Try again wider: a local re-run of the same rung that
- * hands the model the stored mask as its hole, so the hole grows on each
- * press (`region.rs#Geometry::StoredWider`).
+ * Whether a mask offers Try again wider: a LaMa re-run that hands the model
+ * the stored mask as its hole, so the hole grows on each press
+ * (`region.rs#Geometry::StoredWider`).
  *
- * Not for a cloud render, whose Try again goes back to the cloud with no local
- * hole to grow, nor for a text-shaped patch, which renders through its
- * accepted plan's hole and which the native side refuses to widen.
+ * LaMa only. LaMa answers the same hole the same way every time, so a wider
+ * hole is its one way to a different result. Every other engine that can
+ * answer differently gets variations instead, and the arithmetic fills have
+ * nothing to gain from a wider hole. Not for a cloud render, which the native
+ * side records as FLUX, nor for a text-shaped patch, which renders through
+ * its accepted plan's hole and which the native side refuses to widen.
  *
  * @param {import('./types.js').Mask|null} mask
  * @returns {boolean}
  */
 export function retryWidens(mask) {
-  return reRunnable(mask) && !isCloudMask(mask)
+  return reRunnable(mask) && maskEngine(mask) === 'lama'
     && /** @type {any} */ (mask)?.geometryPolicy !== 'text_shape'
+}
+
+/**
+ * Whether a mask offers plain Try again: every mask that can be re-run but a
+ * LaMa one. LaMa answers the same hole the same way every time, so Try again
+ * on it showed the same result again. Its way to another result is Try again
+ * wider (`retryWidens`); Clean with > LaMa still cleans it again as it is,
+ * which is what a layer needs after an erase or a change under it, and the
+ * Needs review row's Rebuild does the same.
+ *
+ * @param {import('./types.js').Mask|null} mask
+ * @returns {boolean}
+ */
+export function retriesAgain(mask) {
+  return reRunnable(mask) && maskEngine(mask) !== 'lama'
+}
+
+/** The engines that answer differently each time they are asked. */
+const VARYING_ENGINES = ['flux', CLOUD_ENGINE, NANO_BANANA_ENGINE]
+
+/**
+ * Whether a mask's result is one of many a model could give: FLUX on this
+ * computer (any local model), a cloud render (any profile) or Nano Banana.
+ * Such a result has **variations**: each Try again is a new answer, every
+ * answer is kept, and any of them can be shown again (`variations.rs`). LaMa
+ * answers one hole one way, and a fill, a screentone fill, a paint or a
+ * clone stroke is arithmetic, so none of them has any.
+ *
+ * @param {import('./types.js').Mask|null|undefined} mask
+ * @returns {boolean}
+ */
+export function variesEachTime(mask) {
+  return reRunnable(mask ?? null) && VARYING_ENGINES.includes(/** @type {string} */ (maskEngine(mask ?? null)))
+}
+
+/**
+ * Whether a mask's region lists variations (`variations.rs`): a result of one
+ * of the engines that answer differently each time (`variesEachTime`), or a
+ * LaMa result. LaMa's variations are one per hole: the first clean, then each
+ * Try again wider. It can be stepped through them, and nothing makes n of
+ * them at once.
+ *
+ * @param {import('./types.js').Mask|null|undefined} mask
+ * @returns {boolean}
+ */
+export function listsVariations(mask) {
+  return variesEachTime(mask) || (reRunnable(mask ?? null) && maskEngine(mask ?? null) === 'lama')
+}
+
+/** How many variations Make variations makes at most, and at least. */
+export const MIN_VARIATIONS = 2
+export const MAX_VARIATIONS = 8
+/** The count it offers before one is chosen. */
+export const DEFAULT_VARIATIONS = 3
+
+/**
+ * Text cleanup's **Generations per region**, as `variations.rs` bounds it
+ * (`GENERATIONS_KEY`): how many generations a clean run makes of each region
+ * it cleans with an engine that has variations. The first is applied; the
+ * rest are variations only.
+ */
+export const MIN_GENERATIONS = 1
+export const MAX_GENERATIONS = 8
+export const DEFAULT_GENERATIONS = 1
+
+/**
+ * A stored or chosen count of generations, or the default for anything that
+ * is not a whole number in range, as strictly as the native setting reads it.
+ *
+ * @param {unknown} value
+ * @returns {number}
+ */
+export function generationsOf(value) {
+  return Number.isInteger(value) && /** @type {number} */ (value) >= MIN_GENERATIONS
+    && /** @type {number} */ (value) <= MAX_GENERATIONS ? /** @type {number} */ (value) : DEFAULT_GENERATIONS
+}
+
+/**
+ * What a clean run on `cleanTarget` with these picks makes Generations per
+ * region of, or the catalogue key of why it makes one (the control's
+ * disabled reason): a Nano Banana batch, a cloud GPU run (whatever the
+ * picks, every region is rendered there; its consent counts every render),
+ * and a run on this computer where a pick is FLUX, make more; a run here
+ * whose picks all answer one way makes one.
+ *
+ * @param {string} cleanTarget - `local`, `cloud` or `nanoBanana`
+ * @param {Array<string|null|undefined>} picks - the picks the run reads
+ * @returns {string|null} null when the run makes generations
+ */
+export function generationsReasonKey(cleanTarget, picks) {
+  if (cleanTarget === 'nanoBanana' || cleanTarget === 'cloud') return null
+  return picks.some((pick) => currentRung(String(pick ?? '').replace(/^ladder\.rung\./, '')) === 'flux')
+    ? null
+    : 'tools.target.generationsOneWay'
 }
 
 /**
@@ -411,7 +508,9 @@ export function detectedActions(options = {}) {
  * @property {string} [icon]
  * @property {boolean} [selected] - present only on the engine and text type choices
  * @property {string} [shortcut] - the id of the shortcut that does the same, whose chord the menu prints beside the entry
- * @property {{min: number, max: number, step: number, value: number, unit: string}} [range] - a slider, not an entry: only `padding`
+ * @property {{min: number, max: number, step: number, value: number, unit: string}} [range] - a slider, not an entry: `padding`, and `variationCount`
+ * @property {Record<string, number>} [labelParams] - what the label is filled with: the variation shown and how many there are, the count Make variations makes
+ * @property {{current: number, count: number}} [stepper] - a row with previous and next, not an entry: only `variation`
  *
  * @typedef {Object} RegionMenuSection
  * @property {string} id
@@ -462,6 +561,17 @@ export function detectedActions(options = {}) {
  * **Post-processing…**, which selects it and opens the Post-processing
  * window on it.
  *
+ * A cleaned layer whose result one of the models that answer differently
+ * each time made (`variesEachTime`) gets **Variations** after Try again: with
+ * two or more (`options.variations`), "Variation 2 of 3" with previous and
+ * next, which show the one before or after it; then how many to make
+ * (`options.variationCount`, 2 to 8) and **Make n variations**, which tries
+ * again that many times in a row (`maskactions.svelte.js#makeVariations`).
+ *
+ * A LaMa layer has no Try again (`retriesAgain`): it gets **Try again
+ * wider**, and each wider result is a variation of the region, so with two or
+ * more it gets the same "Variation 2 of 3" row and nothing to make n of.
+ *
  * A gradient layer gets **Edit gradient**, which holds it again in the
  * Gradient tool.
  *
@@ -470,11 +580,13 @@ export function detectedActions(options = {}) {
  * leaves the list.
  *
  * @param {import('./types.js').Region} region
- * @param {{engines?: Record<string, boolean>, cloud?: boolean, beta?: boolean, finishing?: boolean}} [options] -
+ * @param {{engines?: Record<string, boolean>, cloud?: boolean, beta?: boolean, finishing?: boolean,
+ *   variations?: {current: number, count: number}|null, variationCount?: number}} [options] -
  *   `capabilities.engines` (absent offers every shipped rung), whether a
  *   cloud endpoint is ready, whether the beta rungs are offered
- *   (`session.betaTools`), and whether the layer's post-processing can be
- *   changed
+ *   (`session.betaTools`), whether the layer's post-processing can be
+ *   changed, which of its variations the region shows and how many it has
+ *   (absent until they are read), and how many Make variations makes
  * @returns {RegionMenuSection[]}
  */
 export function regionMenuSections(region, options = {}) {
@@ -542,15 +654,16 @@ export function regionMenuSections(region, options = {}) {
         .map((rung) => ({ id: `approve:${rung}`, labelKey: engineChoiceLabel(rung) })) })
   }
   if (reRunnable(mask)) {
-    sections.push({
-      id: 'rerun',
-      labelKey: null,
-      items: [
-        { id: 'retry', labelKey: 'masks.action.retry', icon: 'refresh' },
-        ...(retryWidens(mask) ? [{ id: 'retryWider', labelKey: 'masks.action.retryWider', icon: 'mask-add' }] : []),
-        ...(rejectable(region) ? [{ id: 'reject', labelKey: 'masks.action.rejectResult', icon: 'undo' }] : []),
-      ],
-    })
+    const rerun = [
+      ...(retriesAgain(mask) ? [{ id: 'retry', labelKey: 'masks.action.retry', icon: 'refresh' }] : []),
+      ...(retryWidens(mask) ? [{ id: 'retryWider', labelKey: 'masks.action.retryWider', icon: 'mask-add' }] : []),
+      ...(rejectable(region) ? [{ id: 'reject', labelKey: 'masks.action.rejectResult', icon: 'undo' }] : []),
+    ]
+    if (rerun.length) sections.push({ id: 'rerun', labelKey: null, items: rerun })
+    if (listsVariations(mask)) {
+      const section = variationsSection(options.variations, options.variationCount, variesEachTime(mask))
+      if (section.items.length) sections.push(section)
+    }
     // The engine the mask actually used leads the list even when the picker
     // does not offer it, exactly as the row's `<select>` does it: a menu
     // showing nothing checked would be a menu claiming the region has no engine.
@@ -592,6 +705,35 @@ export function regionMenuSections(region, options = {}) {
     ],
   })
   return sections
+}
+
+/**
+ * The region menu's Variations: which one is shown, with previous and next,
+ * once there are two; then, where more can be made at once (`make`), how
+ * many to make and Make n variations.
+ *
+ * @param {{current: number, count: number}|null|undefined} variations
+ * @param {number|undefined} count
+ * @param {boolean} make
+ * @returns {RegionMenuSection}
+ */
+function variationsSection(variations, count, make) {
+  const n = Math.min(MAX_VARIATIONS, Math.max(MIN_VARIATIONS, Math.round(Number(count) || DEFAULT_VARIATIONS)))
+  /** @type {RegionMenuItem[]} */
+  const items = []
+  if (variations && variations.count >= 2 && variations.current >= 1) {
+    items.push({ id: 'variation', labelKey: 'masks.variations.position',
+      labelParams: { current: variations.current, count: variations.count },
+      stepper: { current: variations.current, count: variations.count } })
+  }
+  if (make) {
+    items.push(
+      { id: 'variationCount', labelKey: 'masks.variations.count',
+        range: { min: MIN_VARIATIONS, max: MAX_VARIATIONS, step: 1, value: n, unit: '' } },
+      { id: 'makeVariations', labelKey: 'masks.variations.make', labelParams: { n }, icon: 'layers' },
+    )
+  }
+  return { id: 'variations', labelKey: null, items }
 }
 
 /**

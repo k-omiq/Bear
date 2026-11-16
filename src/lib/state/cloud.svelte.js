@@ -26,7 +26,7 @@ import { getBackend, readCloudReadiness } from '../api/backend.js'
 import { notify, pushModal } from './app.svelte.js'
 import { editor, replaceRegion } from './editor.svelte.js'
 import { refreshNanoBanana } from './capabilities.svelte.js'
-import { backendSettingsPatch, session, setCloudAllowed, setCloudFinishing, setCloudFlux3Generation, setCloudWorkLongSide } from './session.svelte.js'
+import { backendSettingsPatch, session, setCloudAllowed, setCloudFinishing, setCloudFlux3Generation, setCloudWorkLongSide, setGenerationsPerRegion } from './session.svelte.js'
 import { savedSetting, writeSettingsSerialized } from './settingswrite.js'
 import { cloudErrorKey } from '../model/cloudnotices.js'
 import { currentCloudModelId } from '../model/model-names.js'
@@ -507,6 +507,22 @@ export async function saveCloudWorkLongSide(side, backend = getBackend()) {
     key: 'cloudWorkLongSide', before: session.cloudWorkLongSide, after: side,
     current: () => session.cloudWorkLongSide, put: setCloudWorkLongSide,
   }], 'notice.cloud.workSizeFailed')
+}
+
+/**
+ * Generations per region, saved where the backend reads it when a run starts
+ * (`variations.rs#GENERATIONS_KEY`). Put back when the save fails, so the
+ * panel never shows a count the run would not make.
+ *
+ * @param {number} count - a whole number from 1 to 8
+ * @param {import('../api/backend.js').Backend} [backend]
+ * @returns {Promise<boolean>} whether it was saved
+ */
+export async function saveGenerationsPerRegion(count, backend = getBackend()) {
+  return saveChanges(backend, [{
+    key: 'generationsPerRegion', before: session.generationsPerRegion, after: count,
+    current: () => session.generationsPerRegion, put: setGenerationsPerRegion,
+  }], 'notice.cloud.generationsFailed')
 }
 
 /**

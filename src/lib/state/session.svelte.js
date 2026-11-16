@@ -55,7 +55,8 @@ import {
 import { hexOnCommit } from '../ui/color.js'
 
 import { localSeconds, normalizeDenoiseTarget } from '../model/denoise.js'
-import { FINISHINGS, FINISHING_ALIASES, FLUX3_GENERATION_ALIASES, FLUX3_GENERATION_PARTS, LAMA_HOLES, LAMA_SHARINGS, WORK_LONG_SIDES } from '../model/model-names.js'
+import { DEFAULT_GENERATIONS, generationsOf } from '../model/masks.js'
+import { DEFAULT_FINISHING, FINISHINGS, FINISHING_ALIASES, FLUX3_GENERATION_ALIASES, FLUX3_GENERATION_PARTS, LAMA_HOLES, LAMA_SHARINGS, WORK_LONG_SIDES } from '../model/model-names.js'
 import { ANALYSIS_TARGETS, CLOUD_STAGES, DEFAULT_DETECTOR, DEFAULT_DETECTOR_MODELS, DETECTION_MODES, DETECTION_MODE_IDS, DETECTOR_MODEL_IDS, LANGUAGES, defaultAnalysisTargets, detectionModeOf, detectsOnCloud, migrateDetectorChoice, normalizeAnalysisTargets, unifyAnalysisTargets } from '../model/pipelines.js'
 
 const STORAGE_KEY = 'session.v1'
@@ -225,6 +226,7 @@ function viewport() {
  * @property {'local'|'cloud'|'nanoBanana'} cleanTarget - where Clean cleans stored detections; `cloud` and `nanoBanana` need consent per batch (docs/detect-clean.md, `editor/nanobananarun.svelte.js`)
  * @property {boolean} cleanLocalFirst - whether cloud clean tries saved flat-colour picks here first
  * @property {boolean} cleanSolidOnly - whether a clean on this computer takes only speech bubbles on flat paper and leaves the rest detected
+ * @property {number} generationsPerRegion - how many generations a clean run makes of each region it cleans on local FLUX or Nano Banana, 1 to 8; the first is applied, the rest are variations (`variations.rs#GENERATIONS_KEY`)
  * @property {768|1024|1280} cloudWorkLongSide - the long side a cloud FLUX 3 clean edits a smaller crop at; larger is slower and costs more per crop
  * @property {typeof FINISHINGS[number]} cloudFinishing - how an answer is finished before it is written: a cloud FLUX 3 one always, the others when `finishingEveryModel` is on
  * @property {boolean} cloudFinishingGrayscale - whether a colour answer is made grey before it is finished
@@ -282,8 +284,9 @@ function defaults() {
     cleanTarget: 'local',
     cleanLocalFirst: false,
     cleanSolidOnly: false,
+    generationsPerRegion: DEFAULT_GENERATIONS,
     cloudWorkLongSide: WORK_LONG_SIDES[0],
-    cloudFinishing: FINISHINGS[0],
+    cloudFinishing: DEFAULT_FINISHING,
     cloudFinishingGrayscale: false,
     finishingEveryModel: false,
     cloudFlux3Generation: generationOr(null),
@@ -416,6 +419,7 @@ export function sanitizeSession(raw) {
     cleanTarget: cleanTargetOf(record.cleanTarget),
     cleanLocalFirst: boolOr(record.cleanLocalFirst, base.cleanLocalFirst),
     cleanSolidOnly: boolOr(record.cleanSolidOnly, base.cleanSolidOnly),
+    generationsPerRegion: generationsOf(record.generationsPerRegion),
     cloudWorkLongSide: workLongSideOr(record.cloudWorkLongSide, base.cloudWorkLongSide),
     cloudFinishing: finishingOr(record.cloudFinishing, base.cloudFinishing),
     cloudFinishingGrayscale: boolOr(record.cloudFinishingGrayscale, base.cloudFinishingGrayscale),
@@ -529,6 +533,7 @@ function persistable() {
     cleanTarget: session.cleanTarget,
     cleanLocalFirst: session.cleanLocalFirst,
     cleanSolidOnly: session.cleanSolidOnly,
+    generationsPerRegion: session.generationsPerRegion,
     cloudWorkLongSide: session.cloudWorkLongSide,
     cloudFinishing: session.cloudFinishing,
     cloudFinishingGrayscale: session.cloudFinishingGrayscale,
@@ -836,6 +841,21 @@ export function cleanTargetOf(value) {
 export function setCleanTarget(target) {
   if (cleanTargetOf(target) !== target) return
   session.cleanTarget = cleanTargetOf(target)
+  save()
+}
+
+/**
+ * How many generations a clean run makes of each region (Text cleanup's
+ * Generations per region). The backend reads it when a run starts, so it
+ * reaches the backend with the other settings
+ * (`cloud.svelte.js#saveGenerationsPerRegion`). A count out of range is
+ * ignored, as the native setting refuses it.
+ *
+ * @param {unknown} count - a whole number from 1 to 8
+ */
+export function setGenerationsPerRegion(count) {
+  if (generationsOf(count) !== count) return
+  session.generationsPerRegion = /** @type {number} */ (count)
   save()
 }
 
@@ -1424,6 +1444,7 @@ export function adoptBackendSettings(settings) {
   if (record.lamaHole !== undefined) setLamaHole(record.lamaHole)
   if (record.lamaSharing !== undefined) setLamaSharing(record.lamaSharing)
   if (record.cloudWorkLongSide !== undefined) setCloudWorkLongSide(record.cloudWorkLongSide)
+  if (record.generationsPerRegion !== undefined) setGenerationsPerRegion(generationsOf(record.generationsPerRegion))
   if (record.cloudFlux3Generation !== undefined) setCloudFlux3Generation(record.cloudFlux3Generation)
   if (record.cloudFinishing !== undefined || record.cloudFinishingGrayscale !== undefined || record.finishingEveryModel !== undefined) {
     setCloudFinishing(record.cloudFinishing ?? session.cloudFinishing, record.cloudFinishingGrayscale ?? session.cloudFinishingGrayscale,
@@ -1509,6 +1530,7 @@ export function backendSettingsPatch() {
     modelAccelerators: { ...session.modelAccelerators },
     analysisTargets: { ...session.analysisTargets },
     cleanTarget: session.cleanTarget,
+    generationsPerRegion: session.generationsPerRegion,
     cloudWorkLongSide: session.cloudWorkLongSide,
     cloudFinishing: session.cloudFinishing,
     cloudFinishingGrayscale: session.cloudFinishingGrayscale,

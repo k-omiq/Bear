@@ -58,6 +58,20 @@
 //! - **Stopped** ([`Verdict::Stopped`]): Stop, or the grant withdrawn or
 //!   lapsed. The batch ends as cancelled.
 //!
+//! ## Generations
+//!
+//! With Generations per region above one (`variations.rs#GENERATIONS_KEY`,
+//! sent with the batch), each region the batch cleans is asked again that
+//! many times less one, each on a share of its own: the window counted
+//! requests, regions times generations, and the grant is for that many. The
+//! first answer is the region's result and its undo step, as at one
+//! generation; the others are kept as its variations only
+//! (`region::variation_for_nano_banana_batch`). An answer the region already
+//! has is no new variation and is not asked again. A further answer that
+//! fails leaves the region cleaned and the batch going, unless it failed for
+//! a reason that stops a batch; Stop ends them too. Each one not made is
+//! counted in the report ([`Report::generations_not_made`]).
+//!
 //! At the end the batch sends its [`Report`] (`nano-banana-report`) and one
 //! notice. The interface shows the counts per reason from the report, and can
 //! start a new batch for the regions it did not clean, behind a new window.
@@ -152,6 +166,10 @@ pub struct Report {
     /// replaced by another Nano Banana window also ends the batch, as
     /// cancelled, and says so.
     pub by_user: bool,
+    /// Further generations of the regions cleaned that were asked for and
+    /// not kept: refused, failed, stopped, or an answer the region had.
+    #[serde(default)]
+    pub generations_not_made: u32,
 }
 
 /// One region's clean, as the batch sees it.
@@ -160,6 +178,9 @@ pub(crate) enum Attempt {
     Gone,
     Refused(&'static str),
     Error(String),
+    /// A further generation that answered with an answer the region already
+    /// had: no new variation.
+    Repeated,
 }
 
 /// Everything the batch's walk needs that is not the walk: a seam, so the
@@ -177,6 +198,11 @@ pub(crate) struct Walk<'a> {
     pub raise: &'a dyn Fn(u32, &AtomicBool, &dyn Fn(Event)) -> bool,
     /// Clean one region under what its share granted.
     pub clean: &'a dyn Fn(&Target, &Granted) -> Attempt,
+    /// Ask once more for a region cleaned in this batch, under what another
+    /// share granted, and keep the answer as a variation only.
+    pub vary: &'a dyn Fn(&Target, &Granted) -> Attempt,
+    /// Generations per region: the first is `clean`'s, the rest `vary`'s.
+    pub generations: u32,
     /// The page's `page-done`, as the manifest now holds it.
     pub page_done: &'a dyn Fn(u32) -> Event,
     /// Wait this long, or less when `cancel` goes up. Answers whether the
@@ -235,7 +261,7 @@ pub(crate) fn walk_into(report: &mut Report, walk: &Walk<'_>, targets: &[Target]
             if stopped.is_some() {
                 break;
             }
-            match clean_one(walk, target, cancel) {
+            match clean_one(walk, target, cancel, walk.clean) {
                 Attempt::Cleaned(region) => {
                     report.cleaned += 1;
                     handled(report, target);
@@ -248,7 +274,41 @@ pub(crate) fn walk_into(report: &mut Report, walk: &Walk<'_>, targets: &[Target]
                             region,
                         });
                     }
+                    // The region is cleaned with its first answer; the others
+                    // are its variations, and a failed one fails nothing.
+                    let wanted = walk.generations.saturating_sub(1);
+                    for asked in 0..wanted {
+                        if cancel.load(Ordering::SeqCst) {
+                            stopped = Some(Failure::Stopped.reason_key());
+                        }
+                        if stopped.is_some() {
+                            report.generations_not_made += wanted - asked;
+                            break;
+                        }
+                        match clean_one(walk, target, cancel, walk.vary) {
+                            Attempt::Cleaned(_) => {}
+                            Attempt::Refused(reason) => {
+                                report.generations_not_made += 1;
+                                let reason = if reason == Failure::Stopped.reason_key() && !(walk.cloud_allowed)() {
+                                    CLOUD_OFF
+                                } else {
+                                    reason
+                                };
+                                if verdict(reason) != Verdict::Crop {
+                                    stopped = Some(reason);
+                                }
+                            }
+                            Attempt::Error(error) => {
+                                eprintln!("manga-cleaner: a Nano Banana batch could not keep a variation of {}: {error}",
+                                    target.region_id);
+                                report.generations_not_made += 1;
+                            }
+                            Attempt::Gone | Attempt::Repeated => report.generations_not_made += 1,
+                        }
+                    }
                 }
+                // Only a further generation answers this.
+                Attempt::Repeated => handled(report, target),
                 Attempt::Gone => {
                     report.gone += 1;
                     handled(report, target);
@@ -327,7 +387,8 @@ fn unclean(target: &Target, reason: &str) -> Unclean {
 
 /// One region: its share of the grant, then the clean, tried again after each
 /// wait while Google is busy, as long as the grant still holds.
-fn clean_one(walk: &Walk<'_>, target: &Target, cancel: &AtomicBool) -> Attempt {
+fn clean_one(walk: &Walk<'_>, target: &Target, cancel: &AtomicBool, clean: &dyn Fn(&Target, &Granted) -> Attempt)
+    -> Attempt {
     let spend = match walk.grants.spend((walk.cloud_allowed)(), Some(walk.nonce), walk.chapter_id, Some(walk.run_id)) {
         Ok(spend) => spend,
         Err(reason) => return Attempt::Refused(reason),
@@ -335,7 +396,7 @@ fn clean_one(walk: &Walk<'_>, target: &Target, cancel: &AtomicBool) -> Attempt {
     let granted = spend.granted();
     let mut waits = walk.waits.iter();
     loop {
-        let attempt = run::on_behalf_of(walk.run_id, || (walk.clean)(target, &granted));
+        let attempt = run::on_behalf_of(walk.run_id, || clean(target, &granted));
         let Attempt::Refused(reason) = attempt else { return attempt };
         if verdict(reason) != Verdict::Busy {
             return attempt;
@@ -389,12 +450,13 @@ fn sleep_unless_cancelled(wait: Duration, cancel: &AtomicBool) -> bool {
 }
 
 /// The batch's regions, checked: each named once, all of `chapter_id`, and no
-/// more than a grant can cover. Sorted by page, in the order given within one.
-fn targets_of(chapter_id: &str, region_ids: &[String]) -> Result<Vec<Target>, String> {
+/// more requests, `generations` per region, than a grant can cover. Sorted by
+/// page, in the order given within one.
+fn targets_of(chapter_id: &str, region_ids: &[String], generations: u32) -> Result<Vec<Target>, String> {
     if region_ids.is_empty() {
         return Err("nano_banana_no_regions".into());
     }
-    if region_ids.len() > MAX_REGIONS as usize {
+    if region_ids.len().saturating_mul(generations as usize) > MAX_REGIONS as usize {
         return Err(NO_CONSENT.into());
     }
     let mut seen = BTreeSet::new();
@@ -409,6 +471,9 @@ fn targets_of(chapter_id: &str, region_ids: &[String]) -> Result<Vec<Target>, St
         targets.push(Target { page_index, region_id: region_id.clone() });
     }
     targets.sort_by_key(|target| target.page_index);
+    if targets.len().saturating_mul(generations as usize) > MAX_REGIONS as usize {
+        return Err(NO_CONSENT.into());
+    }
     Ok(targets)
 }
 
@@ -419,16 +484,17 @@ pub const REQUEST_OUT: &str = "nanoBanana.job.requestOut";
 /// Start the batch, or answer with the run already holding the chapter.
 /// Refused before anything is reserved while Cloud engines are off and when
 /// the grant `nano_banana_grant` is not live, is another chapter's, or covers
-/// fewer regions than it was handed; refused with [`REQUEST_OUT`] while a
-/// single region's request is out on the chapter.
-fn start(app: &tauri::AppHandle, chapter_id: &str, region_ids: &[String], nano_banana_grant: Option<&str>)
-    -> Result<RunHandle, String> {
+/// fewer requests than it was handed, `generations` per region; refused with
+/// [`REQUEST_OUT`] while a single region's request is out on the chapter.
+fn start(app: &tauri::AppHandle, chapter_id: &str, region_ids: &[String], nano_banana_grant: Option<&str>,
+    generations: u32) -> Result<RunHandle, String> {
     let grants = super::nano_banana_consent::book();
     let nonce = nano_banana_grant.ok_or(NO_CONSENT)?.to_owned();
-    let targets = targets_of(chapter_id, region_ids)?;
+    let targets = targets_of(chapter_id, region_ids, generations)?;
+    let requests = targets.len() * generations as usize;
     let cloud_allowed = super::cloud_allowed(app);
     let left = grants.left(cloud_allowed, &nonce)?;
-    if (left as usize) < targets.len() {
+    if (left as usize) < requests {
         return Err(NO_CONSENT.into());
     }
     let reservation = match run::reserve_run(chapter_id, &[], run::RunKind::NanoBanana)? {
@@ -446,7 +512,7 @@ fn start(app: &tauri::AppHandle, chapter_id: &str, region_ids: &[String], nano_b
             return Err(REQUEST_OUT.into());
         }
     }
-    grants.claim(cloud_allowed, &nonce, chapter_id, reservation.run_id(), targets.len())?;
+    grants.claim(cloud_allowed, &nonce, chapter_id, reservation.run_id(), requests)?;
     let pages: Vec<QueuedPage> = targets.iter().map(|target| target.page_index).collect::<BTreeSet<_>>()
         .into_iter()
         .map(|page_index| QueuedPage {
@@ -475,12 +541,22 @@ fn start(app: &tauri::AppHandle, chapter_id: &str, region_ids: &[String], nano_b
                 Err(error) => Attempt::Error(error),
             }
         };
+        let vary = |target: &Target, granted: &Granted| {
+            match crate::region::variation_for_nano_banana_batch(&app, &library, &target.region_id, granted) {
+                Ok(crate::region::BatchVariation::Kept) => Attempt::Cleaned(None),
+                Ok(crate::region::BatchVariation::Repeated) => Attempt::Repeated,
+                Ok(crate::region::BatchVariation::Gone) => Attempt::Gone,
+                Ok(crate::region::BatchVariation::Refused(reason)) => Attempt::Refused(reason),
+                Err(error) => Attempt::Error(error),
+            }
+        };
         let page_done = |page: u32| run::page_done_after_clean(run_id, &chapter, &job_path, page);
         let raise = |page: u32, cancel: &AtomicBool, emit: &dyn Fn(Event)| raise_page(run_id, &chapter, &job_path, page, cancel, emit);
         let cloud_allowed = || super::cloud_allowed(&app);
         let walk_with = Walk {
             run_id, chapter_id: &chapter, grants, nonce: &nonce, cloud_allowed: &cloud_allowed, raise: &raise,
-            clean: &clean, page_done: &page_done, sleep: &sleep_unless_cancelled, waits: &RETRY_WAITS,
+            clean: &clean, vary: &vary, generations, page_done: &page_done, sleep: &sleep_unless_cancelled,
+            waits: &RETRY_WAITS,
         };
         let mut report = Report::default();
         let walked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -527,18 +603,27 @@ fn finish(run_id: &str, chapter_id: &str, report: &Report, emit: &dyn Fn(Event))
 }
 
 /// `startNanoBananaRun`: clean `region_ids`, stored detections of
-/// `chapter_id`, with Nano Banana, on the grant the window just made. Answers
-/// the run's handle as `runClean` does, `alreadyRunning` included.
+/// `chapter_id`, with Nano Banana, on the grant the window just made, making
+/// `generations` of each (Generations per region, 1 when not sent; a count
+/// out of range is refused). Answers the run's handle as `runClean` does,
+/// `alreadyRunning` included.
 #[tauri::command]
 pub async fn start_nano_banana_run(
     app: tauri::AppHandle,
     chapter_id: String,
     region_ids: Vec<String>,
     nano_banana_grant: Option<String>,
+    generations: Option<serde_json::Value>,
 ) -> Result<RunHandle, String> {
-    tauri::async_runtime::spawn_blocking(move || start(&app, &chapter_id, &region_ids, nano_banana_grant.as_deref()))
-        .await
-        .map_err(|e| e.to_string())?
+    let generations = match generations {
+        None | Some(serde_json::Value::Null) => crate::variations::DEFAULT_GENERATIONS,
+        Some(value) => crate::variations::generations_from_value(&value)?,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        start(&app, &chapter_id, &region_ids, nano_banana_grant.as_deref(), generations)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -627,7 +712,7 @@ mod tests {
         let allowed = || true;
         let walk_with = Walk {
             run_id: "run-nb", chapter_id: "c1", grants: book, nonce: &nonce, cloud_allowed: &allowed, raise: &raise,
-            clean: &clean, page_done: &page_done, sleep: &sleep, waits: &RETRY_WAITS,
+            clean: &clean, vary: &no_variation, generations: 1, page_done: &page_done, sleep: &sleep, waits: &RETRY_WAITS,
         };
         let (report, summary) = walk(&walk_with, targets, &cancel, &emit);
         let types = events.into_inner();
@@ -638,6 +723,11 @@ mod tests {
 
     fn cleaned(_: &str, _: usize) -> Attempt {
         Attempt::Cleaned(None)
+    }
+
+    /// A batch at one generation asks for none.
+    fn no_variation(_: &Target, _: &Granted) -> Attempt {
+        panic!("a batch at one generation asked for a variation")
     }
 
     #[test]
@@ -782,7 +872,7 @@ mod tests {
         let allowed = || true;
         let walk_with = Walk {
             run_id: "run-nb", chapter_id: "c1", grants: &book, nonce: &nonce, cloud_allowed: &allowed, raise: &raise,
-            clean: &clean, page_done: &page_done, sleep: &sleep, waits: &RETRY_WAITS,
+            clean: &clean, vary: &no_variation, generations: 1, page_done: &page_done, sleep: &sleep, waits: &RETRY_WAITS,
         };
         let (report, _) = walk(&walk_with, &[target(0, "c1-p001-d0")], &AtomicBool::new(false), &|_| {});
         assert_eq!(*tries.lock().unwrap(), 1);
@@ -807,10 +897,115 @@ mod tests {
 
     #[test]
     fn the_regions_are_checked_before_anything_is_reserved() {
-        assert_eq!(targets_of("c1", &[]).err().as_deref(), Some("nano_banana_no_regions"));
-        assert!(targets_of("c1", &["c2-p001-d0".into()]).unwrap_err().starts_with("nano_banana_region_not_in_chapter"));
-        let targets = targets_of("c1", &["c1-p003-d0".into(), "c1-p001-d4".into(), "c1-p003-d0".into(), "c1-p001-d1".into()]).unwrap();
+        assert_eq!(targets_of("c1", &[], 1).err().as_deref(), Some("nano_banana_no_regions"));
+        assert!(targets_of("c1", &["c2-p001-d0".into()], 1).unwrap_err().starts_with("nano_banana_region_not_in_chapter"));
+        let targets = targets_of("c1", &["c1-p003-d0".into(), "c1-p001-d4".into(), "c1-p003-d0".into(), "c1-p001-d1".into()], 1).unwrap();
         assert_eq!(targets, vec![target(0, "c1-p001-d4"), target(0, "c1-p001-d1"), target(2, "c1-p003-d0")]);
+    }
+
+    /// The limit a grant can cover is on requests, regions times generations.
+    #[test]
+    fn the_request_limit_counts_every_generation() {
+        let ids = |count: u32| (0..count).map(|at| format!("c1-p001-d{at}")).collect::<Vec<_>>();
+        assert!(targets_of("c1", &ids(MAX_REGIONS), 1).is_ok());
+        assert_eq!(targets_of("c1", &ids(MAX_REGIONS / 2 + 1), 2).err().as_deref(), Some(NO_CONSENT));
+        assert!(targets_of("c1", &ids(MAX_REGIONS / 2), 2).is_ok());
+    }
+
+    /// The walk at `generations`, every first clean answered `Cleaned`, and
+    /// each further one by `vary`, with a grant for `granted` requests.
+    /// Answers the report, the summary, the event types, what is left of the
+    /// grant, and the variations asked for by region.
+    fn run_generations(
+        targets: &[Target],
+        granted: u32,
+        generations: u32,
+        vary: impl Fn(&str, usize) -> Attempt,
+        cancel_after_variations: Option<usize>,
+    ) -> (Report, Summary, Vec<String>, Result<u32, &'static str>, Vec<String>) {
+        let book = Book::new(IDLE);
+        let nonce = claimed(&book, granted);
+        let cancel = AtomicBool::new(false);
+        let asked = Mutex::new(Vec::<String>::new());
+        let clean = |_: &Target, _: &Granted| Attempt::Cleaned(None);
+        let vary_one = |target: &Target, _: &Granted| {
+            let mut seen = asked.lock().unwrap();
+            let attempt = seen.iter().filter(|id| **id == target.region_id).count();
+            seen.push(target.region_id.clone());
+            if cancel_after_variations.is_some_and(|after| seen.len() >= after) {
+                cancel.store(true, Ordering::SeqCst);
+            }
+            vary(&target.region_id, attempt)
+        };
+        let events = RefCell::new(Vec::new());
+        let emit = |event: Event| events.borrow_mut().push(serde_json::to_value(&event).unwrap()["type"].as_str().unwrap().to_owned());
+        let allowed = || true;
+        let sleep = |_: Duration, cancel: &AtomicBool| !cancel.load(Ordering::SeqCst);
+        let walk_with = Walk {
+            run_id: "run-nb", chapter_id: "c1", grants: &book, nonce: &nonce, cloud_allowed: &allowed, raise: &raise,
+            clean: &clean, vary: &vary_one, generations, page_done: &page_done, sleep: &sleep, waits: &RETRY_WAITS,
+        };
+        let (report, summary) = walk(&walk_with, targets, &cancel, &emit);
+        let left = book.left(true, &nonce);
+        (report, summary, events.into_inner(), left, asked.into_inner().unwrap())
+    }
+
+    /// At two generations each region spends two shares, one for its first
+    /// answer and one for its variation, and the region counts as cleaned
+    /// once, with its first.
+    #[test]
+    fn a_batch_at_two_generations_spends_two_shares_per_region() {
+        let targets = [target(0, "c1-p001-d0"), target(0, "c1-p001-d1"), target(1, "c1-p002-d0")];
+        let (report, summary, types, left, asked) = run_generations(&targets, 7, 2, |_, _| Attempt::Cleaned(None), None);
+        assert_eq!((report.cleaned, report.generations_not_made), (3, 0));
+        assert_eq!(summary.regions_cleaned, 3, "a region counts once, with its first answer");
+        assert_eq!(left, Ok(1), "three regions, two requests each, of a grant for seven");
+        assert_eq!(asked, ["c1-p001-d0", "c1-p001-d1", "c1-p002-d0"]);
+        assert_eq!(types, ["page-started", "page-done", "page-started", "page-done"]);
+        assert_eq!(summary.reason, "completed");
+    }
+
+    /// A further answer that is refused, that fails, or that the region had
+    /// already leaves the region cleaned and the batch going, counted as not
+    /// made. One refused for a reason that stops a batch stops it, the region
+    /// still cleaned.
+    #[test]
+    fn a_failed_variation_keeps_the_region_cleaned() {
+        let targets = [target(0, "c1-p001-d0"), target(0, "c1-p001-d1"), target(0, "c1-p001-d2")];
+        let (report, summary, _, _, _) = run_generations(&targets, 9, 3, |id, attempt| match (id, attempt) {
+            ("c1-p001-d0", 0) => Attempt::Refused(Failure::Blocked.reason_key()),
+            ("c1-p001-d1", 0) => Attempt::Repeated,
+            ("c1-p001-d1", 1) => Attempt::Error("disk full".into()),
+            _ => Attempt::Cleaned(None),
+        }, None);
+        assert_eq!((report.cleaned, report.generations_not_made), (3, 3));
+        assert!(report.failed.is_empty() && report.left.is_empty() && report.stopped.is_none());
+        assert_eq!(summary.reason, "completed");
+
+        let (report, summary, _, _, asked) = run_generations(&targets, 9, 3, |id, _| match id {
+            "c1-p001-d1" => Attempt::Refused(Failure::KeyRejected.reason_key()),
+            _ => Attempt::Cleaned(None),
+        }, None);
+        assert_eq!(report.cleaned, 2, "the region whose variation stopped the batch is cleaned");
+        assert_eq!(report.generations_not_made, 2);
+        assert_eq!(report.left, vec![targets[2].clone()]);
+        assert_eq!(report.stopped.as_deref(), Some(Failure::KeyRejected.reason_key()));
+        assert_eq!(summary.reason, "failed");
+        assert_eq!(asked, ["c1-p001-d0", "c1-p001-d0", "c1-p001-d1"]);
+    }
+
+    /// Stop between two variations ends them and the batch; the region it
+    /// was on stays cleaned, and what it did not ask is counted.
+    #[test]
+    fn stop_ends_the_variations_too() {
+        let targets = [target(0, "c1-p001-d0"), target(0, "c1-p001-d1")];
+        let (report, summary, _, left, asked) = run_generations(&targets, 8, 4, |_, _| Attempt::Cleaned(None), Some(1));
+        assert_eq!(asked.len(), 1);
+        assert_eq!((report.cleaned, report.generations_not_made), (1, 2));
+        assert_eq!(report.left, vec![targets[1].clone()]);
+        assert!(report.by_user);
+        assert_eq!(summary.reason, "cancelled");
+        assert_eq!(left, Ok(6), "one first answer and one variation spent");
     }
 
     #[test]
@@ -890,7 +1085,7 @@ mod tests {
         };
         let walk_with = Walk {
             run_id: "run-nb", chapter_id: "c1", grants: &book, nonce: &nonce, cloud_allowed: &allowed, raise: &raise,
-            clean: &clean, page_done: &page_done, sleep: &|_, _| true, waits: &RETRY_WAITS,
+            clean: &clean, vary: &no_variation, generations: 1, page_done: &page_done, sleep: &|_, _| true, waits: &RETRY_WAITS,
         };
         let (report, summary) = walk(&walk_with, &[target(0, "c1-p001-d0")], &AtomicBool::new(false), &|_| {});
         assert_eq!(report.stopped.as_deref(), Some(CLOUD_OFF));
@@ -906,7 +1101,7 @@ mod tests {
         let clean = |_: &Target, _: &Granted| Attempt::Cleaned(None);
         let walk_with = Walk {
             run_id: "run-nb", chapter_id: "c1", grants: &book, nonce: &nonce, cloud_allowed: &|| true, raise: &raise,
-            clean: &clean, page_done: &page_done, sleep: &|_, _| true, waits: &RETRY_WAITS,
+            clean: &clean, vary: &no_variation, generations: 1, page_done: &page_done, sleep: &|_, _| true, waits: &RETRY_WAITS,
         };
         let (report, _) = walk(&walk_with, &[target(0, "c1-p001-d0")], &AtomicBool::new(false), &|_| {});
         assert_eq!((report.cleaned, report.stopped.as_deref()), (0, Some(NO_CONSENT)));
@@ -921,7 +1116,7 @@ mod tests {
         let held = |_: u32, _: &AtomicBool, _: &dyn Fn(Event)| false;
         let walk_with = Walk {
             run_id: "run-nb", chapter_id: "c1", grants: &book, nonce: &nonce, cloud_allowed: &|| true, raise: &held,
-            clean: &clean, page_done: &page_done, sleep: &|_, _| true, waits: &RETRY_WAITS,
+            clean: &clean, vary: &no_variation, generations: 1, page_done: &page_done, sleep: &|_, _| true, waits: &RETRY_WAITS,
         };
         let events = RefCell::new(0);
         let (report, summary) = walk(&walk_with, &[target(0, "c1-p001-d0")], &AtomicBool::new(false), &|_| *events.borrow_mut() += 1);
@@ -941,7 +1136,7 @@ mod tests {
         };
         let walk_with = Walk {
             run_id: "run-nb", chapter_id: "c1", grants: &book, nonce: &nonce, cloud_allowed: &|| true, raise: &raise,
-            clean: &clean, page_done: &page_done, sleep: &|_, _| true, waits: &RETRY_WAITS,
+            clean: &clean, vary: &no_variation, generations: 1, page_done: &page_done, sleep: &|_, _| true, waits: &RETRY_WAITS,
         };
         let mut report = Report::default();
         let walked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -963,7 +1158,7 @@ mod tests {
         let report = Report {
             total: 2, cleaned: 1, gone: 0,
             failed: vec![unclean(&target(0, "c1-p001-d0"), Failure::Blocked.reason_key())],
-            left: vec![], stopped: None, by_user: false,
+            left: vec![], stopped: None, by_user: false, generations_not_made: 2,
         };
         let wire = serde_json::to_value(Event::NanoBananaReport { run_id: "run-nb".into(), chapter_id: "c1".into(), report }).unwrap();
         assert_eq!(wire["type"], "nano-banana-report");
@@ -972,6 +1167,7 @@ mod tests {
             "regionId": "c1-p001-d0", "pageIndex": 0, "reason": "decline.reason.nanoBananaBlocked",
         }));
         assert_eq!(wire["report"]["byUser"], false);
+        assert_eq!(wire["report"]["generationsNotMade"], 2);
         assert!(wire["report"].get("stopped").is_none());
     }
 }

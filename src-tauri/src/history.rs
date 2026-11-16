@@ -30,14 +30,30 @@
 //! `library::set_mask_visible` describes. A journal that carried its own copy of
 //! anything would be a second opinion about what a region is.
 //!
+//! ## Undo never leaves the page on screen
+//!
+//! One file per chapter, **partitioned by page**. Every entry belongs to
+//! exactly one page ([`Delta::page`]), and Undo and Redo are always asked for
+//! one page: Undo on page 14 takes back page 14's newest step and nothing
+//! else, however many edits were made on other pages since. A chapter-wide
+//! stack walked back through work on pages the user could not see, and the
+//! next edit then cut that work off for good.
+//!
+//! So an entry on the redo side is marked ([`Delta::undone`]) rather than
+//! placed after a cursor, and within one page the marked entries are always
+//! that page's newest. An edit on a page drops that page's marked entries
+//! only. A step that touched several pages (a Detect run, a Nano Banana
+//! batch, an eraser stroke across a page boundary in the long strip) is kept
+//! as one entry per page, so each page's Undo takes back its own part.
+//!
 //! ## Why the whole file is rewritten
 //!
 //! An append-only log is the obvious shape and it is the wrong one here: undo
-//! moves a cursor backwards and the next edit **truncates the future**, which an
-//! append-only file cannot express without a compaction pass nobody would ever
-//! test. The journal is capped, so the rewrite is one `write_atomic` of a
-//! bounded document - the same temp-fsync-rename every other write in this
-//! application uses.
+//! marks entries and the next edit on a page **drops that page's future**,
+//! which an append-only file cannot express without a compaction pass nobody
+//! would ever test. The journal is capped, so the rewrite is one
+//! `write_atomic` of a bounded document - the same temp-fsync-rename every
+//! other write in this application uses.
 //!
 //! The cap is a **behaviour change**: the session-only history was
 //! unlimited, and an unlimited *persisted* history is an unbounded term in a
@@ -68,7 +84,11 @@ use serde::{Deserialize, Serialize};
 /// file it cannot parse; both answer an empty journal, because a history nobody
 /// can read is a history, not a corrupt chapter, and refusing to open the
 /// chapter over it would be the worse failure by a wide margin.
-pub const JOURNAL_VERSION: u32 = 1;
+///
+/// Version 1 was one stack over the chapter, steered by `cursor`. Version 2
+/// gives every entry its page and an `undone` mark ([`load_for`] reads a
+/// version 1 file into that shape).
+pub const JOURNAL_VERSION: u32 = 2;
 
 /// The setting that says how many entries a chapter keeps. Oldest first out.
 pub const UNDO_LIMIT_KEY: &str = "undoLimit";
@@ -198,13 +218,14 @@ fn push_step(
     before: Side,
     after: Side,
 ) -> Result<HistoryView, String> {
-    push_grouped(job, chapter_id, op, label, region_id, before, after, None)
+    push_grouped(job, chapter_id, op, label, region_id, before, after, None, None)
 }
 
-/// [`push_step`], joining the journal's last entry when `group` names it: a
-/// run's cleans of several regions are one step, every region a part. The
-/// first region stays the entry's own (`region_id`, `before`, `after`) as
-/// well as its first part, as the interface writes an edit of several.
+/// [`push_step`], joining the newest entry of the region's page when `group`
+/// names it: a run's cleans of several regions on one page are one step of
+/// that page, every region a part. The first region stays the entry's own
+/// (`region_id`, `before`, `after`) as well as its first part, as the
+/// interface writes an edit of several.
 #[allow(clippy::too_many_arguments)]
 fn push_grouped(
     job: &Path,
@@ -215,11 +236,16 @@ fn push_grouped(
     before: Side,
     after: Side,
     group: Option<&str>,
+    page: Option<usize>,
 ) -> Result<HistoryView, String> {
     let limit = LAST_LIMIT.load(std::sync::atomic::Ordering::Relaxed);
-    let mut journal = load(job);
-    if !join_group(&mut journal, op, label, region_id, &before, &after, group) {
+    let mut journal = load_for(job, chapter_id);
+    // The id says the page; `page` is the caller's answer for an id that
+    // does not (a fixture's).
+    let page = crate::region::page_index_in(chapter_id, region_id).or(page);
+    if !join_group(&mut journal, page, op, label, region_id, &before, &after, group) {
         journal.push(
+            chapter_id,
             NewDelta {
                 label: label.to_owned(),
                 op: op.to_owned(),
@@ -229,6 +255,7 @@ fn push_grouped(
                 parts: Vec::new(),
                 pages: Vec::new(),
                 group: group.map(str::to_owned),
+                page,
             },
             limit,
         );
@@ -238,19 +265,23 @@ fn push_grouped(
     Ok(journal.view(limit))
 }
 
-/// Add a region to the journal's last entry when that entry is `group`'s own
-/// clean step and nothing was undone since. Answers whether it did.
+/// Add a region to the newest entry of its page (`page`) when that entry is
+/// `group`'s own clean step, of the same label, and not undone. Answers
+/// whether it did.
 ///
-/// Only the last entry: when any other step lands between two of a run's
-/// cleans (a hand edit elsewhere in the chapter while a Nano Banana batch
-/// runs), the run's next clean starts a second step of its own, and Undo
-/// takes the batch back in two or more steps. Joining the earlier entry
-/// across the later one would be wrong when that one touched the same region
-/// or its page: undo goes newest first, so the later step would put back a
-/// region the batch had cleaned after it, and the batch's step then a state
-/// that never followed it.
+/// The newest entry **of the same page**, not the journal's last: undo is
+/// per page, so a step on another page that lands between two of a run's
+/// cleans takes nothing back across them, and a batch over many pages is one
+/// step on each. When any other step lands on the same page between two of
+/// the run's cleans (a hand edit while a Nano Banana batch runs), the run's
+/// next clean there starts a second step of its own. Joining the earlier
+/// entry across the later one would be wrong: undo goes newest first, so the
+/// later step would put back a region the batch had cleaned after it, and the
+/// batch's step then a state that never followed it.
+#[allow(clippy::too_many_arguments)]
 fn join_group(
     journal: &mut Journal,
+    page: Option<usize>,
     op: &str,
     label: &str,
     region_id: &str,
@@ -259,11 +290,8 @@ fn join_group(
     group: Option<&str>,
 ) -> bool {
     let Some(group) = group else { return false };
-    if journal.cursor != journal.entries.len() {
-        return false;
-    }
-    let Some(last) = journal.entries.last_mut() else { return false };
-    if last.op != op || last.group.as_deref() != Some(group) || last.label != label {
+    let Some(last) = journal.entries.iter_mut().rev().find(|entry| entry.page == page) else { return false };
+    if last.undone || last.op != op || last.group.as_deref() != Some(group) || last.label != label {
         return false;
     }
     if last.parts.is_empty() {
@@ -285,9 +313,11 @@ fn join_group(
 /// manifest is the record of that.
 ///
 /// A clean made on a run's behalf (`run::on_behalf_of`, a Nano Banana batch)
-/// joins that run's step, so one Undo takes back the whole batch, as long as
-/// no other step lands between its cleans ([`join_group`]). Undo of it is
-/// refused while the run goes on ([`move_at`]).
+/// joins that run's step on the region's page, so one Undo on a page takes
+/// back the batch's cleans of that page, as long as no other step lands on
+/// that page between them ([`join_group`]). A batch over 17 pages is 17
+/// steps, one per page. Undo of one is refused while the run goes on
+/// ([`move_at`]).
 pub(crate) fn record_clean(
     job: &Path,
     chapter_id: &str,
@@ -300,7 +330,8 @@ pub(crate) fn record_clean(
     let Some(after) = side_now(chapter_id, project, source_idx, region_id) else { return };
     let group = crate::run::own_run();
     let label = if group.is_some() { CLEAN_BATCH_LABEL } else { CLEAN_LABEL };
-    if let Err(error) = push_grouped(job, chapter_id, CLEAN_OP, label, region_id, before, after, group.as_deref()) {
+    let page = project.strip.order.iter().position(|&at| at == source_idx);
+    if let Err(error) = push_grouped(job, chapter_id, CLEAN_OP, label, region_id, before, after, group.as_deref(), page) {
         eprintln!("a clean of {region_id} could not be saved to undo history: {error}");
     }
 }
@@ -399,11 +430,26 @@ pub struct Delta {
     /// by digest ([`PageStep`]). Empty for every other verb.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pages: Vec<PageStep>,
-    /// The run a `detection-state` entry was written by. A run's later pages
-    /// join its entry rather than adding one each, so one Undo takes back a
-    /// whole Detect run.
+    /// The run the entry was written by. A run's later edits of a page join
+    /// its entry of that page rather than adding one each, so one Undo on a
+    /// page takes back what the run did there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// The page the entry is a step of: the 0-based page index, the number
+    /// [`crate::region::page_index_in`] reads out of a region id and the
+    /// interface calls the page's index. Undo and Redo on a page only ever
+    /// answer that page's entries. `None` only for an entry whose page could
+    /// not be told, which no page's Undo reaches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<usize>,
+    /// Whether the entry is on its page's redo side. Within one page the
+    /// undone entries are always that page's newest.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub undone: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// One region of a delta that edited several.
@@ -432,9 +478,19 @@ pub struct NewDelta {
     pub pages: Vec<PageStep>,
     #[serde(default)]
     pub group: Option<String>,
+    /// The page, when the caller knows it and the entry cannot say it: a
+    /// `detection-state` entry, whose page is a source index the journal
+    /// cannot map. A region's page is read from its id ([`Journal::push`]).
+    #[serde(default)]
+    pub page: Option<usize>,
 }
 
 /// The journal as it sits on disk.
+///
+/// One file per chapter, partitioned by page: every entry is one page's
+/// step ([`Delta::page`]), and Undo and Redo walk one page's entries only
+/// ([`Journal::undo`], [`Journal::redo`]). Entries stay in the order they
+/// were made, across pages, which is the order the cap trims them in.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Journal {
@@ -442,10 +498,11 @@ pub struct Journal {
     /// Zero is the legacy native-page payload; one is oriented display geometry.
     #[serde(default)]
     pub coordinate_version: u8,
-    /// How many of `entries` are in the **past**. Everything at or after this
-    /// index is the redo stack, youngest last. A cursor rather than two vectors
-    /// because the two vectors have to be written and read as one document
-    /// anyway, and one number cannot disagree with itself.
+    /// How many of `entries` are not undone. Kept in the file so a version 1
+    /// reader still finds a number where it looks for one, and nothing steers
+    /// by it: which entry Undo answers is each page's own business
+    /// ([`Delta::undone`]). A version 1 file's cursor is read once, into the
+    /// marks ([`load_for`]).
     pub cursor: usize,
     /// The next `seq` to hand out. Kept explicitly so that trimming the oldest
     /// entries never re-issues a number.
@@ -466,16 +523,20 @@ impl Default for Journal {
 }
 
 impl Journal {
-    /// Record an edit that has **already happened**, exactly as the in-memory
-    /// history did: the future is dropped, because once a new action happens the
-    /// old one is no longer reachable.
+    /// Record an edit that has **already happened**. The entry's page gets
+    /// it, and that page's redo side is dropped, because once a new action
+    /// happens on a page its old future is no longer reachable. Every other
+    /// page's redo side is left as it is.
+    ///
+    /// An entry whose regions are on several pages (`parts` on two pages) is
+    /// kept as one entry per page, in the order the pages first appear, each
+    /// with that page's parts ([`pieces`]). Answers the first.
     ///
     /// `limit` is how many entries are kept, and it is read from the setting
     /// at each push: a limit that was lowered trims the oldest entries here.
-    pub fn push(&mut self, delta: NewDelta, limit: usize) -> Delta {
-        self.entries.truncate(self.cursor);
+    pub fn push(&mut self, chapter_id: &str, delta: NewDelta, limit: usize) -> Delta {
         let entry = Delta {
-            seq: self.next_seq,
+            seq: 0,
             label: delta.label,
             op: delta.op,
             region_id: delta.region_id,
@@ -484,45 +545,81 @@ impl Journal {
             parts: delta.parts,
             pages: delta.pages,
             group: delta.group,
+            page: delta.page,
+            undone: false,
         };
-        self.next_seq += 1;
-        self.entries.push(entry.clone());
-        // Oldest out. Every entry left is in the past, since the future was
-        // dropped above, so the cursor is the length.
-        let excess = self.entries.len().saturating_sub(limit.max(1));
-        self.entries.drain(..excess);
-        self.cursor = self.entries.len();
-        entry
+        let mut first = None;
+        for mut piece in pieces(Some(chapter_id), entry) {
+            piece.seq = self.next_seq;
+            self.next_seq += 1;
+            let page = piece.page;
+            self.entries.retain(|held| held.page != page || !held.undone);
+            self.entries.push(piece.clone());
+            first.get_or_insert(piece);
+        }
+        self.trim(limit);
+        self.sync_cursor();
+        first.expect("an entry is at least one piece")
     }
 
-    /// The entry a step in `direction` would answer with, the cursor left
-    /// where it is.
-    pub fn next(&self, direction: &str) -> Option<&Delta> {
+    /// Oldest out. A page whose undone entry is trimmed loses its whole redo
+    /// side with it: a redo of the next one would repeat a step on a state
+    /// that never preceded it.
+    fn trim(&mut self, limit: usize) {
+        let excess = self.entries.len().saturating_sub(limit.max(1));
+        let cut: Vec<Option<usize>> = self.entries[..excess].iter()
+            .filter(|entry| entry.undone)
+            .map(|entry| entry.page)
+            .collect();
+        self.entries.drain(..excess);
+        if !cut.is_empty() {
+            self.entries.retain(|entry| !(entry.undone && cut.contains(&entry.page)));
+        }
+    }
+
+    /// `cursor` as the file keeps it: how many entries are not undone.
+    pub(crate) fn sync_cursor(&mut self) {
+        self.cursor = self.entries.iter().filter(|entry| !entry.undone).count();
+    }
+
+    /// Where the entry a step in `direction` on `page` would answer with sits:
+    /// the newest entry of the page not undone, or the oldest undone one.
+    fn position(&self, page: usize, direction: &str) -> Option<usize> {
+        let mine = |entry: &Delta| entry.page == Some(page);
         match direction {
-            "undo" => self.cursor.checked_sub(1).and_then(|at| self.entries.get(at)),
-            "redo" => self.entries.get(self.cursor),
+            "undo" => self.entries.iter().rposition(|entry| mine(entry) && !entry.undone),
+            "redo" => self.entries.iter().position(|entry| mine(entry) && entry.undone),
             _ => None,
         }
     }
 
-    /// Step the cursor back one and answer with the entry to reverse.
-    pub fn undo(&mut self) -> Option<Delta> {
-        if self.cursor == 0 {
-            return None;
-        }
-        self.cursor -= 1;
-        self.entries.get(self.cursor).cloned()
+    /// The entry a step in `direction` on `page` would answer with, nothing
+    /// marked.
+    pub fn next(&self, page: usize, direction: &str) -> Option<&Delta> {
+        self.position(page, direction).map(|at| &self.entries[at])
     }
 
-    /// Step the cursor forward one and answer with the entry to repeat.
-    pub fn redo(&mut self) -> Option<Delta> {
-        let entry = self.entries.get(self.cursor).cloned()?;
-        self.cursor += 1;
-        Some(entry)
+    /// Mark the newest entry of `page` that is not undone as undone, and
+    /// answer with it. Entries of other pages are never answered and never
+    /// changed.
+    pub fn undo(&mut self, page: usize) -> Option<Delta> {
+        let at = self.position(page, "undo")?;
+        self.entries[at].undone = true;
+        self.sync_cursor();
+        Some(self.entries[at].clone())
     }
 
-    /// The labels the interface holds: one short pair per entry, and never a
-    /// payload. This is the whole of what undo costs in RAM.
+    /// Clear the mark of the oldest undone entry of `page`, and answer with
+    /// it.
+    pub fn redo(&mut self, page: usize) -> Option<Delta> {
+        let at = self.position(page, "redo")?;
+        self.entries[at].undone = false;
+        self.sync_cursor();
+        Some(self.entries[at].clone())
+    }
+
+    /// The labels the interface holds: one short record per entry, and never
+    /// a payload. This is the whole of what undo costs in RAM.
     pub fn view(&self, limit: usize) -> HistoryView {
         HistoryView {
             limit,
@@ -533,10 +630,108 @@ impl Journal {
                 .map(|entry| HistoryLabel {
                     seq: entry.seq,
                     label: entry.label.clone(),
+                    page: entry.page,
+                    undone: entry.undone,
                 })
                 .collect(),
         }
     }
+}
+
+/// The page a region id names, when the chapter is known.
+fn region_page(chapter_id: Option<&str>, region_id: &str) -> Option<usize> {
+    chapter_id.and_then(|chapter_id| crate::region::page_index_in(chapter_id, region_id))
+}
+
+/// An entry as the journal keeps it: one entry per page.
+///
+/// A `region-state` or `clean-state` entry's page is its region's, read from
+/// the id, or the page it already carries when the id does not say. One whose
+/// `parts` are on several pages becomes one entry per page, in the order the
+/// pages first appear, each with that page's parts, and each page's first
+/// part also its own `region_id`, `before` and `after`, the convention every
+/// edit of several regions keeps. A piece of one region has no `parts`, as an
+/// edit of one region is written. Every piece keeps the entry's `seq`; the
+/// caller numbers the others.
+///
+/// A `detection-state` entry is left whole: its page is the caller's to say
+/// ([`record_pages`], [`migrate_v1`]).
+fn pieces(chapter_id: Option<&str>, mut entry: Delta) -> Vec<Delta> {
+    if entry.op == DETECTION_OP {
+        return vec![entry];
+    }
+    if entry.parts.is_empty() {
+        entry.page = region_page(chapter_id, &entry.region_id).or(entry.page);
+        return vec![entry];
+    }
+    let fallback = region_page(chapter_id, &entry.region_id).or(entry.page);
+    let mut pages: Vec<(Option<usize>, Vec<Part>)> = Vec::new();
+    for part in &entry.parts {
+        let page = region_page(chapter_id, &part.region_id).or(fallback);
+        match pages.iter_mut().find(|(at, _)| *at == page) {
+            Some((_, parts)) => parts.push(part.clone()),
+            None => pages.push((page, vec![part.clone()])),
+        }
+    }
+    if pages.len() == 1 {
+        entry.page = pages[0].0;
+        return vec![entry];
+    }
+    pages
+        .into_iter()
+        .map(|(page, parts)| {
+            let first = &parts[0];
+            Delta {
+                region_id: first.region_id.clone(),
+                before: first.before.clone(),
+                after: first.after.clone(),
+                parts: if parts.len() > 1 { parts.clone() } else { Vec::new() },
+                page,
+                ..entry.clone()
+            }
+        })
+        .collect()
+}
+
+/// A version 1 journal, read into version 2: what was after the cursor is
+/// marked undone, every entry is given its page, and every entry that spans
+/// pages is kept as one entry per page, in place and in order. The first
+/// piece keeps the entry's `seq`; the others take fresh numbers.
+///
+/// A `detection-state` entry's page is its first page step's source index
+/// through the strip order, and the job is opened only when such an entry is
+/// there. A region's page needs the chapter id, and a reader that has none
+/// (`load`) leaves those entries without one.
+fn migrate_v1(job: &Path, chapter_id: Option<&str>, journal: &mut Journal) {
+    let cursor = journal.cursor.min(journal.entries.len());
+    for entry in &mut journal.entries[cursor..] {
+        entry.undone = true;
+    }
+    let needs_strip = journal.entries.iter().any(|entry| entry.op == DETECTION_OP && !entry.pages.is_empty());
+    let strip = needs_strip
+        .then(|| cleaner_core::project::Job::open(job).ok().map(|opened| opened.project.strip.order.clone()))
+        .flatten();
+    let page_of_source = |source_idx: usize| strip.as_ref()?.iter().position(|&at| at == source_idx);
+    let mut next_seq = journal.next_seq.max(journal.entries.iter().map(|entry| entry.seq + 1).max().unwrap_or(1));
+    let mut entries = Vec::with_capacity(journal.entries.len());
+    for entry in std::mem::take(&mut journal.entries) {
+        let mut split = if entry.op == DETECTION_OP && !entry.pages.is_empty() {
+            entry.pages.iter()
+                .map(|step| Delta { pages: vec![step.clone()], page: page_of_source(step.source_idx), ..entry.clone() })
+                .collect()
+        } else {
+            pieces(chapter_id, entry)
+        };
+        for piece in split.iter_mut().skip(1) {
+            piece.seq = next_seq;
+            next_seq += 1;
+        }
+        entries.extend(split);
+    }
+    journal.entries = entries;
+    journal.next_seq = next_seq;
+    journal.version = JOURNAL_VERSION;
+    journal.sync_cursor();
 }
 
 /// One entry, as the interface holds it.
@@ -545,10 +740,16 @@ impl Journal {
 pub struct HistoryLabel {
     pub seq: u64,
     pub label: String,
+    /// The page the entry is a step of ([`Delta::page`]).
+    pub page: Option<usize>,
+    /// Whether it is on its page's redo side ([`Delta::undone`]).
+    pub undone: bool,
 }
 
-/// The journal's index - cursor and labels, no payloads - and the limit the
-/// journal is kept to, so the interface's index is capped by the same number.
+/// The journal's index - labels, pages and marks, no payloads - and the
+/// limit the journal is kept to, so the interface's index is capped by the
+/// same number. `cursor` is how many entries are not undone, as the file
+/// keeps it; nothing steers by it.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryView {
@@ -557,12 +758,13 @@ pub struct HistoryView {
     pub entries: Vec<HistoryLabel>,
 }
 
-/// One step of undo or redo: where the cursor now is, and what to replay.
+/// One step of undo or redo on one page: what to replay, and how many
+/// entries of the chapter are not undone now (`cursor`).
 ///
 /// A `detection-state` entry is replayed here, not by the interface: `pages`
 /// are the page indices it wrote, for the interface to read again, and
 /// `refused` is set when a page was not in the state the entry left it in
-/// ([`STALE`]). The cursor moved either way.
+/// ([`STALE`]). The entry is marked either way.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryStep {
@@ -585,12 +787,27 @@ pub fn journal_path(job: &Path) -> PathBuf {
 /// journal. Neither is an error the user can act on and neither is a reason to
 /// refuse a chapter: the manifest is the record of what was done, and the
 /// journal is only the record of how to take it back.
+///
+/// For a reader that only looks at the entries. A version 1 file is read
+/// without its regions' pages, since those need the chapter id; everything
+/// that writes the journal or steers by it reads it with [`load_for`].
 pub fn load(job: &Path) -> Journal {
+    read(job, None)
+}
+
+/// [`load`], with the chapter the job is: a version 1 file is read whole into
+/// version 2, every entry with its page ([`migrate_v1`]).
+pub fn load_for(job: &Path, chapter_id: &str) -> Journal {
+    read(job, Some(chapter_id))
+}
+
+fn read(job: &Path, chapter_id: Option<&str>) -> Journal {
     let path = journal_path(job);
     let Ok(bytes) = std::fs::read(&path) else {
         return Journal::default();
     };
     let mut journal = serde_json::from_slice::<Journal>(&bytes).unwrap_or_default();
+    let legacy = journal.version < 2;
     if journal.coordinate_version == 0 {
         if let Ok(opened) = cleaner_core::project::Job::open(job) {
             for entry in &mut journal.entries {
@@ -662,6 +879,9 @@ pub fn load(job: &Path) -> Journal {
             journal.coordinate_version = 1;
         }
     }
+    if legacy {
+        migrate_v1(job, chapter_id, &mut journal);
+    }
     journal
 }
 
@@ -692,7 +912,7 @@ fn with_journal<T>(
 ) -> Result<T, String> {
     let job = crate::library::resolve_chapter(app, chapter_id)?;
     let _lock = crate::run::lock_job(&job)?;
-    let mut journal = load(&job);
+    let mut journal = load_for(&job, chapter_id);
     let answer = work(&mut journal);
     save(&job, &journal)?;
     Ok(answer)
@@ -705,7 +925,7 @@ pub async fn history_load(
 ) -> Result<HistoryView, String> {
     crate::library::blocking(move || {
         let job = crate::library::resolve_chapter(&app, &chapter_id)?;
-        let journal = load(&job);
+        let journal = load_for(&job, &chapter_id);
         // Opening a chapter is when page states no entry names any more go:
         // under the job's lock, so a capture in flight is never swept, and
         // skipped when another writer has the chapter.
@@ -734,39 +954,42 @@ pub async fn history_push(
     crate::library::blocking(move || {
         let limit = limit_for(&app);
         with_journal(&app, &chapter_id, |journal| {
-            journal.push(entry, limit);
+            journal.push(&chapter_id, entry, limit);
             journal.view(limit)
         })
     })
     .await
 }
 
-/// One step, in the direction named. The cursor moves **on disk** before the
-/// interface replays anything, which is what makes an undo interrupted by a
-/// crash resolve the same way twice: the manifest edit is the thing that may or
-/// may not have happened, and re-applying a delta to a manifest already in that
+/// One step on one page, in the direction named: `page_index` is the page on
+/// screen, and only its entries are ever answered or marked. Undo and redo
+/// never leave that page. The mark moves **on disk** before the interface
+/// replays anything, which is what makes an undo interrupted by a crash
+/// resolve the same way twice: the manifest edit is the thing that may or may
+/// not have happened, and re-applying a delta to a manifest already in that
 /// state is a no-op by construction (`set_mask_visible` answers "it is as you
 /// asked" rather than refusing).
 ///
-/// **Refused before the cursor moves** when the entry it would replay is of a
-/// page a run is working on (`page_busy`). The replay is an edit of that page
-/// and would be refused itself ([`crate::run::lock_page`]), and a cursor that
-/// had moved on would say an edit was taken back that was not.
+/// **Refused before anything is marked** when the entry it would replay is of
+/// a page a run is working on (`page_busy`). The replay is an edit of that
+/// page and would be refused itself ([`crate::run::lock_page`]), and a mark
+/// that had moved on would say an edit was taken back that was not.
 ///
 /// **Refused the same way when the entry is a run's that is still going**
-/// (`run_step_in_progress`). The run writes each page it finishes into that
-/// step. Taken back mid-run, the step would hold only the pages done so far,
-/// and the run's later pages would make a second step that one Undo no
-/// longer takes back.
+/// (`run_step_in_progress`). The run writes each page it finishes into its
+/// step of that page. Taken back mid-run, the step would hold only what was
+/// done so far, and the run's later work there would make a second step that
+/// one Undo no longer takes back.
 #[tauri::command]
 pub async fn history_move(
     app: tauri::AppHandle,
     chapter_id: String,
+    page_index: usize,
     direction: String,
 ) -> Result<HistoryStep, String> {
     crate::library::blocking(move || {
         let job = crate::library::resolve_chapter(&app, &chapter_id)?;
-        move_at(&job, &chapter_id, &direction)
+        move_at(&job, &chapter_id, page_index, &direction)
     })
     .await
 }
@@ -776,29 +999,27 @@ pub async fn history_move(
 const RUN_STEP_IN_PROGRESS: &str = "run_step_in_progress: the step belongs to a run that is still going";
 
 /// The command's body, on a chapter already resolved to its job.
-pub(crate) fn move_at(job: &Path, chapter_id: &str, direction: &str) -> Result<HistoryStep, String> {
+pub(crate) fn move_at(job: &Path, chapter_id: &str, page_index: usize, direction: &str) -> Result<HistoryStep, String> {
     let _lock = crate::run::lock_job(job)?;
-    let mut journal = load(job);
-    let next = journal.next(direction).cloned();
+    let mut journal = load_for(job, chapter_id);
+    let next = journal.next(page_index, direction).cloned();
     if next.as_ref().and_then(|entry| entry.group.as_deref()).is_some_and(crate::run::is_running) {
         return Err(RUN_STEP_IN_PROGRESS.to_owned());
     }
-    let page_index = next.as_ref()
-        .and_then(|entry| crate::region::page_index_in(chapter_id, &entry.region_id));
-    if let Some(page_index) = page_index {
+    if let Some(page_index) = next.as_ref().and_then(|entry| entry.page) {
         if crate::run::page_run(job, chapter_id, page_index).is_some() {
             return Err(crate::run::WriteRefused::PageBusy { page_index }.into());
         }
     }
     // A detection edit is put back here, under the lock that moves the
-    // cursor, so no run can reach its pages between the two.
+    // mark, so no run can reach its pages between the two.
     let (pages, refused) = match next.as_ref().filter(|entry| entry.op == DETECTION_OP) {
         Some(entry) => replay_pages(job, chapter_id, entry, direction == "undo")?,
         None => (Vec::new(), None),
     };
     let entry = match direction {
-        "undo" => journal.undo(),
-        "redo" => journal.redo(),
+        "undo" => journal.undo(page_index),
+        "redo" => journal.redo(page_index),
         _ => None,
     };
     save(job, &journal)?;
@@ -993,13 +1214,17 @@ pub(crate) fn capture_pages(job: &cleaner_core::project::Job, sources: &[usize])
     }).collect()
 }
 
-/// Record an edit of these pages' detections as one undo step, from the
-/// states [`capture_pages`] took before it. A page the edit left as it was is
-/// not part of the step, and an edit that changed no page records nothing.
+/// Record an edit of these pages' detections as one undo step **per page**,
+/// from the states [`capture_pages`] took before it: undo is per page, so an
+/// edit that changed three pages is a step on each, and each page's Undo
+/// takes back its own part. A page the edit left as it was is not part of the
+/// step, and an edit that changed no page records nothing.
 ///
-/// With a `group` the step joins the journal's last entry when that entry is
-/// the same group's and nothing was undone since: a run's pages make one
-/// step, and a page it writes twice keeps its first `before`.
+/// With a `group` a page's step joins the newest entry of that page when that
+/// entry is the same group's, of the same label, and not undone: a Detect run
+/// over 17 pages is 17 steps, one per page, and a page it writes twice keeps
+/// its first `before`. A page the run's writes brought back to where it
+/// started has no step left, and its entry goes.
 ///
 /// **The caller holds the job's lock**, as for [`record_step`]. A journal
 /// that cannot be written is said on the console and does not fail the edit:
@@ -1031,38 +1256,49 @@ pub(crate) fn record_pages(
     }
     let path = job.path();
     let limit = LAST_LIMIT.load(std::sync::atomic::Ordering::Relaxed);
-    let mut journal = load(path);
-    let cursor_at_end = journal.cursor == journal.entries.len();
-    let joined = match (group, journal.entries.last_mut()) {
-        (Some(group), Some(last)) if cursor_at_end && last.op == DETECTION_OP && last.group.as_deref() == Some(group) => {
-            for page in pages.drain(..) {
-                match last.pages.iter_mut().find(|held| held.source_idx == page.source_idx) {
+    let mut journal = load_for(path, chapter_id);
+    for step in pages {
+        let page = job.project.strip.order.iter().position(|&at| at == step.source_idx);
+        let joined = group.and_then(|group| {
+            let at = journal.entries.iter().rposition(|entry| entry.page == page)?;
+            let last = &journal.entries[at];
+            (!last.undone && last.op == DETECTION_OP && last.group.as_deref() == Some(group) && last.label == label)
+                .then_some(at)
+        });
+        match joined {
+            Some(at) => {
+                let last = &mut journal.entries[at];
+                match last.pages.iter_mut().find(|held| held.source_idx == step.source_idx) {
                     Some(held) => {
-                        held.after = page.after;
-                        held.queued_after = page.queued_after;
+                        held.after = step.after;
+                        held.queued_after = step.queued_after;
                     }
-                    None => last.pages.push(page),
+                    None => last.pages.push(step),
+                }
+                last.pages.retain(|page| page.before != page.after);
+                if last.pages.is_empty() {
+                    journal.entries.remove(at);
+                    journal.sync_cursor();
                 }
             }
-            last.pages.retain(|page| page.before != page.after);
-            true
+            None => {
+                journal.push(
+                    chapter_id,
+                    NewDelta {
+                        label: label.to_owned(),
+                        op: DETECTION_OP.to_owned(),
+                        region_id: String::new(),
+                        before: Side::default(),
+                        after: Side::default(),
+                        parts: Vec::new(),
+                        pages: vec![step],
+                        group: group.map(str::to_owned),
+                        page,
+                    },
+                    limit,
+                );
+            }
         }
-        _ => false,
-    };
-    if !joined {
-        journal.push(
-            NewDelta {
-                label: label.to_owned(),
-                op: DETECTION_OP.to_owned(),
-                region_id: String::new(),
-                before: Side::default(),
-                after: Side::default(),
-                parts: Vec::new(),
-                pages,
-                group: group.map(str::to_owned),
-            },
-            limit,
-        );
     }
     if let Err(error) = save(path, &journal) {
         eprintln!("an edit of {chapter_id} could not be saved to undo history: {error}");
@@ -1219,6 +1455,14 @@ pub(crate) fn sweep_blobs(sidecar: &Path, journal: &Journal) {
 mod tests {
     use super::*;
 
+    const CHAPTER: &str = "chapter";
+
+    /// A region id on `page` (0-based), built as every region id in this
+    /// application is: on its page's id.
+    fn on(page: usize, n: usize) -> String {
+        format!("{CHAPTER}-p{:03}-r{n}", page + 1)
+    }
+
     fn delta(label: &str, region: &str) -> NewDelta {
         NewDelta {
             parts: Vec::new(),
@@ -1237,6 +1481,14 @@ mod tests {
             }, ..Default::default() }
     }
 
+    fn push(journal: &mut Journal, label: &str, region: &str) -> Delta {
+        journal.push(CHAPTER, delta(label, region), UNDO_LIMIT_DEFAULT)
+    }
+
+    fn labels(journal: &Journal) -> Vec<String> {
+        journal.entries.iter().map(|entry| entry.label.clone()).collect()
+    }
+
     #[test]
     fn an_entry_from_the_interface_needs_no_pages_parts_or_group() {
         // What `regionEntry` sends for a plain edit of one region.
@@ -1244,82 +1496,113 @@ mod tests {
             "label": "masks.command.rerunMask", "op": "region-state", "regionId": "r1",
             "before": {"present": false}, "after": {"present": true},
         })).unwrap();
-        assert!(delta.parts.is_empty() && delta.pages.is_empty() && delta.group.is_none());
+        assert!(delta.parts.is_empty() && delta.pages.is_empty() && delta.group.is_none() && delta.page.is_none());
     }
 
-    /// A Nano Banana batch's cleans join one step: every region a part, the
-    /// first included, a region cleaned twice keeping its first `before`.
-    /// Another run's clean, an ordinary clean, or anything after an undo starts
-    /// its own entry.
+    /// A Nano Banana batch's cleans of one page join one step: every region a
+    /// part, the first included, a region cleaned twice keeping its first
+    /// `before`. Another run's clean, an ordinary clean, or anything after an
+    /// undo starts its own entry.
     #[test]
     fn a_runs_cleans_join_its_one_step() {
         let side = |status: &str| Side { present: true, page_status: Some(status.into()), region: None };
         let grouped = |journal: &mut Journal, region: &str, before: &str, after: &str, group: Option<&str>| {
-            if !join_group(journal, CLEAN_OP, CLEAN_BATCH_LABEL, region, &side(before), &side(after), group) {
-                journal.push(NewDelta {
+            let page = crate::region::page_index_in(CHAPTER, region);
+            if !join_group(journal, page, CLEAN_OP, CLEAN_BATCH_LABEL, region, &side(before), &side(after), group) {
+                journal.push(CHAPTER, NewDelta {
                     label: CLEAN_BATCH_LABEL.into(), op: CLEAN_OP.into(), region_id: region.into(),
                     before: side(before), after: side(after), group: group.map(str::to_owned), ..Default::default()
                 }, UNDO_LIMIT_DEFAULT);
             }
         };
         let mut journal = Journal::default();
-        grouped(&mut journal, "r1", "detected", "a", Some("run-1"));
-        grouped(&mut journal, "r2", "detected", "b", Some("run-1"));
-        grouped(&mut journal, "r1", "a", "c", Some("run-1"));
+        grouped(&mut journal, &on(0, 1), "detected", "a", Some("run-1"));
+        grouped(&mut journal, &on(0, 2), "detected", "b", Some("run-1"));
+        grouped(&mut journal, &on(0, 1), "a", "c", Some("run-1"));
         assert_eq!(journal.entries.len(), 1);
         let parts: Vec<_> = journal.entries[0].parts.iter()
-            .map(|part| (part.region_id.as_str(), part.before.page_status.as_deref(), part.after.page_status.as_deref()))
+            .map(|part| (part.region_id.clone(), part.before.page_status.as_deref(), part.after.page_status.as_deref()))
             .collect();
-        assert_eq!(parts, [("r1", Some("detected"), Some("c")), ("r2", Some("detected"), Some("b"))]);
+        assert_eq!(parts, [(on(0, 1), Some("detected"), Some("c")), (on(0, 2), Some("detected"), Some("b"))]);
 
-        grouped(&mut journal, "r3", "detected", "d", Some("run-2"));
+        grouped(&mut journal, &on(0, 3), "detected", "d", Some("run-2"));
         assert_eq!(journal.entries.len(), 2, "another run's clean is its own step");
-        assert!(!join_group(&mut journal, CLEAN_OP, CLEAN_BATCH_LABEL, "r4", &side("x"), &side("y"), None));
-        journal.undo();
-        assert!(!join_group(&mut journal, CLEAN_OP, CLEAN_BATCH_LABEL, "r4", &side("x"), &side("y"), Some("run-2")),
+        assert!(!join_group(&mut journal, Some(0), CLEAN_OP, CLEAN_BATCH_LABEL, &on(0, 4), &side("x"), &side("y"), None));
+        journal.undo(0);
+        assert!(!join_group(&mut journal, Some(0), CLEAN_OP, CLEAN_BATCH_LABEL, &on(0, 4), &side("x"), &side("y"), Some("run-2")),
             "nothing joins a step that was undone");
     }
 
-    /// The split `join_group` documents: a step that lands between two of a
-    /// batch's cleans ends the batch's step there, and the next clean starts
-    /// another, so undo never runs across the later step.
+    /// The split `join_group` documents: a step that lands on the same page
+    /// between two of a batch's cleans ends the batch's step there, and the
+    /// next clean starts another, so undo never runs across the later step. A
+    /// step on another page splits nothing.
     #[test]
     fn a_step_between_two_of_a_runs_cleans_splits_its_step() {
         let side = |status: &str| Side { present: true, page_status: Some(status.into()), region: None };
         let mut journal = Journal::default();
-        journal.push(NewDelta {
-            label: CLEAN_BATCH_LABEL.into(), op: CLEAN_OP.into(), region_id: "r1".into(),
+        journal.push(CHAPTER, NewDelta {
+            label: CLEAN_BATCH_LABEL.into(), op: CLEAN_OP.into(), region_id: on(0, 1),
             before: side("detected"), after: side("a"), group: Some("run-1".into()), ..Default::default()
         }, UNDO_LIMIT_DEFAULT);
-        journal.push(delta("masks.command.rerunMask", "r9"), UNDO_LIMIT_DEFAULT);
-        assert!(!join_group(&mut journal, CLEAN_OP, CLEAN_BATCH_LABEL, "r2", &side("detected"), &side("b"), Some("run-1")));
-        assert!(journal.entries[0].parts.is_empty(), "the earlier step is left as it was");
+        push(&mut journal, "masks.command.rerunMask", &on(1, 9));
+        assert!(join_group(&mut journal, Some(0), CLEAN_OP, CLEAN_BATCH_LABEL, &on(0, 2), &side("detected"), &side("b"), Some("run-1")),
+            "a step on another page is not between them");
+        push(&mut journal, "masks.command.rerunMask", &on(0, 9));
+        assert!(!join_group(&mut journal, Some(0), CLEAN_OP, CLEAN_BATCH_LABEL, &on(0, 3), &side("detected"), &side("c"), Some("run-1")));
+        assert_eq!(journal.entries[0].parts.len(), 2, "the earlier step is left as it was");
+    }
+
+    /// A run's cleans over two pages are a step on each, and each page's Undo
+    /// takes back its own part and nothing of the other's.
+    #[test]
+    fn a_runs_group_over_two_pages_is_two_steps() {
+        let side = |status: &str| Side { present: true, page_status: Some(status.into()), region: None };
+        let mut journal = Journal::default();
+        for (page, n) in [(0, 1), (1, 2), (0, 3), (1, 4)] {
+            let region = on(page, n);
+            if !join_group(&mut journal, Some(page), CLEAN_OP, CLEAN_BATCH_LABEL, &region, &side("detected"), &side("a"), Some("run-1")) {
+                journal.push(CHAPTER, NewDelta {
+                    label: CLEAN_BATCH_LABEL.into(), op: CLEAN_OP.into(), region_id: region,
+                    before: side("detected"), after: side("a"), group: Some("run-1".into()), ..Default::default()
+                }, UNDO_LIMIT_DEFAULT);
+            }
+        }
+        assert_eq!(journal.entries.iter().map(|entry| (entry.page, entry.parts.len())).collect::<Vec<_>>(),
+            [(Some(0), 2), (Some(1), 2)]);
+        let undone = journal.undo(1).unwrap();
+        assert_eq!(undone.parts.iter().map(|part| part.region_id.clone()).collect::<Vec<_>>(), [on(1, 2), on(1, 4)]);
+        assert!(journal.undo(1).is_none());
+        assert!(!journal.entries[0].undone);
+        assert_eq!(journal.undo(0).unwrap().region_id, on(0, 1));
     }
 
     #[test]
     fn a_push_numbers_the_entry_and_moves_the_cursor_to_the_end() {
         let mut journal = Journal::default();
-        let first = journal.push(delta("masks.command.deleteMask", "r1"), UNDO_LIMIT_DEFAULT);
-        let second = journal.push(delta("masks.command.rerunMask", "r2"), UNDO_LIMIT_DEFAULT);
+        let first = push(&mut journal, "masks.command.deleteMask", &on(0, 1));
+        let second = push(&mut journal, "masks.command.rerunMask", &on(0, 2));
         assert_eq!(first.seq, 1);
         assert_eq!(second.seq, 2);
         assert_eq!(journal.cursor, 2);
         assert_eq!(journal.view(UNDO_LIMIT_DEFAULT).entries.len(), 2);
     }
 
-    /// The interface's copy is labels and nothing else - the payload never
-    /// leaves this file until it is replayed.
+    /// The interface's copy is labels, pages and marks, and nothing else -
+    /// the payload never leaves this file until it is replayed.
     #[test]
     fn the_view_carries_no_payload() {
         let mut journal = Journal::default();
-        journal.push(delta("masks.command.deleteMask", "r1"), UNDO_LIMIT_DEFAULT);
+        push(&mut journal, "masks.command.deleteMask", &on(3, 1));
         let view = journal.view(UNDO_LIMIT_DEFAULT);
         assert_eq!(view.limit, UNDO_LIMIT_DEFAULT);
         assert_eq!(
             view.entries[0],
             HistoryLabel {
                 seq: 1,
-                label: "masks.command.deleteMask".into()
+                label: "masks.command.deleteMask".into(),
+                page: Some(3),
+                undone: false,
             }
         );
     }
@@ -1327,32 +1610,32 @@ mod tests {
     #[test]
     fn undo_and_redo_walk_the_same_entries() {
         let mut journal = Journal::default();
-        journal.push(delta("a", "r1"), UNDO_LIMIT_DEFAULT);
-        journal.push(delta("b", "r2"), UNDO_LIMIT_DEFAULT);
+        push(&mut journal, "a", &on(0, 1));
+        push(&mut journal, "b", &on(0, 2));
 
-        assert_eq!(journal.undo().unwrap().label, "b");
+        assert_eq!(journal.undo(0).unwrap().label, "b");
         assert_eq!(journal.cursor, 1);
-        assert_eq!(journal.undo().unwrap().label, "a");
+        assert_eq!(journal.undo(0).unwrap().label, "a");
         assert_eq!(journal.cursor, 0);
         assert!(
-            journal.undo().is_none(),
+            journal.undo(0).is_none(),
             "the bottom of the past is not a step"
         );
 
-        assert_eq!(journal.redo().unwrap().label, "a");
-        assert_eq!(journal.redo().unwrap().label, "b");
-        assert!(journal.redo().is_none());
+        assert_eq!(journal.redo(0).unwrap().label, "a");
+        assert_eq!(journal.redo(0).unwrap().label, "b");
+        assert!(journal.redo(0).is_none());
     }
 
-    /// The rule the in-memory history had and the file has to keep: once a new
-    /// action happens the old future is unreachable.
+    /// The rule the in-memory history had and the file has to keep, on one
+    /// page: once a new action happens the old future is unreachable.
     #[test]
     fn a_push_after_an_undo_drops_the_future() {
         let mut journal = Journal::default();
-        journal.push(delta("a", "r1"), UNDO_LIMIT_DEFAULT);
-        journal.push(delta("b", "r2"), UNDO_LIMIT_DEFAULT);
-        journal.undo();
-        journal.push(delta("c", "r3"), UNDO_LIMIT_DEFAULT);
+        push(&mut journal, "a", &on(0, 1));
+        push(&mut journal, "b", &on(0, 2));
+        journal.undo(0);
+        push(&mut journal, "c", &on(0, 3));
 
         let labels: Vec<_> = journal
             .view(UNDO_LIMIT_DEFAULT)
@@ -1362,7 +1645,89 @@ mod tests {
             .collect();
         assert_eq!(labels, vec!["a", "c"]);
         assert_eq!(journal.cursor, 2);
-        assert!(journal.redo().is_none());
+        assert!(journal.redo(0).is_none());
+    }
+
+    /// Undo on page B, pressed many times, takes back B's steps newest first
+    /// and stops when B has none left. Not one of page A's entries is
+    /// answered or changed, though they are interleaved with B's.
+    #[test]
+    fn undo_on_one_page_never_answers_or_changes_another_pages_entries() {
+        let mut journal = Journal::default();
+        for n in 0..3 {
+            push(&mut journal, &format!("a{n}"), &on(0, n));
+            push(&mut journal, &format!("b{n}"), &on(1, n));
+        }
+        let page_a = |journal: &Journal| journal.entries.iter().filter(|entry| entry.page == Some(0)).cloned().collect::<Vec<_>>();
+        let a_before = page_a(&journal);
+        let mut undone = Vec::new();
+        for _ in 0..10 {
+            if let Some(entry) = journal.undo(1) {
+                assert_eq!(entry.page, Some(1));
+                undone.push(entry.label);
+            }
+        }
+        assert_eq!(undone, ["b2", "b1", "b0"]);
+        assert!(journal.next(1, "undo").is_none());
+        assert_eq!(page_a(&journal), a_before, "page A was not touched");
+        assert_eq!(journal.next(0, "undo").unwrap().label, "a2");
+        assert_eq!(journal.cursor, 3);
+    }
+
+    /// A push on page B after an undo on B drops B's redo side only; page A's
+    /// undone steps stay where they are, and Redo on A still repeats them.
+    #[test]
+    fn a_push_on_one_page_keeps_another_pages_redo_side() {
+        let mut journal = Journal::default();
+        push(&mut journal, "a0", &on(0, 0));
+        push(&mut journal, "b0", &on(1, 0));
+        push(&mut journal, "b1", &on(1, 1));
+        journal.undo(0);
+        journal.undo(1);
+        push(&mut journal, "b2", &on(1, 2));
+        assert_eq!(labels(&journal), ["a0", "b0", "b2"]);
+        assert!(journal.entries[0].undone, "A's undone step is still on A's redo side");
+        assert!(journal.redo(1).is_none(), "B's redo side went with the push");
+        assert_eq!(journal.redo(0).unwrap().label, "a0");
+    }
+
+    /// Redo on page A still works after edits made on page B since.
+    #[test]
+    fn redo_on_a_page_works_after_edits_on_another() {
+        let mut journal = Journal::default();
+        push(&mut journal, "a0", &on(0, 0));
+        push(&mut journal, "a1", &on(0, 1));
+        journal.undo(0);
+        journal.undo(0);
+        push(&mut journal, "b0", &on(1, 0));
+        push(&mut journal, "b1", &on(1, 1));
+        assert_eq!(journal.redo(0).unwrap().label, "a0");
+        assert_eq!(journal.redo(0).unwrap().label, "a1");
+        assert!(journal.redo(0).is_none());
+        assert_eq!(journal.undo(1).unwrap().label, "b1");
+    }
+
+    /// An entry pushed with parts on two pages is kept as one entry per page,
+    /// each page's first part also the entry's own region, and numbered in
+    /// order.
+    #[test]
+    fn a_pushed_entry_over_two_pages_is_a_step_on_each() {
+        let part = |region: String| Part { region_id: region, before: Side::default(), after: Side { present: true, ..Default::default() } };
+        let mut journal = Journal::default();
+        let first = journal.push(CHAPTER, NewDelta {
+            label: "masks.command.deleteMask".into(), op: REGION_OP.into(), region_id: on(0, 1),
+            parts: vec![part(on(0, 1)), part(on(1, 2)), part(on(0, 3))], ..Default::default()
+        }, UNDO_LIMIT_DEFAULT);
+        assert_eq!(first.seq, 1);
+        let shape: Vec<_> = journal.entries.iter()
+            .map(|entry| (entry.seq, entry.page, entry.region_id.clone(),
+                entry.parts.iter().map(|part| part.region_id.clone()).collect::<Vec<_>>()))
+            .collect();
+        assert_eq!(shape, [
+            (1, Some(0), on(0, 1), vec![on(0, 1), on(0, 3)]),
+            (2, Some(1), on(1, 2), vec![]),
+        ]);
+        assert!(journal.entries[1].after.present, "a piece of one region keeps its sides");
     }
 
     /// Oldest out, and no number reissued - a `seq` that came back would make
@@ -1372,13 +1737,29 @@ mod tests {
         for limit in [UNDO_LIMIT_MIN, UNDO_LIMIT_DEFAULT, UNDO_LIMIT_MAX] {
             let mut journal = Journal::default();
             for n in 0..limit + 10 {
-                journal.push(delta(&format!("e{n}"), "r1"), limit);
+                journal.push(CHAPTER, delta(&format!("e{n}"), &on(n % 3, n)), limit);
             }
             assert_eq!(journal.entries.len(), limit);
             assert_eq!(journal.cursor, limit);
             assert_eq!(journal.entries[0].label, "e10");
             assert_eq!(journal.next_seq, limit as u64 + 11);
         }
+    }
+
+    /// A page whose undone step is trimmed loses its whole redo side: the
+    /// next one would be repeated on a state that never preceded it.
+    #[test]
+    fn trimming_an_undone_entry_drops_its_pages_redo_side() {
+        let mut journal = Journal::default();
+        push(&mut journal, "a0", &on(0, 0));
+        push(&mut journal, "a1", &on(0, 1));
+        journal.undo(0);
+        journal.undo(0);
+        for n in 0..UNDO_LIMIT_MIN - 1 {
+            journal.push(CHAPTER, delta(&format!("b{n}"), &on(1, n)), UNDO_LIMIT_MIN);
+        }
+        assert!(journal.entries.iter().all(|entry| entry.page == Some(1)));
+        assert!(journal.redo(0).is_none());
     }
 
     /// The setting is read at each push, so a lower number takes effect at the
@@ -1388,19 +1769,138 @@ mod tests {
     fn lowering_the_limit_trims_the_oldest_at_the_next_push() {
         let mut journal = Journal::default();
         for n in 0..100 {
-            journal.push(delta(&format!("e{n}"), "r1"), UNDO_LIMIT_DEFAULT);
+            push(&mut journal, &format!("e{n}"), &on(0, n));
         }
         // Two steps back, so the push also has a future to drop.
-        journal.undo();
-        journal.undo();
-        journal.push(delta("new", "r1"), UNDO_LIMIT_MIN);
+        journal.undo(0);
+        journal.undo(0);
+        journal.push(CHAPTER, delta("new", &on(0, 1)), UNDO_LIMIT_MIN);
 
         assert_eq!(journal.entries.len(), UNDO_LIMIT_MIN);
         assert_eq!(journal.cursor, UNDO_LIMIT_MIN);
         assert_eq!(journal.entries[0].label, "e79");
-        assert_eq!(journal.undo().unwrap().label, "new");
-        assert_eq!(journal.undo().unwrap().label, "e97");
-        assert!(journal.redo().is_some());
+        assert_eq!(journal.undo(0).unwrap().label, "new");
+        assert_eq!(journal.undo(0).unwrap().label, "e97");
+        assert!(journal.redo(0).is_some());
+    }
+
+    /// A job of two pages read in the other order: page 0 is source 1. For
+    /// the tests that need a strip to read a source index through.
+    fn two_page_job(name: &str) -> (PathBuf, cleaner_core::project::Job) {
+        use cleaner_core::image::{encode, Format};
+        use cleaner_core::project::{Job, Project, StripMode};
+        let raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        let root = std::env::temp_dir().join(format!("mtclean-history-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("raws")).unwrap();
+        let bytes = encode(&raw, Format::Png).unwrap();
+        let sources: Vec<_> = ["a", "b"].iter().map(|stem| {
+            let path = root.join(format!("raws/{stem}.png"));
+            std::fs::write(&path, &bytes).unwrap();
+            cleaner_core::ingest::source_ref(&path, &bytes).unwrap()
+        }).collect();
+        let manifest = root.join("job/chapter.mtclean");
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        let mut job = Job::create(&manifest, Project::new(manifest.parent().unwrap(), "test", StripMode::Single, &sources)).unwrap();
+        job.project.strip.order = vec![1, 0];
+        job.flush().unwrap();
+        (root, job)
+    }
+
+    /// A version 1 journal, cursor in the middle and a run's entry over two
+    /// pages, reads into version 2: what was after the cursor is undone, every
+    /// entry has its page, and each entry over two pages is one per page, in
+    /// place, the first keeping its number and the others taking new ones.
+    #[test]
+    fn a_version_1_journal_loads_into_marks_and_one_entry_per_page() {
+        let (root, job) = two_page_job("v1");
+        let side = |present: bool| serde_json::json!({ "present": present });
+        let page_step = |source: usize| serde_json::json!({ "sourceIdx": source, "before": "x", "after": "y" });
+        let v1 = serde_json::json!({
+            "version": 1, "coordinateVersion": 1, "cursor": 2, "nextSeq": 5,
+            "entries": [
+                { "seq": 1, "label": "e1", "op": REGION_OP, "regionId": on(0, 1), "before": side(true), "after": side(false) },
+                { "seq": 2, "label": CLEAN_BATCH_LABEL, "op": CLEAN_OP, "regionId": on(0, 2), "group": "run-1",
+                  "before": side(true), "after": side(true),
+                  "parts": [
+                      { "regionId": on(0, 2), "before": side(true), "after": side(true) },
+                      { "regionId": on(1, 3), "before": side(true), "after": side(true) },
+                      { "regionId": on(0, 4), "before": side(true), "after": side(true) },
+                  ] },
+                { "seq": 3, "label": DETECT_LABEL, "op": DETECTION_OP, "regionId": "", "group": "run-2",
+                  "pages": [page_step(1), page_step(0)] },
+                { "seq": 4, "label": "e4", "op": REGION_OP, "regionId": on(1, 5), "before": side(true), "after": side(false) },
+            ],
+        });
+        std::fs::create_dir_all(sidecar_dir(job.path())).unwrap();
+        std::fs::write(journal_path(job.path()), serde_json::to_vec(&v1).unwrap()).unwrap();
+
+        let mut journal = load_for(job.path(), CHAPTER);
+        assert_eq!(journal.version, JOURNAL_VERSION);
+        let shape: Vec<_> = journal.entries.iter()
+            .map(|entry| (entry.seq, entry.label.as_str(), entry.page, entry.undone))
+            .collect();
+        assert_eq!(shape, [
+            (1, "e1", Some(0), false),
+            (2, CLEAN_BATCH_LABEL, Some(0), false),
+            (5, CLEAN_BATCH_LABEL, Some(1), false),
+            (3, DETECT_LABEL, Some(0), true),
+            (6, DETECT_LABEL, Some(1), true),
+            (4, "e4", Some(1), true),
+        ]);
+        assert_eq!(journal.entries[1].parts.iter().map(|part| part.region_id.clone()).collect::<Vec<_>>(), [on(0, 2), on(0, 4)]);
+        assert_eq!((journal.entries[2].region_id.clone(), journal.entries[2].parts.len()), (on(1, 3), 0));
+        assert_eq!(journal.entries[3].pages[0].source_idx, 1, "source 1 is page 0");
+        assert_eq!(journal.entries[4].pages[0].source_idx, 0);
+        assert_eq!((journal.cursor, journal.next_seq), (3, 7));
+
+        // Each page steers by its own marks, never by the cursor.
+        assert_eq!(journal.undo(0).unwrap().seq, 2);
+        assert_eq!(journal.next(1, "redo").unwrap().seq, 6);
+        save(job.path(), &journal).unwrap();
+        let read = load_for(job.path(), CHAPTER);
+        assert_eq!(read.entries, journal.entries, "version 2 reads back as written");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A Detect run over two pages records a step on each, and its later
+    /// write of a page joins that page's step.
+    #[test]
+    fn a_runs_pages_over_two_pages_are_a_step_on_each() {
+        use cleaner_core::project::DetectedRegion;
+        let (root, mut job) = two_page_job("group-pages");
+        let detection = |id: &str, source_idx: usize| DetectedRegion {
+            id: id.into(), source_idx, bbox: cleaner_core::mask::Rect::new(4, 6, 12, 12), mask_ref: String::new(),
+            inside: true, balloon_color: None, script: None, pick: "fill".into(), detector: "local".into(),
+            created: 0, mask_sha256: String::new(), order: 0, review_state: None, fit: None, group: None,
+            padding_px: 0, padding_from_seed: false,
+        };
+        let before = capture_pages(&job, &[0, 1]);
+        job.project.detections.push(detection("chapter-p002-d1", 0));
+        job.project.detections.push(detection("chapter-p001-d1", 1));
+        record_pages(&job, CHAPTER, DETECT_LABEL, Some("run-1"), before);
+        let before = capture_pages(&job, &[1]);
+        job.project.detections.push(detection("chapter-p001-d2", 1));
+        record_pages(&job, CHAPTER, DETECT_LABEL, Some("run-1"), before);
+
+        let mut journal = load_for(job.path(), CHAPTER);
+        let shape: Vec<_> = journal.entries.iter()
+            .map(|entry| (entry.page, entry.pages.iter().map(|step| step.source_idx).collect::<Vec<_>>()))
+            .collect();
+        assert_eq!(shape, [(Some(1), vec![0]), (Some(0), vec![1])]);
+        assert_eq!(journal.undo(0).unwrap().pages[0].source_idx, 1);
+        assert!(journal.undo(0).is_none(), "page 0's part is one step");
+        assert!(!journal.entries[0].undone);
+        save(job.path(), &journal).unwrap();
+
+        // Without a group, an edit of two pages is a step on each too.
+        let before = capture_pages(&job, &[0, 1]);
+        job.project.detections.clear();
+        record_pages(&job, CHAPTER, DELETE_DETECTION_LABEL, None, before);
+        let journal = load_for(job.path(), CHAPTER);
+        assert_eq!(journal.entries.iter().filter(|entry| entry.label == DELETE_DETECTION_LABEL).count(), 2);
+        assert_eq!(labels(&journal).len(), 3, "the push on page 0 dropped page 0's undone step");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// A stored value this build cannot use is the default, not an error and
@@ -1454,7 +1954,7 @@ mod tests {
                         after: real.entries[0].after.clone(), ..Default::default() };
                     let started = std::time::Instant::now();
                     let mut journal = load(&job);
-                    journal.push(entry, limit);
+                    journal.push(CHAPTER, entry, limit);
                     save(&job, &journal).unwrap();
                     started.elapsed().as_secs_f64() * 1000.0
                 })
@@ -1477,7 +1977,7 @@ mod tests {
         let job = dir.join("chapter.mtclean");
 
         let mut journal = Journal::default();
-        journal.push(delta("masks.command.deleteMask", "r1"), UNDO_LIMIT_DEFAULT);
+        push(&mut journal, "masks.command.deleteMask", "r1");
         save(&job, &journal).unwrap();
 
         let read = load(&job);

@@ -118,7 +118,7 @@ describe('regional copies', () => {
     editor.pageIndex = 0
     editor.history = createHistory()
     editor.toolParams.cloneStamp = { ...previous, mode: 'region', feather: 12, edgeOpacity: 65, size: 40 }
-    const api = backend({ historyPush: vi.fn(async ({ entry }) => ({ cursor: 1, entries: [{ seq: 1, label: entry.label }] })) })
+    const api = backend({ historyPush: vi.fn(async ({ entry }) => ({ cursor: 1, entries: [{ seq: 1, label: entry.label, page: 0 }] })) })
     setBackend(api)
     beginDraft({ tool: 'cloneStamp', kind, pageId: 'c1-p001', points: [{ x: 10, y: 10 }, { x: 40, y: 10 }, { x: 30, y: 40 }], bbox: { x: 10, y: 10, w: 30, h: 30 }, mode: 'add', keyboard: false, moved: true })
     try {
@@ -134,7 +134,7 @@ describe('regional copies', () => {
         expect(request.params.stroke).toBeUndefined()
       }
       await settled(editor.history)
-      expect(canUndo(editor.history)).toBe(true)
+      expect(canUndo(editor.history, 0)).toBe(true)
     } finally { editor.toolParams.cloneStamp = previous }
   })
 })
@@ -210,7 +210,7 @@ function cloudStroke({
   const journal = { entries: [], cursor: 0 }
   const view = () => ({
     cursor: journal.cursor,
-    entries: journal.entries.map((entry, index) => ({ seq: index + 1, label: entry.label })),
+    entries: journal.entries.map((entry, index) => ({ seq: index + 1, label: entry.label, page: 0 })),
   })
   const adapter = backend({
     historyPush: vi.fn(async ({ entry }) => {
@@ -644,7 +644,7 @@ describe('the AI mask brush stroke', () => {
     await settled(editor.history)
     expect(labels()).toEqual(['canvas.command.drawMask', 'canvas.command.drawMask'])
     expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: RENDERED_MASK })
-    expect(canRedo(editor.history)).toBe(false)
+    expect(canRedo(editor.history, 0)).toBe(false)
     const moves = adapter.historyMove.mock.calls.length
     await step(redo)
     expect(adapter.historyMove).toHaveBeenCalledTimes(moves)
@@ -654,7 +654,7 @@ describe('the AI mask brush stroke', () => {
     expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: SEED_MASK })
     await step(undo)
     expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK })
-    expect(canUndo(editor.history)).toBe(false)
+    expect(canUndo(editor.history, 0)).toBe(false)
     await step(redo)
     expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: SEED_MASK })
     await step(redo)
@@ -678,7 +678,7 @@ describe('the AI mask brush stroke', () => {
     expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: SEED_MASK })
     await step(undo)
     expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK })
-    expect(canUndo(editor.history)).toBe(false)
+    expect(canUndo(editor.history, 0)).toBe(false)
     await step(redo)
     expect(masks()).toEqual({ [BYSTANDER_ID]: BYSTANDER_MASK, [SEED_ID]: SEED_MASK })
     await step(redo)
@@ -1670,7 +1670,7 @@ describe('the eraser stroke', () => {
     editor.selectionId = 'c1-p001-h2'
     /** @type {{entries: any[], cursor: number}} */
     const journal = { entries: [], cursor: 0 }
-    const view = () => ({ cursor: journal.cursor, entries: journal.entries.map((entry, index) => ({ seq: index + 1, label: entry.label })) })
+    const view = () => ({ cursor: journal.cursor, entries: journal.entries.map((entry, index) => ({ seq: index + 1, label: entry.label, page: 0 })) })
     const adapter = backend({
       historyPush: vi.fn(async ({ entry }) => {
         journal.entries.length = journal.cursor
@@ -1744,7 +1744,7 @@ describe('the eraser stroke', () => {
       const adapter = backend({
         historyPush: vi.fn(async ({ entry }) => {
           pushed.push(structuredClone(entry))
-          return { cursor: 1, entries: [{ seq: 1, label: entry.label }] }
+          return { cursor: 1, entries: [{ seq: 1, label: entry.label, page: 0 }] }
         }),
         loadPages: vi.fn(async () => []),
         erasePaint: vi.fn(async () => ({

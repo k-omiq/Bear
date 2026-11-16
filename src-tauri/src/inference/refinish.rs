@@ -67,6 +67,9 @@ pub(crate) trait LocalRender {
     /// The guidance the next FLUX render is worded with: the one the result
     /// was made with, so the model is asked what it answered before.
     fn set_flux_guidance(&mut self, _guidance: Option<cleaner_core::engines::render::QwenEdit>) {}
+    /// The seed the next FLUX render asks at: the one the result was made at
+    /// (`None` for one recorded before seeds were, made at the base seed).
+    fn set_flux_seed(&mut self, _seed: Option<u64>) {}
 }
 
 impl LocalRender for crate::region::LocalModels {
@@ -81,6 +84,10 @@ impl LocalRender for crate::region::LocalModels {
 
     fn set_flux_guidance(&mut self, guidance: Option<cleaner_core::engines::render::QwenEdit>) {
         crate::region::LocalModels::set_flux_guidance(self, guidance);
+    }
+
+    fn set_flux_seed(&mut self, seed: Option<u64>) {
+        crate::region::LocalModels::set_flux_seed(self, seed);
     }
 }
 
@@ -398,6 +405,7 @@ impl Reopened {
                 if *engine == Engine::Flux {
                     models.set_flux_guidance(self.record.provenance.params_snapshot.get("qwen_edit")
                         .and_then(|edit| serde_json::from_value(edit.clone()).ok()));
+                    models.set_flux_seed(crate::variations::recorded_flux_seed(&self.record));
                 }
                 let made = models
                     .render(*engine, &self.cloud.input.image, &self.cloud.fitted, choice,

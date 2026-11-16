@@ -63,6 +63,7 @@ const stores = vi.hoisted(() => ({
     cleanTarget: 'local',
     cleanLocalFirst: false,
     cleanSolidOnly: false,
+    generationsPerRegion: 1,
     cloudWorkLongSide: 768,
     analysisTargets: { rtFull: 'local', samTs: 'local' },
     /** @type {'normal'|'advanced'} */
@@ -94,6 +95,7 @@ const stores = vi.hoisted(() => ({
   cloud: { checked: true, configured: true, readiness: null },
   openCloudSettings: vi.fn(),
   saveCloudWorkLongSide: vi.fn(async () => true),
+  saveGenerationsPerRegion: vi.fn(async () => true),
   /** @type {Array<{value: string, choice: any}>|null} Every profile's cloud entry, when a test lists them. */
   cloudEntries: null,
   pickCloudChoice: vi.fn(async () => true),
@@ -169,6 +171,7 @@ vi.mock('../state/cloud.svelte.js', () => ({
   cloudEntries: () => stores.cloudEntries,
   pickCloudChoice: stores.pickCloudChoice,
   saveCloudWorkLongSide: stores.saveCloudWorkLongSide,
+  saveGenerationsPerRegion: stores.saveGenerationsPerRegion,
 }))
 
 // Imported after the mocks so the component picks the stubs up.
@@ -2246,5 +2249,78 @@ describe('the shell between pill and panel', () => {
     await fireEvent.pointerDown(name, { button: 0, pointerId: 2, clientX: 100, clientY: 70 })
     await fireEvent.pointerMove(shell(view), { pointerId: 2, clientX: 140, clientY: 90 })
     expect(stores.setWindowBox).toHaveBeenCalledWith('tool', { x: 56, y: 82 })
+  })
+})
+
+/**
+ * Generations per region, next to Clean on: 1 to 8, saved where the native
+ * run reads it, and disabled at 1 with its reason where the run's engine
+ * makes one (a run here whose picks answer one way).
+ */
+describe('Generations per region', () => {
+  afterEach(() => {
+    /** @type {any} */ (stores.capabilities).nanoBanana = false
+    stores.session.cleanTarget = 'local'
+    stores.session.generationsPerRegion = 1
+  })
+
+  /** @param {import('@testing-library/svelte').RenderResult} view */
+  const control = (view) => /** @type {HTMLSelectElement|null} */ (view.container.querySelector('[data-run-row="generations"] select'))
+  /** @param {import('@testing-library/svelte').RenderResult} view */
+  const note = (view) => view.container.querySelector('[data-generations-note]')?.textContent?.trim()
+
+  it('offers 1 to 8, starts at 1, and saves a change', async () => {
+    const { view } = mountTool(textCleanup, { step: 'clean', bubbleEngine: 'flux', outsideEngine: 'lama' })
+    const select = /** @type {HTMLSelectElement} */ (control(view))
+    expect([...select.options].map((option) => option.value)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8'])
+    expect(select.value).toBe('1')
+    expect(select.disabled).toBe(false)
+    expect(note(view)).toBe(t('tools.target.generationsHint'))
+    await fireEvent.change(select, { target: { value: '3' } })
+    expect(stores.saveGenerationsPerRegion).toHaveBeenCalledWith(3)
+  })
+
+  it('is drawn for Clean and Detect & clean, not for Detect', () => {
+    for (const [step, drawn] of /** @type {const} */ ([['clean', true], ['auto', true], ['detect', false]])) {
+      const { view } = mountTool(textCleanup, { step })
+      expect(Boolean(control(view)), step).toBe(drawn)
+      cleanup()
+    }
+  })
+
+  it('is disabled at 1 with its reason where the run makes one', () => {
+    stores.session.generationsPerRegion = 4
+    for (const [cleanTarget, picks, reason] of /** @type {const} */ ([
+      ['local', { bubbleEngine: 'fill', outsideEngine: 'lama' }, 'tools.target.generationsOneWay'],
+    ])) {
+      stores.session.cleanTarget = cleanTarget
+      const { view } = mountTool(textCleanup, { step: 'clean', ...picks })
+      const select = /** @type {HTMLSelectElement} */ (control(view))
+      expect(select.disabled, cleanTarget).toBe(true)
+      expect(select.value, cleanTarget).toBe('1')
+      expect(note(view), cleanTarget).toBe(t(reason))
+      expect(select.getAttribute('aria-describedby')).toBeTruthy()
+      cleanup()
+    }
+  })
+
+  it('is open for a Nano Banana batch, a cloud GPU run and a FLUX pick here, showing the saved count', () => {
+    /** @type {any} */ (stores.capabilities).nanoBanana = true
+    stores.session.generationsPerRegion = 4
+    for (const [cleanTarget, picks] of /** @type {const} */ ([
+      ['nanoBanana', { bubbleEngine: 'fill', outsideEngine: 'lama' }],
+      // Every region of a cloud GPU run is rendered there, a LaMa pick too.
+      ['cloud', { bubbleEngine: 'fill', outsideEngine: 'lama' }],
+      ['cloud', { bubbleEngine: 'flux', outsideEngine: 'flux' }],
+      ['local', { bubbleEngine: 'fill', outsideEngine: 'flux' }],
+    ])) {
+      stores.session.cleanTarget = cleanTarget
+      const { view } = mountTool(textCleanup, { step: 'clean', ...picks })
+      const select = /** @type {HTMLSelectElement} */ (control(view))
+      expect(select.disabled, cleanTarget).toBe(false)
+      expect(select.value, cleanTarget).toBe('4')
+      expect(note(view), cleanTarget).toBe(t('tools.target.generationsHint'))
+      cleanup()
+    }
   })
 })

@@ -19,6 +19,12 @@
    * Every value is the proposal's own (`prepare_cloud_clean`), fixed when the
    * dialog mounts, except the endpoint's address, which is the readiness the
    * flow read just before preparing.
+   *
+   * At more than one generation per region the plan sends every region that
+   * many times, and the dialog says so with the count of renders, which the
+   * pixels, GPU time and cost range already count. It is then asked even in a
+   * project whose standing consent covers the statements (`standing`): those
+   * are hidden and the native side supplies them, but the renders are shown.
    */
   import { untrack } from 'svelte'
   import { Button, Modal } from '../ui/index.js'
@@ -36,12 +42,15 @@
   const titleKey = untrack(() => spec?.titleKey ?? 'cloud.clean.title')
   const actions = untrack(() => spec?.actions ?? [])
 
-  let rights = $state(false)
-  let retention = $state(false)
+  const standing = proposal.standing === true
+  let rights = $state(standing)
+  let retention = $state(standing)
 
   const numbers = new Intl.NumberFormat()
   const count = (value) => (Array.isArray(value) ? value.length : Number.isFinite(value) ? Number(value) : 0)
   const regions = count(proposal.regions ?? proposal.regionIds)
+  const generations = Math.max(1, count(proposal.generations))
+  const renders = count(proposal.renders) || regions * generations
   const pages = count(proposal.pages)
   const mixed = proposal.execution === 'mixed'
   const localCandidates = count(proposal.localCandidates)
@@ -70,8 +79,10 @@
     if (id === 'confirm') {
       if (!rights || !retention) return
       // The plan shown is the plan agreed to: the native side mints a grant
-      // only for this digest.
-      closeModal({ rightsAttested: rights, retentionAcknowledged: retention, planDigest: digest })
+      // only for this digest. A standing project's statements are the native
+      // side's to supply.
+      closeModal({ rightsAttested: standing ? false : rights, retentionAcknowledged: standing ? false : retention,
+        planDigest: digest })
     } else {
       closeModal(id)
     }
@@ -96,6 +107,14 @@
           })}
         </dd>
       </div>
+      {#if generations > 1}
+        <div class="fact">
+          <dt>{t('cloud.clean.generations')}</dt>
+          <dd data-fact="generations" data-renders={renders}>
+            {t('cloud.clean.generationsValue', { generations, renders: numbers.format(renders) })}
+          </dd>
+        </div>
+      {/if}
       <div class="fact">
         <dt>{t('cloud.clean.execution')}</dt>
         <dd data-fact="execution" data-execution={mixed ? 'mixed' : 'cloud'}>
@@ -168,18 +187,20 @@
       </div>
     </dl>
 
-    <div class="answers">
-      <div class="answer">
-        <input id="{uid}-rights" type="checkbox" bind:checked={rights} />
-        <label for="{uid}-rights">{t('cloud.analysis.rights')}</label>
+    {#if !standing}
+      <div class="answers">
+        <div class="answer">
+          <input id="{uid}-rights" type="checkbox" bind:checked={rights} />
+          <label for="{uid}-rights">{t('cloud.analysis.rights')}</label>
+        </div>
+        <div class="answer">
+          <input id="{uid}-retention" type="checkbox" bind:checked={retention} />
+          <label for="{uid}-retention">{t('cloud.analysis.retention')}</label>
+        </div>
       </div>
-      <div class="answer">
-        <input id="{uid}-retention" type="checkbox" bind:checked={retention} />
-        <label for="{uid}-retention">{t('cloud.analysis.retention')}</label>
-      </div>
-    </div>
 
-    <p class="project" data-fact="project">{t('cloud.projectConsent')}</p>
+      <p class="project" data-fact="project">{t('cloud.projectConsent')}</p>
+    {/if}
     {#if expires}<p class="expires">{t('cloud.analysis.consent.expires', { time: expires })}</p>{/if}
   </div>
 

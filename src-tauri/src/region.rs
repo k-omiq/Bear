@@ -782,7 +782,7 @@ impl Bench {
         // Unreadable is the default, as an unreadable finishing is above.
         let nano_banana_finishing = settings.as_ref()
             .and_then(|settings| crate::inference::nano_banana_finishing::from_settings(settings).ok())
-            .unwrap_or_default();
+            .unwrap_or(cleaner_core::engines::postprocess::Choice::SETTING_DEFAULT);
         let nano_banana_show_crops = settings.as_ref()
             .and_then(|settings| settings.get(crate::inference::nano_banana_crop::SHOW_KEY))
             .and_then(serde_json::Value::as_bool)
@@ -945,6 +945,14 @@ pub(crate) struct LocalFlux {
     /// family ([`cleaner_core::sidecar::models::Recipe::prompt_for`]). `None`
     /// renders with the recipe's own words.
     guidance: Option<QwenEdit>,
+    /// The seed the next renders ask at. `None` is [`flux::SEED`], a first
+    /// clean's; Try again on a FLUX result asks at the region's next one
+    /// ([`crate::variations::next_flux_seed`]), so it is a new variation.
+    seed: Option<u64>,
+    /// A stand-in for the helper in tests: the pixels it answers a crop with
+    /// at a seed, or the refusal. The rest of [`LocalFlux::render`] is as it is.
+    #[cfg(test)]
+    pub(crate) test_render: Option<fn(&Raster, &Fitted, u64) -> Result<Raster, &'static str>>,
 }
 
 impl LocalFlux {
@@ -971,11 +979,29 @@ impl LocalFlux {
         self.guidance.as_ref()
     }
 
+    /// The seed the next renders ask at; `None` is the base seed.
+    pub(crate) fn set_seed(&mut self, seed: Option<u64>) {
+        self.seed = seed;
+    }
+
+    pub(crate) fn seed(&self) -> u64 {
+        self.seed.unwrap_or(flux::SEED)
+    }
+
+    /// The seed as it was set, `None` for the base one, to put back after a
+    /// run's further generations asked at others.
+    pub(crate) fn seed_setting(&self) -> Option<u64> {
+        self.seed
+    }
+
     /// What a FLUX patch records beyond a rung's usual fields. The guidance
     /// goes where a cloud patch keeps its own (`params_snapshot.qwen_edit`),
     /// so the dialog opens with it the next time.
     pub(crate) fn record(&mut self, snapshot: &mut serde_json::Value) {
         snapshot["flux_model"] = serde_json::json!(self.model());
+        // What tells one FLUX answer of this region from another
+        // (`variations.rs`), and what a change of its finishing asks again at.
+        snapshot[crate::variations::FLUX_SEED_KEY] = serde_json::json!(self.seed());
         if let Some(tone) = self.tone.take() {
             snapshot["tone"] = tone.provenance();
         }
@@ -1041,6 +1067,21 @@ impl LocalFlux {
         if self.surrendered {
             return Err("decline.reason.rungUnavailable");
         }
+        #[cfg(test)]
+        if let Some(fake) = self.test_render {
+            return Ok(run::Made {
+                engine: Engine::Flux,
+                mask: fitted.mask.clone(),
+                ink: fitted.ink.clone(),
+                pixels: fake(page, fitted, self.seed())?,
+                provider: Some("test".to_owned()),
+                model_sha256: None,
+                pad: cleaner_core::strip::EdgePad::None,
+                tiles: None,
+                matched: None,
+                tone: None,
+            });
+        }
         let env_var = std::env::var("MANGA_CLEANER_SIDECAR").ok();
         let explicit = self
             .sidecar_override
@@ -1080,8 +1121,9 @@ impl LocalFlux {
             };
             self.key = Some(key);
         }
+        let seed = self.seed();
         let inpainter = self.held.as_mut().expect("just opened");
-        let rendered = inpainter.render_guided(page, fitted, finishing, self.guidance.as_ref());
+        let rendered = inpainter.render_seeded(page, fitted, finishing, self.guidance.as_ref(), seed);
         if inpainter.gone() {
             // Dropped, which ends the child: the next region opens another.
             self.held = None;
@@ -1141,6 +1183,12 @@ impl LocalModels {
     /// asks the model the words it answered before.
     pub(crate) fn set_flux_guidance(&mut self, guidance: Option<QwenEdit>) {
         self.0.rung2.flux.set_guidance(guidance);
+    }
+
+    /// The seed a FLUX result was made at, so a change of its finishing asks
+    /// the model at the seed it answered at.
+    pub(crate) fn set_flux_seed(&mut self, seed: Option<u64>) {
+        self.0.rung2.flux.set_seed(seed);
     }
 
     /// `fitted` on `page` rendered by `engine`, LaMa or FLUX on this computer,
@@ -1372,6 +1420,91 @@ pub(crate) fn clean_for_nano_banana_batch(
     })
 }
 
+/// What one further generation of a region a Nano Banana batch cleaned came
+/// to ([`variation_for_nano_banana_batch`]).
+pub(crate) enum BatchVariation {
+    /// A new answer, kept as one of the region's variations.
+    Kept,
+    /// An answer the region already had: no new variation.
+    Repeated,
+    /// The region is no longer the Nano Banana result the batch made: nothing
+    /// was sent.
+    Gone,
+    /// Not made, and why, as a `decline.reason.*` key.
+    Refused(&'static str),
+}
+
+/// Ask Nano Banana once more for `region_id`, a region this batch has just
+/// cleaned, under `granted` (a share of its own), as Try again asks, and keep
+/// the answer as a variation only: the region's first answer is put back as
+/// its live result exactly as it was, so the batch's undo step and the page
+/// are what they are at one generation, and nothing is journaled.
+pub(crate) fn variation_for_nano_banana_batch(
+    app: &tauri::AppHandle,
+    library: &Library,
+    region_id: &str,
+    granted: &crate::inference::nano_banana::Granted,
+) -> Result<BatchVariation, String> {
+    let Some(located) = locate_region(library, region_id)? else { return Ok(BatchVariation::Gone) };
+    let first = {
+        let _lock = run::lock_job(&located.job_path)?;
+        let job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
+        job.project.patches.iter()
+            .find(|row| row.id == region_id && row.visible && row.provenance.engine == Engine::NanoBanana
+                && row.geometry_policy == GeometryPolicy::Legacy)
+            .cloned()
+    };
+    let Some(first) = first else { return Ok(BatchVariation::Gone) };
+    let Some((current, _, current_bbox, _)) = rerun_current(&located, region_id, "retry")? else {
+        return Ok(BatchVariation::Gone);
+    };
+    let plan = Plan {
+        expected_source: None,
+        region_id: region_id.to_owned(),
+        geometry: Geometry::Stored,
+        choice: Choice::Exact(current),
+        source: existing_source(&located, region_id)?,
+        tool: existing_tool(&located, region_id)?,
+        fill_mode: None,
+        solid_color: None,
+        clears_untouched: false,
+        paint: None,
+        requested: Some(current_bbox),
+        stroke: None,
+        drawn: None,
+        qwen_edit: None,
+        try_again: true,
+    };
+    let mut bench = Bench::open(app);
+    let stored = crate::settings::read(app).ok()
+        .and_then(|s| s.get("engineCeiling").and_then(|v| v.as_str()).map(str::to_owned));
+    let ceiling = run::effective_ceiling(None, stored.as_deref());
+    bench.nano_banana = Some(granted.clone());
+    let outcome = edit_with_bench(&mut bench, ceiling, &located, plan);
+    bench.nano_banana = None;
+    let made = match outcome? {
+        Outcome::Cleaned(_) => true,
+        Outcome::Refused(reason) => return Ok(BatchVariation::Refused(reason)),
+        Outcome::NotFound => return Ok(BatchVariation::Gone),
+    };
+    // The first answer goes back on the page, whatever the new one was.
+    let _lock = run::lock_job(&located.job_path)?;
+    let mut job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
+    let repeated = made && crate::variations::repeats_an_answer(&job.project, region_id);
+    let order = first.order;
+    if !job.restore_legacy_row(&first).map_err(|e| e.to_string())? {
+        return Err(format!("the first answer of {region_id} could not be put back"));
+    }
+    if let Some(live) = job.project.patches.iter_mut().find(|row| row.id == region_id) {
+        live.visible = true;
+        live.order = order;
+    }
+    job.flush().map_err(|e| e.to_string())?;
+    crate::underlay::refresh_dependencies(&mut job, region_id)?;
+    crate::library::invalidate_manifest_cache(&located.job_path);
+    Ok(if repeated { BatchVariation::Repeated } else { BatchVariation::Kept })
+}
+
 /// The Nano Banana grant a request carries, if it carries one.
 fn nano_banana_grant_in(params: &serde_json::Value) -> Option<&str> {
     params.get("nanoBananaGrant").and_then(|value| value.as_str())
@@ -1594,6 +1727,12 @@ fn edit_with_bench_render(
         .iter()
         .find(|record| record.id == plan.region_id)
         .cloned();
+    // A FLUX render of a region that has answers from this model already asks
+    // at a seed it has not had, so Try again is a new variation and not the
+    // answer it has. A first clean asks at the base seed.
+    bench.rung2.flux.set_seed(existing.as_ref().map(|_| {
+        crate::variations::next_flux_seed(&job.project, &plan.region_id, bench.rung2.flux.model())
+    }));
     let detection = match plan.geometry {
         Geometry::StoredDetection => {
             match job.load_detection(&plan.region_id).map_err(|e| e.to_string())? {
@@ -5758,6 +5897,9 @@ fn erase_paint_at(
             // again (`Job::set_patch_visible`).
             job.set_patch_visible(&record.id, false).map_err(|e| e.to_string())?;
         } else {
+            // A LaMa answer is named by the hole it was rendered through, so
+            // that is kept before the mask loses the stroke.
+            crate::variations::pin_lama_hole(&mut patch.provenance);
             patch.provenance.mask_sha256 = run::mask_digest(&patch.mask);
             let review = record.review_state.clone();
             if display {
@@ -7189,8 +7331,15 @@ fn rerun_mask_at(
     };
     match apply(&located, plan)? {
         Outcome::Cleaned(edited) => {
+            // Nano Banana samples by itself, and can answer with an answer
+            // the region already has: no new variation, and said so.
+            let repeated = target == Engine::NanoBanana && {
+                let _lock = run::lock_job(&located.job_path)?;
+                Job::open(&located.job_path)
+                    .is_ok_and(|job| crate::variations::repeats_an_answer(&job.project, &region_id))
+            };
             crate::events::notice(
-                rerun_notice(kind),
+                if repeated { crate::variations::SAME_ANSWER_NOTICE } else { rerun_notice(kind) },
                 match fill_mode {
                     Some(mode) => serde_json::json!({ "fillModeKey": fill_mode_label(mode) }),
                     None => serde_json::json!({ "rungKey": target.rung_key() }),
@@ -7268,8 +7417,16 @@ fn tool_label_key(tool: &str) -> &'static str {
     }
 }
 
+/// Try again runs what ran, so not a paint or clone stroke, which has no
+/// gesture to replay. Try again wider is LaMa's alone: LaMa answers one hole
+/// one way, and a wider hole is its only way to another result. The engines
+/// that answer differently each time are tried again as they are.
 fn retry_allowed(kind: &str, current: Engine) -> bool {
-    !matches!(kind, "retry" | "retryWider") || !matches!(current, Engine::Paint | Engine::Clone)
+    match kind {
+        "retry" => !matches!(current, Engine::Paint | Engine::Clone),
+        "retryWider" => current == Engine::Lama,
+        _ => true,
+    }
 }
 
 /// Read the committed patch before either the local or cloud re-run route.
@@ -7941,14 +8098,15 @@ mod tests {
         let (root, library, located, region_id) = a_nano_banana_layer("rerun-nano-banana");
         let book = Book::new(IDLE);
         let before = Job::open(&located.job_path).unwrap().project.patches.clone();
-        for kind in ["retry", "retryWider"] {
+        // Try again wider is LaMa's alone: on this layer it plans nothing.
+        for (kind, plans) in [("retry", Some(true)), ("retryWider", None)] {
             let mut asked = None;
             assert!(rerun_mask_at(&library, None, &region_id, kind, None, serde_json::Value::Null, |located, plan| {
                 // Try again keeps the layer's recorded finishing.
                 asked = Some(plan.choice == Choice::Exact(Engine::NanoBanana) && plan.try_again);
                 edit_with_consent(&mut test_bench(&root), Engine::Fill, located, plan, true, None, &book)
             }).unwrap().is_none(), "{kind}");
-            assert_eq!(asked, Some(true), "{kind}");
+            assert_eq!(asked, plans, "{kind}");
         }
         // No app here, so no sidecar: Stronger and Simpler land on LaMa.
         for (kind, engine) in [("stronger", None), ("simpler", None), ("engine", Some("nanobanana"))] {
@@ -8143,6 +8301,40 @@ mod tests {
         }
     }
 
+    /// Try again wider is LaMa's alone. On any other engine's patch it
+    /// answers nothing and runs nothing, and plain Try again still runs.
+    #[test]
+    fn retry_wider_is_refused_on_every_engine_but_lama() {
+        let raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        for engine in [Engine::Fill, Engine::Screentone, Engine::Flux, Engine::NanoBanana] {
+            let (_root, library, located) = command_fixture(&format!("wider-{engine:?}"), &raw);
+            let region_id = format!("{}-p001-h1", located.chapter_id);
+            let bounds = Rect::new(20, 20, 8, 8);
+            let mask = Mask::filled(bounds);
+            let mut pixels = raw.clone();
+            pixels.width = bounds.w;
+            pixels.height = bounds.h;
+            pixels.data = vec![255; 64 * raw.mode.samples()];
+            let patch = Patch {
+                id: region_id.clone(), mask: mask.clone(), ink: mask, pixels,
+                order: 0, visible: true,
+                provenance: Provenance {
+                    engine, engine_version: "fixture".into(), model_sha256: None,
+                    execution_provider: "cpu".into(), params_snapshot: serde_json::json!({}),
+                    mask_sha256: String::new(), source_sha256: String::new(),
+                    cloud: None, created: 0,
+                },
+            };
+            Job::open(&located.job_path).unwrap().complete_region(0, &patch, None).unwrap();
+            assert!(rerun_mask_at(&library, None, &region_id, "retryWider", None,
+                serde_json::Value::Null, |_, _| panic!("retryWider ran on {engine:?}"))
+                .unwrap().is_none());
+            assert!(!retry_allowed("retryWider", engine));
+            assert!(retry_allowed("retry", engine));
+        }
+        assert!(retry_allowed("retryWider", Engine::Lama));
+    }
+
     /// The two Try agains differ in one thing, the hole: same rung, same
     /// stored geometry, and only `retryWider` asks for the stored mask.
     #[test]
@@ -8218,6 +8410,52 @@ mod tests {
         bench.rung2.flux.record(&mut snapshot);
         assert!(snapshot.get("qwen_edit").is_none(), "an older render's guidance outlived it");
         assert!(snapshot["flux_model"].is_string());
+    }
+
+    /// A first clean asks local FLUX at the base seed, as it always has. An
+    /// edit of a region that already has FLUX answers from the model asks at
+    /// the base seed plus how many it has, and the patch records the seed it
+    /// was asked at.
+    #[test]
+    fn a_flux_rerun_asks_at_the_next_seed_and_a_first_clean_at_the_base_one() {
+        let raw = cleaner_core::image::fixtures::by_name("l8").raster;
+        let (root, located) = edit_fixture("flux-seed", &raw);
+        let bounds = Rect::new(22, 18, 8, 8);
+        let mut bench = test_bench(&root);
+        let id = format!("{}-p001-h1", located.chapter_id);
+        let plan = fixture_plan(&id, Geometry::Painted(Mask::filled(bounds)), Engine::Fill, bounds);
+        let _ = edit_with_bench(&mut bench, Engine::Fill, &located, plan).unwrap();
+        assert_eq!(bench.rung2.flux.seed(), flux::SEED, "a first clean keeps the base seed");
+        let mut snapshot = serde_json::json!({});
+        bench.rung2.flux.record(&mut snapshot);
+        assert_eq!(snapshot[crate::variations::FLUX_SEED_KEY], serde_json::json!(flux::SEED));
+
+        // Two answers of this model, one finished again, and one of another model.
+        let model = bench.rung2.flux.model().to_owned();
+        let mut job = Job::open(&located.job_path).unwrap();
+        for (seed, fill, flux_model) in [(flux::SEED, 10u8, model.as_str()), (flux::SEED, 11, model.as_str()),
+            (flux::SEED + 1, 12, model.as_str()), (flux::SEED, 13, "another-model")] {
+            let mut pixels = raw.clone();
+            pixels.width = bounds.w;
+            pixels.height = bounds.h;
+            pixels.data = vec![fill; 64 * raw.mode.samples()];
+            let mask = Mask::filled(bounds);
+            job.complete_region(0, &Patch {
+                id: id.clone(), mask: mask.clone(), ink: mask, pixels, order: 0, visible: true,
+                provenance: Provenance {
+                    engine: Engine::Flux, engine_version: "fixture".into(), model_sha256: None,
+                    execution_provider: "cpu".into(),
+                    params_snapshot: serde_json::json!({ "flux_model": flux_model, "flux_seed": seed }),
+                    mask_sha256: String::new(), source_sha256: String::new(), cloud: None, created: 0,
+                },
+            }, None).unwrap();
+        }
+        drop(job);
+        let plan = fixture_plan(&id, Geometry::Painted(Mask::filled(bounds)), Engine::Fill, bounds);
+        let _ = edit_with_bench(&mut bench, Engine::Fill, &located, plan).unwrap();
+        assert_eq!(bench.rung2.flux.seed(), flux::SEED + 2);
+        bench.rung2.flux.record(&mut snapshot);
+        assert_eq!(snapshot[crate::variations::FLUX_SEED_KEY], serde_json::json!(flux::SEED + 2));
     }
 
     #[test]
@@ -9779,6 +10017,12 @@ mod tests {
         assert_eq!(holes, expected);
         assert!(expected[0] > lettering.count() && expected[1] > expected[0], "the hole did not grow: {expected:?}");
         assert_eq!(expected[2], expected[1], "plain Try again moved the hole: {expected:?}");
+        // The first clean and each wider hole are the region's variations;
+        // the plain repeat of the last hole is that hole's answer again.
+        let job = Job::open(&located.job_path).unwrap();
+        let listed = crate::variations::list(&job.project, "w");
+        assert_eq!(listed.iter().map(|variation| (variation.engine, variation.current)).collect::<Vec<_>>(),
+            [("lama", false), ("lama", false), ("lama", true)]);
     }
 
     #[test]
@@ -12169,11 +12413,11 @@ mod tests {
             assert_eq!(committed.sample(tx,ty,0),visible.sample(sx,ty,0),"clone orientation {value}");
             let record=job.project.patches[0].clone();let mut journal=crate::history::Journal::default();
             let state=crate::history::Side{present:true,page_status:Some("cleaned".into()),region:None};
-            journal.push(crate::history::NewDelta{label:"clone".into(),op:"region-state".into(),region_id:record.id.clone(),before:crate::history::Side{present:false,page_status:Some("unclean".into()),region:None},after:state, ..Default::default() },crate::history::UNDO_LIMIT_DEFAULT);
+            journal.push("chapter",crate::history::NewDelta{label:"clone".into(),op:"region-state".into(),region_id:record.id.clone(),page:Some(0),before:crate::history::Side{present:false,page_status:Some("unclean".into()),region:None},after:state, ..Default::default() },crate::history::UNDO_LIMIT_DEFAULT);
             crate::history::save(job.path(),&journal).unwrap();let mut recovered=crate::history::load(job.path());
-            assert_eq!(recovered.undo().unwrap().region_id,record.id);job.project.patches[0].visible=false;job.flush().unwrap();
+            assert_eq!(recovered.undo(0).unwrap().region_id,record.id);job.project.patches[0].visible=false;job.flush().unwrap();
             assert_eq!(crate::tile::render(job.path(),0,crate::tile::Variant::Cleaned,None).unwrap(),crate::tile::render(job.path(),0,crate::tile::Variant::Source,None).unwrap());
-            assert_eq!(recovered.redo().unwrap().region_id,record.id);job.project.patches[0].visible=true;job.flush().unwrap();
+            assert_eq!(recovered.redo(0).unwrap().region_id,record.id);job.project.patches[0].visible=true;job.flush().unwrap();
             assert_eq!(decode(&crate::tile::render(job.path(),0,crate::tile::Variant::Cleaned,None).unwrap()).unwrap().data,cleaned.data);
             assert_eq!(std::fs::read(job.source_path(0).unwrap()).unwrap(),original_bytes);
             let native_box=patches[0].mask.bounds;
@@ -12584,7 +12828,7 @@ mod mask_edit_tests {
     }
 
     fn step(located: &Located, direction: &str) -> crate::history::HistoryStep {
-        crate::history::move_at(&located.job_path, &located.chapter_id, direction).unwrap()
+        crate::history::move_at(&located.job_path, &located.chapter_id, located.page_index, direction).unwrap()
     }
 
     /// A brush edit, a padding and an erase are three undo steps. Undo walks

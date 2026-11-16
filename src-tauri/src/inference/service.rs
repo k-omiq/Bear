@@ -557,6 +557,10 @@ pub(crate) struct RenderInput {
     pub input_sha256: String,
     pub predecessors_sha256: String,
     pub source_idx: usize,
+    /// The cloud attempt the region's live result carries, when it is a
+    /// cloud result: what a further generation of it checks it is the
+    /// first's.
+    pub cloud_attempt: Option<String>,
 }
 
 impl RenderInput {
@@ -638,6 +642,10 @@ pub(crate) fn read_render_input(
     })?;
     let prepared = &cloud.prepared;
     let crop_bounds = cloud.crop_bounds;
+    let cloud_attempt = match &region.kind {
+        CloudRegionKind::Patch(stored) => stored.0.provenance.cloud.as_ref().and_then(|cloud| cloud.attempt_id.clone()),
+        CloudRegionKind::Detection(_) => None,
+    };
     let crop_png = encode_rgb8_png(crop_bounds.w, crop_bounds.h, prepared.image_rgb8())?;
     let hint_png = encode_gray8_png(crop_bounds.w, crop_bounds.h, prepared.hint_gray8())?;
     Ok(RenderInput {
@@ -653,6 +661,7 @@ pub(crate) fn read_render_input(
         input_sha256: cloud.input.digest,
         predecessors_sha256: cloud.input.predecessors,
         source_idx,
+        cloud_attempt,
     })
 }
 
@@ -1001,6 +1010,52 @@ impl InferenceService {
         poll_opts: &PollOptions,
         submitted: &dyn Fn(),
     ) -> Result<ApiRegion, InferenceServiceError> {
+        self.execute_queued(grant_nonce, job_path, page_index, region_id, target, recipe, intent, config,
+            cloud_allowed, poll_opts, submitted, false)
+    }
+
+    /// A further generation of a region a cloud clean run has just cleaned
+    /// (Generations per region): rendered as a re-render of its live result
+    /// through the same path, every check and the journal included, and kept
+    /// as a variation of it ([`crate::variations::keep_generation`]): the
+    /// live result stays as it was and no undo step is recorded. The attempt
+    /// is journaled as one ([`AttemptRecord::keep_as_variation`]), so a
+    /// recovery keeps it the same way.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_cloud_variation_queued(
+        &self,
+        grant_nonce: &str,
+        job_path: &Path,
+        page_index: u32,
+        region_id: &str,
+        target: &ExecutionTarget,
+        recipe: &RenderRecipe,
+        intent: &OperationIntent,
+        config: &InferenceConfig,
+        cloud_allowed: bool,
+        poll_opts: &PollOptions,
+        submitted: &dyn Fn(),
+    ) -> Result<ApiRegion, InferenceServiceError> {
+        self.execute_queued(grant_nonce, job_path, page_index, region_id, target, recipe, intent, config,
+            cloud_allowed, poll_opts, submitted, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_queued(
+        &self,
+        grant_nonce: &str,
+        job_path: &Path,
+        page_index: u32,
+        region_id: &str,
+        target: &ExecutionTarget,
+        recipe: &RenderRecipe,
+        intent: &OperationIntent,
+        config: &InferenceConfig,
+        cloud_allowed: bool,
+        poll_opts: &PollOptions,
+        submitted: &dyn Fn(),
+        keep_as_variation: bool,
+    ) -> Result<ApiRegion, InferenceServiceError> {
         let attempt_id = attempt_id_for_nonce(grant_nonce);
         // Checked before a single event goes out: the render already running
         // under this id is the one the interface is watching, and a `failed`
@@ -1035,6 +1090,7 @@ impl InferenceService {
             cloud_allowed,
             poll_opts,
             submitted,
+            keep_as_variation,
         );
         reporter.settle(&outcome);
         outcome
@@ -1057,6 +1113,7 @@ impl InferenceService {
         cloud_allowed: bool,
         poll_opts: &PollOptions,
         submitted: &dyn Fn(),
+        keep_as_variation: bool,
     ) -> Result<ApiRegion, InferenceServiceError> {
         if !cloud_allowed {
             return Err(InferenceServiceError::CloudDisabled);
@@ -1188,7 +1245,11 @@ impl InferenceService {
             return Err(InferenceServiceError::Cancelled);
         }
 
-        let (_record, guard) = self.journal.create_intent(create_intent)?;
+        let (_record, guard) = if keep_as_variation {
+            self.journal.create_variation_intent(create_intent)?
+        } else {
+            self.journal.create_intent(create_intent)?
+        };
 
         // The last point where a cancel costs nothing: the grant is unspent and
         // no request has been made, so the intent closes as never dispatched.
@@ -1571,6 +1632,7 @@ impl InferenceService {
             record.width,
             record.height,
             record.page_index,
+            record.keep_as_variation,
         )?;
 
         #[cfg(test)]
@@ -1705,6 +1767,7 @@ impl InferenceService {
         _page_w: u32,
         _page_h: u32,
         page_index: Option<u32>,
+        keep_as_variation: bool,
     ) -> Result<ApiRegion, InferenceServiceError> {
         let _lock = run::lock_job(job_path).map_err(|e| InferenceServiceError::JobManifest(e.to_string()))?;
         let mut job =
@@ -1842,9 +1905,17 @@ impl InferenceService {
         // side of the undo step the commit records below.
         let mut clean_before = None;
 
+        // A further generation is a re-render of the region's live result,
+        // the first: there is no detection for it to clean.
+        if keep_as_variation && !matches!(cur.kind, CloudRegionKind::Patch(_)) {
+            return Err(InferenceServiceError::StaleAttachment(
+                "a further generation needs the region's first result".into(),
+            ));
+        }
         match cur.kind {
             CloudRegionKind::Patch(stored) => {
                 let (record, mut updated_patch) = *stored;
+                let first = record.clone();
                 let review_state = match record.review_state.as_deref() {
                     Some("review.reason.inputChanged" | "review.reason.inputUnknown") => updated_patch
                         .provenance.params_snapshot.get("review_before_input_change")
@@ -1886,6 +1957,22 @@ impl InferenceService {
                 }
                 updated_patch.pixels = rendered.pixels;
                 updated_patch.mask = rendered.mask;
+                if keep_as_variation {
+                    // Kept beside the first, which stays live as it was:
+                    // nothing else is refreshed and no undo step recorded.
+                    let kept = crate::variations::keep_generation(&mut job, source_idx, &first, &updated_patch)
+                        .map_err(InferenceServiceError::JobManifest)?;
+                    if !kept {
+                        return Err(InferenceServiceError::StaleAttachment(
+                            "the region's first result is no longer live".into(),
+                        ));
+                    }
+                    crate::library::invalidate_manifest_cache(job_path);
+                    return crate::library::region_and_status(&chapter_id, &job.project, source_idx, region_id)
+                        .map(|(region, _)| region)
+                        .ok_or_else(|| InferenceServiceError::JobManifest(
+                            "failed to resolve region in manifest".to_string()));
+                }
                 job.complete_display_region(source_idx, &updated_patch, review_state)
                     .map_err(|e| InferenceServiceError::JobManifest(e.to_string()))?;
             }
@@ -2154,6 +2241,9 @@ impl InferenceService {
         &self, snapshot: &RecoveryAuditSnapshot, record: &AttemptRecord,
     ) -> Result<bool, InferenceServiceError> {
         let job = &snapshot.job;
+        // A further generation was never what its region shows: it is kept
+        // as a variation only, so no live result of it can go missing.
+        if record.keep_as_variation { return Ok(true); }
         if snapshot.records_user_replacement(record) { return Ok(true); }
         // A result the user rejected or undid is set aside whole
         // (`Job::restore_detection`), and its region is the detection it was
@@ -3588,6 +3678,7 @@ pub(crate) mod tests {
             crop_bounds.w,
             crop_bounds.h,
             Some(0),
+            false,
         );
 
         assert!(matches!(
@@ -3676,6 +3767,7 @@ pub(crate) mod tests {
             crop.w,
             crop.h,
             Some(0),
+            false,
         );
         assert!(matches!(
             result,
@@ -3719,7 +3811,7 @@ pub(crate) mod tests {
         let decoded = DecodedResultCrop::new(w, h, vec![255; (w * h * 3) as usize]).unwrap();
         service.attach_patch_to_project(
             manifest, 0, region_id, &snapshot, &decoded, recipe, CloudProvider::Modal,
-            "modal-prof-1", "handle", "job", "attempt", "request", "result", None, w, h, Some(0),
+            "modal-prof-1", "handle", "job", "attempt", "request", "result", None, w, h, Some(0), false,
         )
     }
 
@@ -6755,7 +6847,7 @@ pub(crate) mod tests {
         let attempt = attempt_id_for_nonce(&grant.nonce);
         let patches = job.project.patches.clone();
         drop(job);
-        assert_eq!(crate::history::move_at(&manifest, "chapter", "undo").unwrap().entry.unwrap().seq, entry.seq);
+        assert_eq!(crate::history::move_at(&manifest, "chapter", 0, "undo").unwrap().entry.unwrap().seq, entry.seq);
         {
             let _lock = run::lock_job(&manifest).unwrap();
             Job::open(&manifest).unwrap().restore_detection("p-d0").unwrap();
@@ -6774,7 +6866,7 @@ pub(crate) mod tests {
             "the next request binds the same detection");
 
         // Redo: the same patch, and the gateway is asked nothing.
-        assert!(crate::history::move_at(&manifest, "chapter", "redo").unwrap().entry.is_some());
+        assert!(crate::history::move_at(&manifest, "chapter", 0, "redo").unwrap().entry.is_some());
         {
             let _lock = run::lock_job(&manifest).unwrap();
             Job::open(&manifest).unwrap().restore_patch("p-d0").unwrap();

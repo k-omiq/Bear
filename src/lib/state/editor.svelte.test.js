@@ -42,6 +42,9 @@ import { createHistory, push } from '../model/history.js'
 import { session } from './session.svelte.js'
 import { jobById, resetJobs, startJobs } from './jobs.svelte.js'
 
+/** How many of a history's entries are not undone: what one stack called its cursor. */
+const pastOf = (history) => history.entries.filter((entry) => !entry.undone).length
+
 describe('editor history persistence failures', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -89,11 +92,11 @@ describe('editor history persistence failures', () => {
 
     recordRegionEdit('canvas.command.applyTool', 'r1', { region: null, pageStatus: 'unclean' },
       { region: { id: 'r1', pageId: 'p1' }, pageStatus: 'cleaned' })
-    expect(editor.history.cursor).toBe(1)
+    expect(pastOf(editor.history)).toBe(1)
     await vi.advanceTimersByTimeAsync(60)
 
     expect(loadMock).toHaveBeenCalledWith({ chapterId: 'test-chapter' })
-    expect(editor.history.cursor).toBe(0)
+    expect(pastOf(editor.history)).toBe(0)
     expect(editor.history.entries).toEqual([])
   })
 
@@ -103,7 +106,7 @@ describe('editor history persistence failures', () => {
       .mockRejectedValueOnce(new Error('temporary disk lock'))
       .mockResolvedValueOnce({
         cursor: 1,
-        entries: [{ seq: 1, label: 'canvas.command.applyTool' }],
+        entries: [{ seq: 1, label: 'canvas.command.applyTool', page: 0 }],
       })
     setBackend(/** @type {any} */ ({ historyPush: pushMock }))
 
@@ -120,7 +123,7 @@ describe('editor history persistence failures', () => {
     expect(pushMock).toHaveBeenCalledTimes(2)
     expect(app.notices).toHaveLength(0)
     expect(editor.history.entries).toEqual([
-      { seq: 1, label: 'canvas.command.applyTool' },
+      { seq: 1, label: 'canvas.command.applyTool', page: 0, undone: false },
     ])
   })
 
@@ -128,8 +131,8 @@ describe('editor history persistence failures', () => {
     const moveMock = vi.fn().mockRejectedValue(new Error('disk move failed'))
     setBackend(/** @type {any} */ ({ historyMove: moveMock }))
 
-    push(editor.history, { seq: 1, label: 'canvas.command.applyTool' })
-    expect(editor.history.cursor).toBe(1)
+    push(editor.history, { seq: 1, label: 'canvas.command.applyTool', page: 0 })
+    expect(pastOf(editor.history)).toBe(1)
 
     undo()
     await vi.advanceTimersByTimeAsync(0)
@@ -153,13 +156,13 @@ describe('editor history persistence failures', () => {
     const moveMock = vi.fn().mockRejectedValue(new Error('page_busy'))
     setBackend(/** @type {any} */ ({ historyMove: moveMock }))
 
-    push(editor.history, { seq: 1, label: 'canvas.command.applyTool' })
+    push(editor.history, { seq: 1, label: 'canvas.command.applyTool', page: 0 })
     undo()
-    expect(editor.history.cursor).toBe(0)
+    expect(pastOf(editor.history)).toBe(0)
     await vi.advanceTimersByTimeAsync(60)
 
     expect(moveMock).toHaveBeenCalledTimes(2)
-    expect(editor.history.cursor).toBe(1)
+    expect(pastOf(editor.history)).toBe(1)
     expect(editor.history.error ?? null).toBeNull()
     expect(app.notices).toHaveLength(1)
     expect(app.notices[0]).toMatchObject({ key: 'notice.run.pageBusy', tone: 'warn' })
@@ -170,10 +173,10 @@ describe('editor history persistence failures', () => {
     moveMock.mockResolvedValueOnce({ entry: null })
     undo()
     await vi.advanceTimersByTimeAsync(0)
-    expect(editor.history.cursor).toBe(0)
+    expect(pastOf(editor.history)).toBe(0)
     redo()
     await vi.advanceTimersByTimeAsync(60)
-    expect(editor.history.cursor).toBe(0)
+    expect(pastOf(editor.history)).toBe(0)
     expect(app.notices.at(-1)).toMatchObject({ key: 'notice.run.pageBusy' })
   })
 
@@ -183,12 +186,12 @@ describe('editor history persistence failures', () => {
     const moveMock = vi.fn().mockRejectedValue(new Error('run_step_in_progress: the step belongs to a run that is still going'))
     setBackend(/** @type {any} */ ({ historyMove: moveMock }))
 
-    push(editor.history, { seq: 1, label: 'masks.command.detectPages' })
+    push(editor.history, { seq: 1, label: 'masks.command.detectPages', page: 0 })
     undo()
-    expect(editor.history.cursor).toBe(0)
+    expect(pastOf(editor.history)).toBe(0)
     await vi.advanceTimersByTimeAsync(60)
 
-    expect(editor.history.cursor).toBe(1)
+    expect(pastOf(editor.history)).toBe(1)
     expect(editor.history.error ?? null).toBeNull()
     expect(app.notices).toHaveLength(1)
     expect(app.notices[0]).toMatchObject({ key: 'notice.run.stepInProgress', tone: 'warn' })
@@ -204,8 +207,8 @@ describe('editor history persistence failures', () => {
       })
     setBackend(/** @type {any} */ ({ historyMove: moveMock }))
 
-    push(editor.history, { seq: 1, label: 'canvas.command.applyTool' })
-    expect(editor.history.cursor).toBe(1)
+    push(editor.history, { seq: 1, label: 'canvas.command.applyTool', page: 0 })
+    expect(pastOf(editor.history)).toBe(1)
 
     undo()
     await vi.advanceTimersByTimeAsync(0)
@@ -232,16 +235,16 @@ describe('editor history persistence failures', () => {
     const after = { region: { id: 'r1', pageId: 'p1' }, pageStatus: 'cleaned' }
 
     recordRegionEdit('canvas.command.applyTool', 'r1', before, after)
-    expect(editor.history.cursor).toBe(1)
+    expect(pastOf(editor.history)).toBe(1)
 
     undo()
-    expect(editor.history.cursor).toBe(0)
+    expect(pastOf(editor.history)).toBe(0)
 
     // Push resolves with backend's view (which reported cursor 1 at time of push)
-    resolvePush({ cursor: 1, entries: [{ seq: 1, label: 'canvas.command.applyTool' }] })
+    resolvePush({ cursor: 1, entries: [{ seq: 1, label: 'canvas.command.applyTool', page: 0 }] })
     await vi.advanceTimersByTimeAsync(0)
 
-    expect(editor.history.cursor).toBe(0)
+    expect(pastOf(editor.history)).toBe(0)
     expect(moveMock).toHaveBeenCalledWith(expect.objectContaining({ direction: 'undo' }))
   })
 
@@ -253,13 +256,13 @@ describe('editor history persistence failures', () => {
         throw new Error('fail 1')
       }
       if (entry.label === 'edit1') {
-        return { cursor: 1, entries: [{ seq: 1, label: 'edit1' }] }
+        return { cursor: 1, entries: [{ seq: 1, label: 'edit1', page: 0 }] }
       }
       return {
         cursor: 2,
         entries: [
-          { seq: 1, label: 'edit1' },
-          { seq: 2, label: 'edit2' },
+          { seq: 1, label: 'edit1', page: 0 },
+          { seq: 2, label: 'edit2', page: 0 },
         ],
       }
     })
@@ -278,10 +281,10 @@ describe('editor history persistence failures', () => {
     // Advance past retry delay and allow queued pushes to complete in order
     await vi.advanceTimersByTimeAsync(100)
 
-    expect(editor.history.cursor).toBe(2)
+    expect(pastOf(editor.history)).toBe(2)
     expect(editor.history.entries).toEqual([
-      { seq: 1, label: 'edit1' },
-      { seq: 2, label: 'edit2' },
+      { seq: 1, label: 'edit1', page: 0, undone: false },
+      { seq: 2, label: 'edit2', page: 0, undone: false },
     ])
   })
 })
@@ -1086,7 +1089,7 @@ describe('text-shaped revision history', () => {
       historyPush: async ({ entry }) => {
         journal.push(entry)
         cursor = journal.length
-        return { cursor, entries: journal.map((item, index) => ({ seq: index + 1, label: item.label })) }
+        return { cursor, entries: journal.map((item, index) => ({ seq: index + 1, label: item.label, page: 0 })) }
       },
       historyMove: async ({ direction }) => {
         if (direction === 'undo') cursor = Math.max(0, cursor - 1)
@@ -1139,7 +1142,7 @@ describe('text-shaped revision history', () => {
       historyPush: async ({ entry }) => {
         entries.push(entry)
         cursor = entries.length
-        return { cursor, entries: entries.map((item, index) => ({ seq: index + 1, label: item.label })) }
+        return { cursor, entries: entries.map((item, index) => ({ seq: index + 1, label: item.label, page: 0 })) }
       },
       historyMove: async ({ direction }) => {
         cursor += direction === 'undo' ? -1 : 1
@@ -1396,7 +1399,7 @@ describe('the tool slots', () => {
 
   it('lets an edit still waiting take Undo and Redo before the history does', () => {
     editor.history = createHistory()
-    push(editor.history, { seq: 1, label: 'masks.command.layerOpacity' })
+    push(editor.history, { seq: 1, label: 'masks.command.layerOpacity', page: 0 })
     const seen = []
     const off = onPendingEdit((direction) => {
       seen.push(direction)
@@ -1406,7 +1409,7 @@ describe('the tool slots', () => {
       undo()
       redo()
       expect(seen).toEqual(['undo', 'redo'])
-      expect(editor.history.cursor).toBe(1)
+      expect(pastOf(editor.history)).toBe(1)
     } finally {
       off()
     }
@@ -1656,7 +1659,7 @@ describe('a clean the backend recorded', () => {
   const cleanStep = { seq: 1, label: 'masks.command.cleanRegion', op: 'clean-state', regionId: 'p0-d1',
     before: { present: true, pageStatus: 'detected', region: detection },
     after: { present: true, pageStatus: 'cleaned', region: result } }
-  const index = (cursor, ...labels) => ({ limit: 500, cursor, entries: labels.map((label, at) => ({ seq: at + 1, label })) })
+  const index = (cursor, ...labels) => ({ limit: 500, cursor, entries: labels.map((label, at) => ({ seq: at + 1, label, page: 0, undone: at >= cursor })) })
   const page = () => ({ id: 'p0', chapterId: 'ch1', index: 0, number: 1, status: onPage.outcome === 'detected' ? 'detected' : 'cleaned',
     skipReason: null, regions: [structuredClone(onPage)], regionCount: 1, doneCount: 0, reviewCount: 0, resident: true })
   const shown = () => editor.chapter.pages[0].regions.find((region) => region.id === 'p0-d1')
@@ -1700,7 +1703,7 @@ describe('a clean the backend recorded', () => {
 
   it('asks for the detection on undo and for the saved result on redo', async () => {
     expect(shown()).toMatchObject({ outcome: 'cleaned' })
-    expect(editor.history.cursor).toBe(1)
+    expect(pastOf(editor.history)).toBe(1)
 
     undo()
     await editor.history.running
@@ -1804,7 +1807,7 @@ describe('a clean the backend recorded', () => {
     await editor.history.running
     expect(api.historyLoad).toHaveBeenCalledTimes(2)
     expect(api.historyLoad).toHaveBeenLastCalledWith({ chapterId: 'ch1' })
-    expect(editor.history.cursor).toBe(2)
+    expect(pastOf(editor.history)).toBe(2)
     expect(editor.history.entries.map((entry) => entry.label)).toEqual(['masks.command.cleanRegion', 'masks.command.rejectResult'])
   })
 
@@ -1830,7 +1833,7 @@ describe('a clean the backend recorded', () => {
 
     api.historyLoad.mockResolvedValue(index(3, 'masks.command.cleanRegion', 'masks.command.rerunMask', 'masks.command.cleanRegion'))
     pushed(index(2, 'masks.command.cleanRegion', 'masks.command.rerunMask'))
-    await vi.waitFor(() => expect(editor.history.cursor).toBe(3))
+    await vi.waitFor(() => expect(pastOf(editor.history)).toBe(3))
     await editor.history.running
     expect(api.historyLoad).toHaveBeenCalledTimes(2)
     expect(editor.history.entries).toHaveLength(3)
@@ -1843,14 +1846,14 @@ describe('a clean the backend recorded', () => {
     emit({ type: 'history-changed', chapterId: 'ch1' })
     await vi.waitFor(() => expect(api.historyLoad).toHaveBeenCalledTimes(2))
     undo()
-    expect(editor.history.cursor).toBe(0)
+    expect(pastOf(editor.history)).toBe(0)
     // What was read is from before the undo. After it, the journal agrees.
     api.historyLoad.mockResolvedValue(index(0, 'masks.command.cleanRegion'))
     loaded(index(1, 'masks.command.cleanRegion'))
     await vi.waitFor(() => expect(api.historyLoad).toHaveBeenCalledTimes(3))
     await editor.history.running
     expect(api.historyMove).toHaveBeenCalledTimes(1)
-    expect(editor.history.cursor).toBe(0)
+    expect(pastOf(editor.history)).toBe(0)
     expect(shown()).toMatchObject({ outcome: 'detected' })
   })
 })

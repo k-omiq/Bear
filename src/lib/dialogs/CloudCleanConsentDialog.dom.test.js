@@ -111,6 +111,30 @@ it('answers Confirm with both statements, and not before', async () => {
   expect(onresolve).toHaveBeenCalledWith({ rightsAttested: true, retentionAcknowledged: true, planDigest: 'b'.repeat(64) })
 })
 
+it('shows every render when a region makes several generations, and nothing extra at one', () => {
+  render(CloudCleanConsentDialog, { props: { spec: spec({ ...PROPOSAL, generations: 3, renders: 9 }) } })
+  const row = document.querySelector('[data-fact="generations"]')
+  expect(row?.getAttribute('data-renders')).toBe('9')
+  expect(fact('generations')).toBe(t('cloud.clean.generationsValue', { generations: 3, renders: '9' }))
+  cleanup()
+  app.modals.length = 0
+  render(CloudCleanConsentDialog, { props: { spec: spec({ ...PROPOSAL, generations: 1, renders: 3 }) } })
+  expect(document.querySelector('[data-fact="generations"]')).toBeNull()
+})
+
+it('on standing consent hides the statements and answers Confirm with the plan alone', async () => {
+  const onresolve = vi.fn()
+  const screen = render(CloudCleanConsentDialog, {
+    props: { spec: spec({ ...PROPOSAL, standing: true, generations: 2, renders: 6 }, onresolve) },
+  })
+  expect(screen.queryByLabelText(t('cloud.analysis.rights'))).toBeNull()
+  expect(document.querySelector('[data-fact="generations"]')?.getAttribute('data-renders')).toBe('6')
+  const confirm = /** @type {HTMLButtonElement} */ (screen.getByRole('button', { name: t('cloud.clean.confirm') }))
+  expect(confirm.disabled).toBe(false)
+  await fireEvent.click(confirm)
+  expect(onresolve).toHaveBeenCalledWith({ rightsAttested: false, retentionAcknowledged: false, planDigest: 'b'.repeat(64) })
+})
+
 it('takes Escape as Cancel, and answers nothing a send could be made of', async () => {
   const onresolve = vi.fn()
   render(CloudCleanConsentDialog, { props: { spec: spec(PROPOSAL, onresolve) } })

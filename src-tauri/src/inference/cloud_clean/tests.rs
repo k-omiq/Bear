@@ -153,6 +153,7 @@ fn asked(scope: &str, local_first: bool) -> PrepareRequest {
         work_long_side: None,
         flux3_generation: None,
         finishing: Default::default(),
+        generations: 1,
     }
 }
 
@@ -658,7 +659,7 @@ fn the_finishing_setting_rides_on_a_3_0_0_recipe_and_on_others_when_every_model_
     let choice = Choice::of(Finishing::DotsOnly, true);
     let setting = finishing_from_settings(&picked).unwrap();
     assert_eq!(setting, FinishingSetting { choice, every_model: false });
-    assert_eq!(finishing_from_settings(&serde_json::Value::Null), Ok(FinishingSetting::default()));
+    assert_eq!(finishing_from_settings(&serde_json::Value::Null), Ok(FinishingSetting { choice: Choice::SETTING_DEFAULT, every_model: false }));
     assert!(finishing_from_settings(&serde_json::json!({"cloudFinishing": "blur"})).is_err());
     assert!(finishing_from_settings(&serde_json::json!({"finishingEveryModel": "yes"})).is_err());
 
@@ -675,9 +676,9 @@ fn the_finishing_setting_rides_on_a_3_0_0_recipe_and_on_others_when_every_model_
     apply_finishing(&mut older, setting);
     assert_eq!(older.finishing, None, "2.0.0 keeps its tone alignment");
     let every = finishing_from_settings(&serde_json::json!({"finishingEveryModel": true})).unwrap();
-    assert_eq!(every.for_others(), Some(Choice::default()));
+    assert_eq!(every.for_others(), Some(Choice::SETTING_DEFAULT));
     apply_finishing(&mut older, every);
-    assert_eq!(older.finishing, Some(Choice::default()));
+    assert_eq!(older.finishing, Some(Choice::SETTING_DEFAULT));
     assert_eq!(FinishingSetting { choice, every_model: false }.for_others(), None);
 }
 
@@ -993,6 +994,21 @@ struct Renderer {
     rendered: Mutex<Vec<String>>,
     cancelled: Mutex<Vec<String>>,
     releases: AtomicUsize,
+    /// Each region id a further generation was asked of, in order.
+    variations: Mutex<Vec<String>>,
+    /// Region ids whose further generations fail at once, with their code.
+    fail_variation: HashMap<String, String>,
+    /// Called with each region id as a further generation of it starts.
+    on_variation: Box<dyn Fn(&str) + Sync>,
+}
+
+/// The cloud record a test render commits under `attempt`.
+fn cloud_record(attempt: &str) -> cleaner_core::patch::CloudRecord {
+    cleaner_core::patch::CloudRecord {
+        provider: "modal".into(), profile_id: None, job_id: None, request_id: format!("req-{attempt}"),
+        attempt_id: Some(attempt.into()), recipe_id: None, model: "test".into(), model_revision: None,
+        tier: None, cost: None, duration_ms: None,
+    }
 }
 
 impl Renderer {
@@ -1005,9 +1021,12 @@ impl Renderer {
             rendered_at_deployment: Mutex::default(),
             pages_in_flight: Mutex::default(), most_in_flight: AtomicUsize::new(0),
             same_page_at_once: AtomicBool::new(false), rendered: Mutex::default(), cancelled: Mutex::default(),
-            releases: AtomicUsize::new(0),
+            releases: AtomicUsize::new(0), variations: Mutex::default(), fail_variation: HashMap::new(),
+            on_variation: Box::new(|_| {}),
         }
     }
+
+    fn variations(&self) -> Vec<String> { self.variations.lock().unwrap().clone() }
 
     fn rendered(&self) -> Vec<String> { self.rendered.lock().unwrap().clone() }
 }
@@ -1067,13 +1086,38 @@ impl RegionRenderer for Renderer {
             provenance: Provenance {
                 engine: Engine::Flux, engine_version: "test".into(), model_sha256: None,
                 execution_provider: "cloud".into(), params_snapshot: serde_json::json!({}),
-                mask_sha256: String::new(), source_sha256: String::new(), cloud: None, created: 1_760_000_000,
+                mask_sha256: String::new(), source_sha256: String::new(), cloud: Some(cloud_record(&attempt)),
+                created: 1_760_000_000,
             },
         };
         assert!(job.complete_detection(region_id, &patch, None).unwrap());
         library::invalidate_manifest_cache(&self.job_path);
         let page = library::page_of("chapter", &job.project, page_index as usize).unwrap();
         Ok(page.regions.into_iter().find(|region| region.id == region_id).unwrap())
+    }
+
+    /// Keeps a flat patch of another shade beside the live one, through the
+    /// keep every further generation uses.
+    fn render_variation(&self, nonce: &str, _page_index: u32, region_id: &str, recipe: &RenderRecipe,
+        submitted: &dyn Fn()) -> Result<(), String> {
+        let grant = self.grants.get_grant(nonce).expect("a region grant");
+        assert_eq!(grant.scope.region_ids, vec![region_id.to_owned()]);
+        assert_eq!(grant.max_attempts, 1);
+        assert_eq!(&grant.scope.recipe, recipe, "a further generation must use the consented recipe");
+        self.variations.lock().unwrap().push(region_id.to_owned());
+        (self.on_variation)(region_id);
+        if let Some(code) = self.fail_variation.get(region_id) { return Err(code.clone()); }
+        submitted();
+        let attempt = attempt_id_for_nonce(nonce);
+        let _lock = run::lock_job(&self.job_path).unwrap();
+        let mut job = Job::open(&self.job_path).unwrap();
+        let first = job.project.patches.iter().find(|row| row.id == region_id).cloned().expect("a cleaned region");
+        let mut extra = job.load_patch(&first).unwrap();
+        extra.pixels.data.fill(90);
+        extra.provenance.cloud = Some(cloud_record(&attempt));
+        assert!(crate::variations::keep_generation(&mut job, first.source_idx, &first, &extra).unwrap());
+        library::invalidate_manifest_cache(&self.job_path);
+        Ok(())
     }
 
     fn deployment(&self) -> Result<(RenderRecipe, Option<(String, f64)>), String> {
@@ -1118,6 +1162,7 @@ fn plan_with(path: &Path, ids: &[String], grants: &GrantService, chunk_regions: 
         recipe: recipe.clone(),
         execution,
         chunk_regions,
+        generations: 1,
         estimate,
         price: l4(),
         cost: Some(cost(estimate.gpu_seconds, estimate.retry_gpu_seconds, 0.8, recipe, CloudProvider::Modal)),
@@ -1413,6 +1458,16 @@ impl RegionRenderer for ServiceBacked<'_> {
             max_polls: 3000 };
         self.service.execute_cloud_render_queued(nonce, self.job_path, page_index, region_id, &self.target,
             recipe, &OperationIntent::CloudClean, self.config, true, &poll, submitted)
+            .map_err(|e| e.code().to_owned())
+    }
+
+    fn render_variation(&self, nonce: &str, page_index: u32, region_id: &str, recipe: &RenderRecipe,
+        submitted: &dyn Fn()) -> Result<(), String> {
+        let poll = PollOptions { poll_interval: Duration::from_millis(20), timeout: Duration::from_secs(60),
+            max_polls: 3000 };
+        self.service.execute_cloud_variation_queued(nonce, self.job_path, page_index, region_id, &self.target,
+            recipe, &OperationIntent::CloudClean, self.config, true, &poll, submitted)
+            .map(|_| ())
             .map_err(|e| e.code().to_owned())
     }
 
@@ -1768,7 +1823,7 @@ fn a_1025_group_plan_runs_in_bounded_chunks_under_one_consent() {
         mask_hash: template.mask_hash.clone(), revision: template.revision,
         revision_hash: revisions.get(id).cloned().expect("only planned regions are read"),
         input_sha256: template.input_sha256.clone(), predecessors_sha256: template.predecessors_sha256.clone(),
-        source_idx: template.source_idx,
+        source_idx: template.source_idx, cloud_attempt: None,
     });
     let (summary, events) = run_scope(&scope, &path, &grants, &renderer, &AtomicBool::new(false),
         &Harness { read: &reread, ..OPEN });
@@ -2394,6 +2449,7 @@ fn streamed(scope: &str, pages: Option<Vec<u32>>) -> StreamRequest {
         work_long_side: None,
         flux3_generation: None,
         finishing: Default::default(),
+        generations: 1,
     }
 }
 
@@ -2409,6 +2465,7 @@ fn stream_scope(grants: &GrantService, profile: &str) -> CleanGrantScope {
         recipe: recipe(),
         execution: CleanExecution::Cloud,
         chunk_regions: CHUNK_REGIONS,
+        generations: 1,
         estimate: Estimate::default(),
         price: l4(),
         cost: None,
@@ -2672,4 +2729,310 @@ fn an_outdated_flux3_profile_is_told_to_update() {
         "bf0af016a936bfe422eec96557aee058c3a6174e", false);
     let gateway = Gateway { recipe: old, ..Gateway::priced() };
     assert_eq!(deployed_recipe(&gateway, None, Some(1280)).unwrap_err(), "flux3_update_required");
+}
+
+/* ------------------------------------------------------------------ */
+/* Generations per region                                              */
+/* ------------------------------------------------------------------ */
+
+/// A plan's scope at `generations` renders of each region, its digest
+/// recomputed as a prepare would.
+fn with_generations(mut scope: CleanGrantScope, generations: u32) -> CleanGrantScope {
+    scope.generations = generations;
+    scope.estimate = Estimate::of_renders(&scope.regions, RenderRate::of(&scope.recipe), generations);
+    scope.plan_digest = scope.digest().unwrap();
+    scope
+}
+
+/// What the interface shows is every render: regions times generations, the
+/// pixels and the cost range scaled with it, and the count bound into the
+/// plan digest and the stream digest. At one generation the terms carry no
+/// count, so a plan has the digest it always had.
+#[test]
+fn a_plan_of_several_generations_shows_and_binds_every_render() {
+    let path = chapter("generations-plan", 2, StripMode::Single);
+    let ids = vec![
+        detect(&path, 0, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0),
+        detect(&path, 1, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0),
+    ];
+    let profile = "modal-prof-generations-plan";
+    let one = prepare(&path, asked("chapter", false), destination(profile), &Gateway::priced(), &settled).unwrap();
+    let three = prepare(&path, PrepareRequest { generations: 3, ..asked("chapter", false) }, destination(profile),
+        &Gateway::priced(), &settled).unwrap();
+    for proposal in [&one, &three] { discard(proposal.proposal_id.as_deref().unwrap()).unwrap(); }
+    assert_eq!((one.regions, one.generations, one.renders), (2, 1, 2));
+    assert_eq!((three.regions, three.generations, three.renders), (2, 3, 6));
+    assert_eq!(three.region_ids, one.region_ids, "the regions are the same, each rendered three times");
+    assert_eq!((three.total_crop_pixels, three.total_work_pixels), (one.total_crop_pixels * 3, one.total_work_pixels * 3));
+    let (low, high) = (one.estimated_cost_usd.unwrap(), three.estimated_cost_usd.unwrap());
+    assert!((high.low - 3.0 * low.low).abs() < 1e-9, "{low:?} {high:?}");
+    assert!(high.high > low.high);
+    let (low, high) = (one.estimated_gpu_seconds.unwrap(), three.estimated_gpu_seconds.unwrap());
+    assert!((high.low - 3.0 * low.low).abs() < 1e-9);
+    assert_ne!(one.plan_digest, three.plan_digest);
+
+    let scope = scope_for(&path, &ids, &GrantService::new());
+    assert!(serde_json::to_value(scope.terms()).unwrap().get("generations").is_none());
+    let more = with_generations(scope.clone(), 2);
+    assert_ne!(more.plan_digest, scope.plan_digest);
+    assert_eq!(serde_json::to_value(more.terms()).unwrap()["generations"], 2);
+
+    let stream_one = prepare_stream(&path, streamed("chapter", None), destination(profile), &Gateway::priced()).unwrap();
+    let stream_three = prepare_stream(&path, StreamRequest { generations: 3, ..streamed("chapter", None) },
+        destination(profile), &Gateway::priced()).unwrap();
+    for proposal in [&stream_one, &stream_three] { discard(&proposal.proposal_id).unwrap(); }
+    assert_eq!((stream_one.generations, stream_three.generations), (1, 3));
+    assert!((stream_three.region_cost_usd - 3.0 * stream_one.region_cost_usd).abs() < 1e-12);
+    assert_ne!(stream_one.stream_digest, stream_three.stream_digest);
+}
+
+/// A region's grants are counted: never more than the consent's count.
+#[test]
+fn a_region_gets_no_more_grants_than_its_generations() {
+    let shared = Shared {
+        schedule: Mutex::new(Schedule { regions: Vec::new(), slots: Vec::new(), preparing: 0, stop: false,
+            attempts: HashMap::new(), minted: HashMap::new(), open: false }),
+        changed: Condvar::new(),
+    };
+    assert!((0..3).all(|_| shared.reserve(0, 3)));
+    assert!(!shared.reserve(0, 3), "a fourth render of a region consented three times");
+    assert!(shared.reserve(1, 1));
+    assert!(!shared.reserve(1, 1), "one generation is one render");
+}
+
+/// Each region's first is its result, as at one generation; each further
+/// one is kept as a variation only, its own grant and render, and the live
+/// row stays the first's.
+#[test]
+fn each_cleaned_region_makes_its_further_generations_as_variations_only() {
+    let path = chapter("generations-run", 2, StripMode::Single);
+    let ids: Vec<String> = (0..2).map(|page| detect(&path, page, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)).collect();
+    let grants = Arc::new(GrantService::new());
+    let scope = with_generations(scope_for(&path, &ids, &grants), 3);
+    let mut renderer = Renderer::new(&path, &grants);
+    renderer.delay = Duration::from_millis(5);
+    let (summary, events) = run_scope(&scope, &path, &grants, &renderer, &AtomicBool::new(false), &OPEN);
+
+    assert_eq!((summary.reason, summary.regions_cleaned, summary.errored), ("completed", 2, 0));
+    assert_eq!(of_type(&events, "region-done"), 2, "a further generation is not a region done");
+    let mut rendered = renderer.rendered();
+    rendered.sort();
+    assert_eq!(rendered, ids, "each region's first is rendered once");
+    let mut kept = renderer.variations();
+    kept.sort();
+    assert_eq!(kept, vec![ids[0].clone(), ids[0].clone(), ids[1].clone(), ids[1].clone()]);
+    assert!(notices(&events, "notice.cloudClean.generationsNotMade").is_empty());
+    let job = Job::open(&path).unwrap();
+    for id in &ids {
+        let listed = crate::variations::list(&job.project, id);
+        assert_eq!(listed.len(), 3, "{id}: its first and two further generations");
+        assert!(listed[0].current, "the first stays the region's result");
+        assert_eq!(listed.iter().filter(|variation| variation.current).count(), 1);
+        let live = job.project.patches.iter().find(|row| &row.id == id).unwrap();
+        assert_eq!(listed[0].row.provenance.cloud, live.provenance.cloud);
+    }
+    assert_eq!(renderer.releases.load(Ordering::SeqCst), 1);
+}
+
+/// A further generation that fails never fails its region: the region keeps
+/// its first, no region notice is said, and the ones not made are counted
+/// once for the run. The other region's go on.
+#[test]
+fn a_failed_further_generation_leaves_its_region_cleaned_and_is_counted() {
+    let path = chapter("generations-fail", 2, StripMode::Single);
+    let ids: Vec<String> = (0..2).map(|page| detect(&path, page, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)).collect();
+    let grants = Arc::new(GrantService::new());
+    let scope = with_generations(scope_for(&path, &ids, &grants), 3);
+    let mut renderer = Renderer::new(&path, &grants);
+    renderer.fail_variation.insert(ids[0].clone(), "remote_failed".into());
+    let (summary, events) = run_scope(&scope, &path, &grants, &renderer, &AtomicBool::new(false), &OPEN);
+
+    assert_eq!((summary.reason, summary.regions_cleaned, summary.errored), ("completed", 2, 0));
+    assert!(detection_ids(&path).is_empty(), "both regions are cleaned");
+    assert!(notices(&events, "notice.cloudClean.regionFailed").is_empty());
+    let not_made = notices(&events, "notice.cloudClean.generationsNotMade");
+    assert_eq!(not_made.len(), 1);
+    assert_eq!(not_made[0]["count"], 2);
+    let job = Job::open(&path).unwrap();
+    assert_eq!(crate::variations::list(&job.project, &ids[0]).len(), 1, "only its first");
+    assert_eq!(crate::variations::list(&job.project, &ids[1]).len(), 3);
+}
+
+/// A further generation refused for the run's authority stops the run as a
+/// first would, and asks the endpoint for nothing more; its region keeps
+/// its first.
+#[test]
+fn a_refused_key_in_a_further_generation_stops_the_run_and_keeps_the_first() {
+    let path = chapter("generations-stop", 1, StripMode::Single);
+    let ids = vec![detect(&path, 0, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)];
+    let grants = Arc::new(GrantService::new());
+    let scope = with_generations(scope_for(&path, &ids, &grants), 3);
+    let mut renderer = Renderer::new(&path, &grants);
+    renderer.fail_variation.insert(ids[0].clone(), "gateway_unauthorized".into());
+    let (summary, events) = run_scope(&scope, &path, &grants, &renderer, &AtomicBool::new(false), &OPEN);
+
+    assert_eq!(summary.regions_cleaned, 1);
+    assert!(detection_ids(&path).is_empty());
+    assert_eq!(renderer.variations(), vec![ids[0].clone()], "nothing is asked after the refusal");
+    let stopped = notices(&events, "notice.cloudClean.stopped");
+    assert_eq!(stopped.len(), 1);
+    assert_eq!(stopped[0]["code"], "gateway_unauthorized");
+    assert_eq!(notices(&events, "notice.cloudClean.generationsNotMade")[0]["count"], 2);
+    assert_eq!(renderer.releases.load(Ordering::SeqCst), 0, "a run that lost its key asks nothing more");
+}
+
+/// The refusals a first meets hold for its further generations: page bytes
+/// changed since the first was rendered, consent withdrawn, the run
+/// cancelled. None of them is sent, and the region keeps its first.
+#[test]
+fn further_generations_meet_the_refusals_a_first_meets() {
+    // The page's bytes change while its first renders.
+    let path = chapter("generations-source", 1, StripMode::Single);
+    let ids = vec![detect(&path, 0, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)];
+    let grants = Arc::new(GrantService::new());
+    let scope = with_generations(scope_for(&path, &ids, &grants), 3);
+    let mut renderer = Renderer::new(&path, &grants);
+    let source = Job::open(&path).unwrap().source_path(0).unwrap();
+    renderer.on_render = Box::new(move |_| {
+        let mut page = page_raster();
+        page.data = vec![7; page.data.len()];
+        std::fs::write(&source, cleaner_core::image::encode(&page, Format::Png).unwrap()).unwrap();
+    });
+    let (summary, events) = run_scope(&scope, &path, &grants, &renderer, &AtomicBool::new(false), &OPEN);
+    assert_eq!(summary.regions_cleaned, 1);
+    assert!(renderer.variations().is_empty(), "sent from page bytes the first did not read");
+    assert_eq!(notices(&events, "notice.cloudClean.generationsNotMade")[0]["count"], 2);
+
+    // Cloud engines are switched off once the first is in.
+    let path = chapter("generations-withdrawn", 1, StripMode::Single);
+    let ids = vec![detect(&path, 0, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)];
+    let scope = with_generations(scope_for(&path, &ids, &grants), 3);
+    let off = Arc::new(AtomicBool::new(false));
+    let mut renderer = Renderer::new(&path, &grants);
+    let switch = Arc::clone(&off);
+    renderer.on_render = Box::new(move |_| switch.store(true, Ordering::SeqCst));
+    let allowed = move || if off.load(Ordering::SeqCst) { Err("cloud_disabled") } else { Ok(()) };
+    let (summary, events) = run_scope(&scope, &path, &grants, &renderer, &AtomicBool::new(false),
+        &Harness { allowed: &allowed, ..OPEN });
+    assert_eq!(summary.regions_cleaned, 1);
+    assert!(renderer.variations().is_empty(), "sent after consent was withdrawn");
+    assert_eq!(notices(&events, "notice.cloudClean.stopped")[0]["code"], "cloud_disabled");
+
+    // The run is cancelled during the first further generation.
+    let path = chapter("generations-cancel", 1, StripMode::Single);
+    let ids = vec![detect(&path, 0, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)];
+    let scope = with_generations(scope_for(&path, &ids, &grants), 4);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut renderer = Renderer::new(&path, &grants);
+    let stop = Arc::clone(&cancel);
+    renderer.on_variation = Box::new(move |_| stop.store(true, Ordering::SeqCst));
+    let (summary, _) = run_scope(&scope, &path, &grants, &renderer, &cancel, &OPEN);
+    assert_eq!((summary.reason, summary.regions_cleaned), ("cancelled", 1));
+    assert_eq!(renderer.variations().len(), 1, "nothing is asked after the cancel");
+    assert!(detection_ids(&path).is_empty());
+}
+
+/// A stream counts a region with every generation it may make against the
+/// cap, so a further one never passes it.
+#[test]
+fn a_stream_counts_every_generation_against_its_cap() {
+    let path = chapter("generations-stream", 2, StripMode::Single);
+    let ids: Vec<String> = (0..2).map(|page| detect(&path, page, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)).collect();
+    let Bound { regions, .. } = bind(&path, &ids, recipe_preprocessing(&recipe()).unwrap()).unwrap();
+    let budget = Budget::new(&recipe(), CloudProvider::Modal, "L4", 0.8, 0.0);
+    // Room for the first region's three renders and not the second's.
+    let cap = budget.fixed_usd + 3.0 * budget.job_usd(regions[0].crop) + budget.job_usd(regions[1].crop);
+    let grants = Arc::new(GrantService::new());
+    let scope = CleanGrantScope { generations: 3, ..stream_scope(&grants, "modal-prof-generations-stream") };
+    let renderer = Renderer::new(&path, &grants);
+    let (summary, events) = run_streamed(&scope, &terms(2, cap), &path, &grants, &renderer, &AtomicBool::new(false),
+        &OPEN, |tx| {
+            for page in 0..2u32 { tx.send((page, false)).unwrap(); }
+        });
+    assert_eq!(summary.regions_cleaned, 1);
+    assert_eq!(renderer.variations(), vec![ids[0].clone(), ids[0].clone()]);
+    assert_eq!(notices(&events, "notice.cloudClean.capReached").len(), 1);
+    assert_eq!(detection_ids(&path), vec![ids[1].clone()]);
+}
+
+/// Through the app's own render path and its journal: each region's first is
+/// one undo step, as at one generation, and its further generations are none.
+/// Their attempts are journaled as variations, a recovery's audit of them
+/// finds nothing lost, and undo and redo leave the variations where they are.
+#[test]
+fn further_generations_through_the_render_path_are_journaled_and_never_an_undo_step() {
+    use crate::inference::config::{compute_canonical_endpoint_fingerprint, validate_https_endpoint, CloudProfile};
+    use crate::inference::consent::ConsentService;
+    use crate::inference::journal::AttemptPhase;
+    use crate::inference::secrets::SecretManager;
+    const PROFILE: &str = "modal-prof-generations-service";
+    const URL: &str = "https://modal.run/mc/v1";
+
+    let path = chapter("generations-service", 2, StripMode::Single);
+    let ids: Vec<String> = (0..2).map(|page| detect(&path, page, Rect::new(40, 40, 30, 20), REMOTE_PICK, 0)).collect();
+    let mut config = InferenceConfig::default();
+    let (origin, origin_fingerprint) = validate_https_endpoint(URL).unwrap();
+    config.modal_profiles.insert(PROFILE.into(), CloudProfile {
+        id: PROFILE.into(), name: "Generations".into(), endpoint_url: URL.into(), canonical_origin: origin,
+        canonical_origin_fingerprint: origin_fingerprint, created_at_ms: 100, updated_at_ms: 100,
+    });
+    let grants = Arc::new(GrantService::new());
+    let scope = with_generations(plan_with(&path, &ids, &grants, CHUNK_REGIONS, CleanExecution::Cloud, &recipe(),
+        PROFILE, &compute_canonical_endpoint_fingerprint(URL).unwrap()), 3);
+    let gateway = QueueGateway::start();
+    gateway.state.finish.store(true, Ordering::SeqCst);
+    let service = InferenceService::new_isolated(
+        path.parent().unwrap().parent().unwrap().join("journal"),
+        cleaner_core::cloud_wire::provisional_fixture_limits(),
+        Arc::new(ConsentService::new_isolated(Arc::clone(&grants))), Arc::clone(&grants),
+        Arc::new(SecretManager::new_in_memory()),
+    ).with_custom_client(gateway.client(PROFILE));
+    let renderer = ServiceBacked {
+        service: &service, job_path: &path, target: ExecutionTarget::Modal { profile_id: PROFILE.into() },
+        config: &config, deployed: recipe(),
+    };
+    let batch = Batch {
+        scope: &scope, job_path: &path, grants: &grants, allowed: OPEN.allowed, unresolved: OPEN.unresolved,
+        local_pass: None, read: OPEN.read,
+    };
+    let events = Mutex::new(Vec::new());
+    let summary = run_plan(&batch, &renderer, "run-test", &AtomicBool::new(false),
+        &|event| events.lock().unwrap().push(event));
+    let events = events.into_inner().unwrap();
+
+    let said: Vec<_> = ["notice.cloudClean.regionFailed", "notice.cloudClean.stopped",
+        "notice.cloudClean.generationsNotMade"].into_iter().flat_map(|key| notices(&events, key)).collect();
+    assert!(said.is_empty(), "{said:?}");
+    assert_eq!((summary.reason, summary.regions_cleaned, summary.errored), ("completed", 2, 0));
+    assert_eq!(gateway.accepted(), 6, "two regions, three renders each");
+    let records: Vec<_> = service.journal().list_attempt_ids().unwrap().iter()
+        .map(|id| service.journal().get_record(id).unwrap()).collect();
+    assert_eq!(records.len(), 6);
+    assert!(records.iter().all(|record| matches!(record.phase, AttemptPhase::Committed { .. })));
+    assert_eq!(records.iter().filter(|record| record.keep_as_variation).count(), 4);
+
+    let job = Job::open(&path).unwrap();
+    for id in &ids {
+        let first = records.iter().find(|record| &record.region_id == id && !record.keep_as_variation).unwrap();
+        let live = job.project.patches.iter().find(|row| &row.id == id).unwrap();
+        assert_eq!(live.provenance.cloud.as_ref().and_then(|cloud| cloud.attempt_id.as_deref()),
+            Some(first.attempt_id.as_str()), "the first stays the region's result");
+        let listed = crate::variations::list(&job.project, id);
+        assert_eq!(listed.len(), 3, "{id}");
+        assert_eq!(listed.iter().filter(|variation| variation.current).count(), 1);
+    }
+    let snapshot = crate::inference::service::RecoveryAuditSnapshot::load(&path).unwrap();
+    for record in records.iter().filter(|record| record.keep_as_variation) {
+        assert!(service.committed_result_intact(record, &snapshot).unwrap(), "a kept generation is not a lost result");
+    }
+
+    let history = crate::history::load(&path);
+    assert_eq!(history.entries.len(), 2, "one undo step for each region's first, none for the others");
+    assert!(history.entries.iter().all(|entry| entry.label == crate::history::CLEAN_LABEL));
+    for _ in 0..2 { crate::history::move_at(&path, "chapter", 0, "undo").unwrap(); }
+    for _ in 0..2 { crate::history::move_at(&path, "chapter", 0, "redo").unwrap(); }
+    let job = Job::open(&path).unwrap();
+    for id in &ids {
+        assert_eq!(crate::variations::list(&job.project, id).len(), 3, "undo and redo keep every variation");
+    }
 }

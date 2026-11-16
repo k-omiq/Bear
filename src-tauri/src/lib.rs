@@ -34,6 +34,7 @@ mod settings;
 mod smoke;
 mod tile;
 mod underlay;
+mod variations;
 mod weights;
 mod webview_lock;
 #[cfg(windows)]
@@ -276,6 +277,8 @@ pub fn run() {
             library::reject_result,
             inference::refinish::region_finishing_previews,
             inference::refinish::set_region_finishing,
+            variations::region_variations,
+            variations::pick_variation,
             region::apply_tool,
             region::create_region,
             region::edit_detection_mask,

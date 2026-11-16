@@ -46,7 +46,7 @@ pub fn touches(patch: &Value) -> bool {
 pub fn from_settings(settings: &Value) -> Result<Choice, String> {
     let set = |key: &str| settings.get(key).filter(|value| !value.is_null());
     let finishing = match set(FINISHING_KEY) {
-        None => Finishing::default(),
+        None => Finishing::SETTING_DEFAULT,
         Some(value) => serde_json::from_value(value.clone()).map_err(|_| {
             let names: Vec<String> = Finishing::ALL.iter().map(|f| serde_json::json!(f).as_str().unwrap_or_default().to_owned()).collect();
             format!("{FINISHING_KEY} must be one of {names:?}")
@@ -113,8 +113,12 @@ mod tests {
 
     #[test]
     fn absent_or_null_is_the_default_finishing() {
-        assert_eq!(from_settings(&json!({})).unwrap(), Choice::default());
-        assert_eq!(from_settings(&json!({FINISHING_KEY: null, GRAYSCALE_KEY: null, STRAYS_KEY: null})).unwrap(), Choice::default());
+        // The setting's default, Tone only, fill lost dots: not the type's,
+        // which is what a record that names no finishing means.
+        assert_eq!(Choice::SETTING_DEFAULT, Choice::of(Finishing::ToneFillDots, false));
+        assert_ne!(Choice::SETTING_DEFAULT, Choice::default());
+        assert_eq!(from_settings(&json!({})).unwrap(), Choice::SETTING_DEFAULT);
+        assert_eq!(from_settings(&json!({FINISHING_KEY: null, GRAYSCALE_KEY: null, STRAYS_KEY: null})).unwrap(), Choice::SETTING_DEFAULT);
     }
 
     /// **Nano Banana's choice is its own.** The shared finishing, even with

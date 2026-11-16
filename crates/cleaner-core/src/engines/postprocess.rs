@@ -116,7 +116,10 @@ const MIN_COHERENCE: f64 = 0.35;
 #[serde(rename_all = "kebab-case")]
 pub enum Finishing {
     /// The page's own dots copied in phase, the table where no copy reaches
-    /// (bench 7).
+    /// (bench 7). What a 3.0.0 recipe or a record that names no finishing
+    /// means, so this stays the type's default: changing it would change
+    /// what every such recipe and kept record says was done. It was also the
+    /// setting's default until 2026-11-16 ([`Finishing::SETTING_DEFAULT`]).
     #[default]
     Copy,
     /// The copy, then hops from copied pixels deeper into a wide mask.
@@ -135,7 +138,8 @@ pub enum Finishing {
     /// wherever the answer is a screen of its own or plain grey
     /// ([`super::halftone::Over::Screen`]): a model's dots are fuzzy, out of
     /// phase or smoothed away, and its tone is right. Its drawing, flat
-    /// black and paper stay as they came.
+    /// black and paper stay as they came. The setting's default
+    /// ([`Finishing::SETTING_DEFAULT`]).
     ToneFillDots,
     /// The answer as it came, grey if asked (ported `off`).
     #[serde(alias = "reference-off")]
@@ -166,6 +170,12 @@ pub enum Finishing {
 }
 
 impl Finishing {
+    /// The method a settings file that names none means, and so what a new
+    /// install finishes with: Tone only, fill lost dots, since 2026-11-16.
+    /// Not the type's default, which is what a recipe or a kept record that
+    /// names no finishing means and must keep meaning ([`Finishing::Copy`]).
+    pub const SETTING_DEFAULT: Finishing = Finishing::ToneFillDots;
+
     pub const ALL: [Finishing; 13] = [
         Finishing::Copy,
         Finishing::CopyHops,
@@ -214,6 +224,10 @@ pub struct Choice {
 }
 
 impl Choice {
+    /// What a settings file that makes no choice means
+    /// ([`Finishing::SETTING_DEFAULT`], not grey, stray marks left).
+    pub const SETTING_DEFAULT: Choice = Choice::of(Finishing::SETTING_DEFAULT, false);
+
     /// `finishing`, grey or not, with no stray marks taken out.
     pub const fn of(finishing: Finishing, grayscale: bool) -> Choice {
         Choice { finishing, grayscale, strays: false }

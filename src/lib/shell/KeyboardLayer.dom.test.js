@@ -100,9 +100,14 @@ describe('the keyboard layer', () => {
     state.region = { id: 'r1', outcome: 'detected', detected: true }
     press('b')
     expect(runMaskAction).toHaveBeenCalledWith('cleanDetected', state.region)
-    state.region = { id: 'r2', outcome: 'cleaned', mask: { id: 'm2', provenance: { engine: 'lama' } } }
+    state.region = { id: 'r3', outcome: 'cleaned', mask: { id: 'm3', provenance: { engine: 'flux' } } }
     press('b')
     expect(runRegionMenuItem).toHaveBeenLastCalledWith('retry', state.region)
+    // A LaMa layer has no Try again: B says why, and Shift+B widens it.
+    state.region = { id: 'r2', outcome: 'cleaned', mask: { id: 'm2', provenance: { engine: 'lama' } } }
+    press('b')
+    expect(runRegionMenuItem).toHaveBeenCalledTimes(1)
+    expect(app.notices.map((notice) => notice.key)).toContain('notice.mask.retryOff')
     press('B', { shiftKey: true })
     expect(runRegionMenuItem).toHaveBeenLastCalledWith('retryWider', state.region)
   })

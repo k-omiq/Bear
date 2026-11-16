@@ -79,7 +79,8 @@
     setCleanSolidOnly,
   } from '../state/session.svelte.js'
   import { capabilities, currentWorkflowMissing, loadCapabilities } from '../state/capabilities.svelte.js'
-  import { cloud, cloudEntries, cloudUsable, cloudCleanAvailable, cloudCleanMissingKey, openCloudSettings, pickCloudChoice, saveCloudWorkLongSide } from '../state/cloud.svelte.js'
+  import { cloud, cloudEntries, cloudUsable, cloudCleanAvailable, cloudCleanMissingKey, openCloudSettings, pickCloudChoice, saveCloudWorkLongSide, saveGenerationsPerRegion } from '../state/cloud.svelte.js'
+  import { MAX_GENERATIONS, generationsReasonKey } from '../model/masks.js'
   import {
     chooseCleanTarget,
     chooseDetectTarget,
@@ -612,6 +613,23 @@
 
   /** The picks this run reads: the outside pick cleans nothing under Solid bubbles only. */
   const pickKeys = $derived(solidOnly ? ['bubbleEngine'] : ['bubbleEngine', 'outsideEngine'])
+
+  /**
+   * Generations per region (`session.generationsPerRegion`): how many times
+   * a clean run makes each region it cleans on an engine that has
+   * variations, the first applied and the rest kept as variations. Drawn
+   * wherever the run cleans, next to Clean on, and disabled with the reason
+   * in its note where the run's engine makes one: a run here whose picks all
+   * answer one way. A cloud GPU run makes them too, and its consent shows
+   * every render. Disabled, it shows the 1 the run will make.
+   */
+  const runPicks = $derived(pickKeys.map((key) => {
+    const entry = param[key]
+    return entry ? effectiveChoice(entry, pickOptions(entry), values[key]) : values[key]
+  }))
+  const generationsReason = $derived(generationsReasonKey(cleanOn, runPicks))
+  const generationsOptions = Array.from({ length: MAX_GENERATIONS }, (_, at) => ({ value: String(at + 1), label: String(at + 1) }))
+  const generationsNoteId = `${uid}-generations-note`
 
   /**
    * Where the picks send each region. Here, every region starts from them.
@@ -1389,6 +1407,20 @@
             {/if}
             {#if step !== 'detect'}
               {@render placeRow('clean', 'tools.param.cleanOn', cleanOn, cleanNote, setCleanOn)}
+              <label class="row-label" for="{uid}-generations">{t('tools.param.generations')}</label>
+              <div class="row-control" data-run-row="generations">
+                <Select
+                  id="{uid}-generations"
+                  options={generationsOptions}
+                  value={generationsReason ? '1' : String(session.generationsPerRegion)}
+                  disabled={Boolean(generationsReason)}
+                  describedBy={generationsNoteId}
+                  onchange={(next) => void saveGenerationsPerRegion(Number(next))}
+                />
+              </div>
+              <div class="row-note">
+                <p class="gate" id={generationsNoteId} data-generations-note>{t(generationsReason ?? 'tools.target.generationsHint')}</p>
+              </div>
             {/if}
             <!-- Mixed execution: an explicit choice, never a default. -->
             {#if parts.clean}
