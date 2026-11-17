@@ -738,6 +738,20 @@ never written as though it were general.
 
 ## What has not been measured
 
+**Mask split (2026-11-17): what is still open.**
+
+- **No real pages.** The split is covered by Rust unit tests on a 64 x 48 fixture and by the Vite
+  mock, which splits boxes, not pixels. It was not tried on the merged balloons or the text plus
+  sound effect cases it is for, on copies of real library chapters.
+- **No run of the built app.** The menu item, the armed tool, the dashed preview and Undo were
+  checked in the Vite mock (Chromium) only, not in the WKWebView of the shipped app.
+- **The 64 pixel minimum was not tuned.** It is the existing sliver rule (`LEAST_LEFT`); a small
+  furigana part on a large page may be refused where a user wants it.
+- **A third detection still joins split parts.** Padding keeps two parts apart, but one that
+  reaches both runs all three together. How often that happens on a real page was not counted.
+- **Split into pieces is not built.** The one-click split of a mask into its separate blobs is a
+  plan only (`docs/mask-split-plan.md`).
+
 **Padding inside a balloon (2026-11-16): what is still open.**
 
 - **Noisy and JPEG scans were not measured.** The 15 bench pages are clean PNG. The wall is ink

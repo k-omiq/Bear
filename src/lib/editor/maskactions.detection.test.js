@@ -833,3 +833,32 @@ describe('Restore mask on a failed clean', () => {
     expect(current('p0-u2')).toMatchObject({ outcome: 'declined', mask: null })
   })
 })
+
+describe('Split off part', () => {
+  afterEach(() => {
+    editor.tool = 'autoClean'
+    editor.selectionId = null
+  })
+
+  it('arms the selection tool in split mode on the detection, and cuts nothing yet', async () => {
+    const { backend, regions } = await detected()
+    const target = regions.find((/** @type {any} */ region) => region.outcome === 'detected')
+    const edit = vi.spyOn(backend, 'editDetectionMask')
+    editor.tool = 'brush'
+    expect(regionMenuSections(target, { engines: {} }).flatMap((section) => section.items.map((item) => item.id)))
+      .toContain('splitPart')
+
+    expect(await runRegionMenuItem('splitPart', target)).toBe(true)
+    expect(editor.tool).toBe('maskSelect')
+    expect(editor.toolParams.maskSelect?.mode).toBe('split')
+    expect(editor.selectionId).toBe(target.id)
+    expect(edit).not.toHaveBeenCalled()
+  })
+
+  it('is not armed on a region that is not a detection', async () => {
+    const cleaned = { id: 'c1-p001-r1', outcome: 'cleaned', mask: { id: 'c1-p001-r1-m1', provenance: { engine: 'fill' } } }
+    editor.tool = 'brush'
+    expect(await runRegionMenuItem('splitPart', /** @type {any} */ (cleaned))).toBe(false)
+    expect(editor.tool).toBe('brush')
+  })
+})

@@ -147,6 +147,7 @@ pub const REJECT_LABEL: &str = "masks.command.rejectResult";
 pub const DELETE_DETECTION_LABEL: &str = "masks.command.deleteDetection";
 pub const DETECTION_TYPE_LABEL: &str = "masks.command.detectionType";
 pub const EDIT_DETECTION_LABEL: &str = "masks.command.editDetection";
+pub const SPLIT_DETECTION_LABEL: &str = "masks.command.splitDetection";
 pub const PADDING_LABEL: &str = "masks.command.detectionPadding";
 pub const APPROVE_LABEL: &str = "masks.command.approveMask";
 pub const DISMISS_LABEL: &str = "masks.command.deleteRegion";
@@ -1873,6 +1874,7 @@ mod tests {
         use cleaner_core::project::DetectedRegion;
         let (root, mut job) = two_page_job("group-pages");
         let detection = |id: &str, source_idx: usize| DetectedRegion {
+            kept_apart: Vec::new(),
             id: id.into(), source_idx, bbox: cleaner_core::mask::Rect::new(4, 6, 12, 12), mask_ref: String::new(),
             inside: true, balloon_color: None, script: None, pick: "fill".into(), detector: "local".into(),
             created: 0, mask_sha256: String::new(), order: 0, review_state: None, fit: None, group: None,

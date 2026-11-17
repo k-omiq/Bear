@@ -735,6 +735,7 @@ mod tests {
             &[source])).unwrap();
         let bbox = Rect::new(98, 98, 34, 16);
         let record = DetectedRegion {
+            kept_apart: Vec::new(),
             id: region_id.into(), source_idx: 0, bbox, mask_ref: String::new(), inside: true, balloon_color: None,
             script: Some("ja".into()), pick: "lama".into(), detector: "local".into(), created: 1_760_000_000,
             mask_sha256: String::new(), order: 0, review_state: None, fit: None, group: None,

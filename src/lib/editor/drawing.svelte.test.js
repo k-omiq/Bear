@@ -1459,7 +1459,7 @@ describe('the selection tool', () => {
    * @param {string} kind
    * @param {Array<{x: number, y: number}>} points
    * @param {{x: number, y: number, w: number, h: number}} bbox
-   * @param {'add'|'erase'|'detect'} [mode]
+   * @param {'add'|'erase'|'split'|'detect'} [mode]
    */
   function selection(kind, points, bbox, mode = 'add') {
     beginDraft({ tool: 'maskSelect', kind, pageId: 'c1-p001', points, bbox, mode, keyboard: false, moved: true })
@@ -1559,6 +1559,35 @@ describe('the selection tool', () => {
       points: [{ x: 5, y: 5 }, { x: 15, y: 5 }, { x: 15, y: 25 }, { x: 5, y: 25 }],
       feather: 0,
     })
+  })
+
+  it('splits with the gesture it was drawn with, and picks the part it made', async () => {
+    const part = 'c1-p001-d2'
+    const adapter = maskBackend({ pageStatus: 'detected', changed: [DETECTED_ID], created: [part], removed: [] },
+      [detected(), { ...detected(), id: part, bbox: { x: 15, y: 10, w: 5, h: 10 } }])
+    setBackend(/** @type {any} */ (adapter))
+
+    selection('rect', [{ x: 15, y: 5 }], { x: 15, y: 5, w: 10, h: 20 }, 'split')
+    expect(await commitDraft()).toBe(true)
+
+    const [spec] = adapter.editDetectionMask.mock.calls[0]
+    expect(spec.mode).toBe('split')
+    expect(spec.painted).toEqual({
+      kind: 'rect',
+      points: [{ x: 15, y: 5 }, { x: 25, y: 5 }, { x: 25, y: 25 }, { x: 15, y: 25 }],
+      feather: 0,
+    })
+    expect(editor.selectionId).toBe(part)
+    expect(editor.chapter.pages[0].regions.map((region) => region.id)).toEqual([DETECTED_ID, part])
+    expect(editor.history.entries).toHaveLength(0)
+  })
+
+  it('picks nothing new when a split changed nothing', async () => {
+    setBackend(/** @type {any} */ (maskBackend({ pageStatus: 'detected', changed: [], created: [], removed: [] })))
+    editor.selectionId = DETECTED_ID
+    selection('rect', [{ x: 40, y: 40 }], { x: 40, y: 40, w: 2, h: 2 }, 'split')
+    expect(await commitDraft()).toBe(false)
+    expect(editor.selectionId).toBe(DETECTED_ID)
   })
 
   it('lets go of a selection the edit deleted', async () => {

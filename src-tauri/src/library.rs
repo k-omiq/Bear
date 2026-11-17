@@ -6914,6 +6914,7 @@ mod tests {
     fn a_stored_detection_at(job: &mut Job, page: &str, bbox: Rect, inside: bool) -> String {
         let id = job.next_detection_id(page);
         job.store_detection(cleaner_core::project::DetectedRegion {
+            kept_apart: Vec::new(),
             id: id.clone(),
             source_idx: 0,
             bbox,
@@ -6971,6 +6972,7 @@ mod tests {
     #[test]
     fn retyping_a_detection_clears_its_balloon_colour_and_moves_only_a_contradicting_pick() {
         let record = |inside: bool, pick: &str| DetectedRegion {
+            kept_apart: Vec::new(),
             id: "c-p001-d1".into(),
             source_idx: 0,
             bbox: Rect::new(1, 2, 3, 4),

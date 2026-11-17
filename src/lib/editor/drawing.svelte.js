@@ -160,7 +160,7 @@ function shapeEngine(spec) {
  * @property {string} kind - the draft's shape: `stroke` is the only one that carries a path
  * @property {string} pageId
  * @property {import('./gesture.js').Bbox} bbox
- * @property {'add'|'erase'|'paint'|'detect'} mode - `erase` is the selection tool's remove, `detect` its Detect
+ * @property {'add'|'erase'|'split'|'paint'|'detect'} mode - `erase` is the selection tool's remove, `split` its split, `detect` its Detect
  * @property {Array<{x: number, y: number}>} points
  * @property {{x: number, y: number}} start
  * @property {string|null} chapterId
@@ -544,7 +544,7 @@ async function editMask(spec) {
       ...(spec.sourceIndex !== null && spec.sourceSha ? {
         sourceIndex: spec.sourceIndex, sourceSha: spec.sourceSha,
       } : {}),
-      mode: spec.mode === 'erase' ? 'remove' : 'add',
+      mode: spec.mode === 'erase' ? 'remove' : spec.mode === 'split' ? 'split' : 'add',
       ...(stroke ? { stroke } : { painted: /** @type {any} */ (painted) }),
     })
   } catch (error) {
@@ -563,6 +563,10 @@ async function editMask(spec) {
   await Promise.all([...new Set(written)].map((index) => reloadPage(index).catch((error) => {
     console.error('the page could not be read again after a mask edit', error)
   })))
+  // The part a split took off is the region the user just made: it is picked,
+  // so its row and its menu are the next thing a click reaches.
+  const part = spec.mode === 'split' ? result.created?.[0] : null
+  if (part && editor.chapter?.id === spec.chapterId) select(part)
   return true
 }
 

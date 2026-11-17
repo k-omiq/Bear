@@ -3869,6 +3869,7 @@ pub(crate) mod tests {
         let mut job = Job::open(manifest).unwrap();
         job.store_detection(
             cleaner_core::project::DetectedRegion {
+                kept_apart: Vec::new(),
                 id: id.into(), source_idx: 0, bbox, mask_ref: String::new(), inside: true,
                 balloon_color: None, script: Some("ja".into()), pick: "lama".into(), detector: "local".into(),
                 created: 1_760_000_000, mask_sha256: String::new(), order: 0, review_state: None, fit: None,
@@ -5860,6 +5861,7 @@ pub(crate) mod tests {
         job.project.patches.clear();
         let bbox = Rect::new(30, 30, 24, 16);
         job.store_detection(cleaner_core::project::DetectedRegion {
+            kept_apart: Vec::new(),
             id: "reg-1".into(), source_idx: 0, bbox, mask_ref: String::new(),
             inside: true, balloon_color: None, script: None, pick: "lama".into(),
             detector: "local".into(), created: 1_760_000_000, mask_sha256: String::new(),
@@ -6724,6 +6726,7 @@ pub(crate) mod tests {
             let mut job = Job::open(&manifest).unwrap();
             job.store_detection(
                 cleaner_core::project::DetectedRegion {
+                    kept_apart: Vec::new(),
                     id: "p-d0".into(),
                     source_idx: 0,
                     bbox,

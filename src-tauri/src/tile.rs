@@ -2533,6 +2533,7 @@ mod tests {
     fn store_detection(job: &mut Job, source_idx: usize, mask: &Mask, ink: &Mask) -> String {
         let id = job.next_detection_id(&format!("c-p{:03}", source_idx + 1));
         job.store_detection(cleaner_core::project::DetectedRegion {
+            kept_apart: Vec::new(),
             id: id.clone(), source_idx, bbox: mask.bounds, mask_ref: String::new(), inside: true,
             balloon_color: None, script: None, pick: "fill".into(), detector: "local".into(), created: 0,
             mask_sha256: String::new(), order: 0, review_state: None, fit: None, group: None,

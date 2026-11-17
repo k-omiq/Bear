@@ -1894,7 +1894,8 @@ export function showOnPage(region) {
  * replaces the layer, as the row's picker does. Text type is a detected
  * region's alone, Approve mask a held region's, and Reject result a cleaned
  * detection's, the three entries with no row control: `setDetectionType`,
- * `approveHeldMask` and `rejectResult`. Restore mask on a failed clean is
+ * `approveHeldMask` and `rejectResult`. Split off part arms the selection
+ * tool's split on a detection (`armSplit`). Restore mask on a failed clean is
  * `restoreDeclinedMask`, which its row offers too. Make n variations is Try
  * again n times in a row (`makeVariations`); the Variations row's previous
  * and next do not close the menu and are the menu's own (`stepVariation`).
@@ -1932,7 +1933,26 @@ export async function runRegionMenuItem(id, region) {
   }
   if (id === 'type:inside') return setDetectionType(region, true)
   if (id === 'type:outside') return setDetectionType(region, false)
+  if (id === 'splitPart') return armSplit(region)
   return false
+}
+
+/**
+ * Split off part: the selection tool in its split mode, with the detection
+ * picked, so the next gesture over it cuts the part it covers into a
+ * detection of its own (`api/backend.js#editDetectionMask`). Nothing is cut
+ * here: which part is the user's gesture to say. The shape stays as the tool
+ * was left, a brush, a lasso or a rectangle.
+ *
+ * @param {import('../api/backend.js').ApiRegion} region
+ * @returns {boolean} whether the split was armed
+ */
+export function armSplit(region) {
+  if (!isDetected(region)) return false
+  setTool('maskSelect')
+  setToolParam('maskSelect', 'mode', 'split')
+  select(region.id)
+  return true
 }
 
 /**

@@ -26,7 +26,7 @@ const REQUIRED = [
   // Onboarding and Settings: ratings, and a download's pause.
   'star', 'star-filled', 'pause', 'download',
   // The selection tool on the rail, and its add and remove modes.
-  'selection', 'mask-add', 'mask-remove',
+  'selection', 'mask-add', 'mask-remove', 'mask-split',
   // The language picker.
   'globe',
   // The Patch and Gradient tools on the rail.

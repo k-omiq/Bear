@@ -273,6 +273,48 @@ describe('editing the detected masks', () => {
     expect(page.regions.some((region) => region.outcome === 'detected')).toBe(false)
   })
 
+  it('splits the part under the gesture off the detection it overlaps most', async () => {
+    const mock = makeMock()
+    await ranToEnd(mock, () => mock.runClean(runOn('detect')))
+    const [target, ...others] = (await firstPage(mock)).regions.filter((region) => region.outcome === 'detected')
+    const { x, y, w, h } = target.bbox
+    // The right half of the detection, and past it.
+    const painted = { kind: 'rect', feather: 0, points: [{ x: x + w / 2, y: y - 1 }, { x: x + w + 1, y: y - 1 },
+      { x: x + w + 1, y: y + h + 1 }, { x: x + w / 2, y: y + h + 1 }] }
+    const answer = await edit(mock, { mode: 'split', painted })
+    expect(answer).toMatchObject({ pageStatus: 'detected', changed: [target.id], removed: [] })
+    expect(answer.created).toHaveLength(1)
+
+    const page = await firstPage(mock)
+    const kept = page.regions.find((region) => region.id === target.id)
+    const part = page.regions.find((region) => region.id === answer.created[0])
+    expect(kept.bbox).toEqual({ x, y, w: w / 2, h })
+    expect(part.bbox).toEqual({ x: x + w / 2, y, w: w / 2, h })
+    expect(part).toMatchObject({ outcome: 'detected', pick: target.pick, insideBubble: target.insideBubble })
+    expect(part.mask.regionId).toBe(part.id)
+    expect(part.keptApart).toEqual(kept.keptApart)
+    for (const other of others) {
+      expect(page.regions.find((region) => region.id === other.id)?.bbox).toEqual(other.bbox)
+    }
+  })
+
+  it('splits nothing off for a sliver, a gesture over all of it, or one over nothing', async () => {
+    const mock = makeMock()
+    await ranToEnd(mock, () => mock.runClean(runOn('detect')))
+    const before = await firstPage(mock)
+    const [target] = before.regions.filter((region) => region.outcome === 'detected')
+    const { x, y, w, h } = target.bbox
+    const rect = (x0, y0, x1, y1) => ({ kind: 'rect', feather: 0,
+      points: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }] })
+    const spot = emptySpot(before)
+    for (const painted of [rect(x + w * 0.99, y, x + w, y + h), rect(x - 1, y - 1, x + w + 1, y + h + 1),
+      rect(spot.x, spot.y, spot.x + 1, spot.y + 1)]) {
+      const answer = await edit(mock, { mode: 'split', painted })
+      expect(answer).toMatchObject({ changed: [], created: [], removed: [] })
+    }
+    expect((await firstPage(mock)).regions.length).toBe(before.regions.length)
+  })
+
   it('never touches a cleaned layer', async () => {
     const mock = makeMock()
     await ranToEnd(mock, () => mock.runClean(runOn('detect')))

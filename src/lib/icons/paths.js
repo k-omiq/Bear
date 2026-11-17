@@ -399,6 +399,15 @@ export const icons = {
     'M5.3 8h5.4',
   ],
 
+  // Split the selection: the same corners cut by a dashed line.
+  'mask-split': [
+    'M2.5 4.5v-1a1 1 0 0 1 1-1h1',
+    'M11.5 2.5h1a1 1 0 0 1 1 1v1',
+    'M13.5 11.5v1a1 1 0 0 1-1 1h-1',
+    'M4.5 13.5h-1a1 1 0 0 1-1-1v-1',
+    'M8 4.5v1.5M8 7.25v1.5M8 10v1.5',
+  ],
+
   // Open book seen from the front.
   'book': [
     'M2.5 4.5c2-1 3.5-.8 5.5.3v7.7c-2-1-3.5-.8-5.5.3V4.5Z',

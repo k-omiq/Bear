@@ -682,6 +682,7 @@ export function createMockBackend(options = {}) {
   let noticeCounter = 0
   let projectCounter = 0
   let handCounter = 0
+  let splitCounter = 0
   let mockEraseCount = 0
   /** Numbers each live copy redraw's revision (`redrawLiveCopies`). */
   let mockLiveRedraws = 0
@@ -1034,6 +1035,15 @@ export function createMockBackend(options = {}) {
   const overlapArea = (a, b) =>
     Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) *
     Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y))
+
+  /** The box two boxes share, or `null` where they share none. */
+  const intersectBox = (a, b) => {
+    const x = Math.max(a.x, b.x)
+    const y = Math.max(a.y, b.y)
+    const right = Math.min(a.x + a.w, b.x + b.w)
+    const bottom = Math.min(a.y + a.h, b.y + b.h)
+    return right > x && bottom > y ? { x, y, w: right - x, h: bottom - y } : null
+  }
 
   /** The smallest box holding both. */
   const unionBox = (a, b) => {
@@ -2179,6 +2189,7 @@ export function createMockBackend(options = {}) {
     delete: 'masks.command.deleteDetection',
     type: 'masks.command.detectionType',
     edit: 'masks.command.editDetection',
+    split: 'masks.command.splitDetection',
     padding: 'masks.command.detectionPadding',
     approve: 'masks.command.approveMask',
     dismiss: 'masks.command.deleteRegion',
@@ -4506,7 +4517,7 @@ export function createMockBackend(options = {}) {
 
     async editDetectionMask({ chapterId, pageIndex, sourceIndex, sourceSha, mode, stroke, painted } = {}) {
       await delay(timing.method)
-      if (mode !== 'add' && mode !== 'remove') throw new Error('mask_edit_mode_invalid')
+      if (mode !== 'add' && mode !== 'remove' && mode !== 'split') throw new Error('mask_edit_mode_invalid')
       const found = findChapter(chapterId)
       const page = found?.chapter.pages.find((candidate) => candidate.index === pageIndex)
       if (!page) return null
@@ -4535,6 +4546,63 @@ export function createMockBackend(options = {}) {
             answer.removed.push(region.id)
             touched.add(entry)
           }
+        }
+      } else if (mode === 'split') {
+        // The mock has no pixels, so it splits boxes: the detection the box
+        // overlaps most gives the part under the box to a new detection, and
+        // keeps the largest strip of itself outside it. A part under a
+        // twentieth of the old box is a sliver, and nothing changes, as
+        // natively for a part under `LEAST_LEFT` pixels.
+        let best = null
+        let bestEntry = null
+        let bestArea = 0
+        for (const entry of frame) {
+          for (const region of detectionsOf(entry.page)) {
+            const area = overlapArea(toAnchor(entry, region.bbox), box)
+            if (area > bestArea) {
+              best = region
+              bestEntry = entry
+              bestArea = area
+            }
+          }
+        }
+        const own = best && bestEntry ? toAnchor(bestEntry, best.bbox) : null
+        const cut = own ? intersectBox(own, box) : null
+        const strips = own && cut ? [
+          { x: own.x, y: own.y, w: cut.x - own.x, h: own.h },
+          { x: cut.x + cut.w, y: own.y, w: own.x + own.w - (cut.x + cut.w), h: own.h },
+          { x: own.x, y: own.y, w: own.w, h: cut.y - own.y },
+          { x: own.x, y: cut.y + cut.h, w: own.w, h: own.y + own.h - (cut.y + cut.h) },
+        ] : []
+        const rest = strips.reduce((most, strip) => (strip.w * strip.h > (most ? most.w * most.h : 0) ? strip : most), null)
+        const least = own ? (own.w * own.h) / 20 : Infinity
+        if (best && bestEntry && cut && rest && cut.w * cut.h >= least && rest.w * rest.h >= least) {
+          const token = `${best.id}/s${(splitCounter += 1)}`
+          const owner = frame.find((entry) => cut.y >= entry.top && cut.y < entry.top + entry.height) ?? bestEntry
+          /** @type {any} */
+          const part = snapshot(best)
+          part.id = `${owner.page.id}-s${splitCounter}`
+          part.pageId = owner.page.id
+          part.sourceSha = owner.page.sourceSha
+          part.bbox = fromAnchor(owner, cut)
+          if (best.baseBbox) part.baseBbox = { ...part.bbox }
+          part.keptApart = [...(best.keptApart ?? []), token]
+          if (part.mask) {
+            part.mask.id = `${part.id}-m${part.mask.sequence ?? 1}`
+            part.mask.regionId = part.id
+            if (part.mask.provenance) part.mask.provenance.mask_sha256 = sha256Hex(`mask-split:${part.id}`)
+          }
+          best.bbox = fromAnchor(bestEntry, rest)
+          if (best.baseBbox) best.baseBbox = { ...best.bbox }
+          best.keptApart = [...(best.keptApart ?? []), token]
+          maskEdits += 1
+          if (best.mask?.provenance) best.mask.provenance.mask_sha256 = sha256Hex(`mask-edit:${best.id}:${maskEdits}`)
+          if (best.mask) best.mask.sequence = (Number.isInteger(best.mask.sequence) ? best.mask.sequence : 1) + 1
+          owner.page.regions.push(part)
+          answer.changed.push(best.id)
+          answer.created.push(part.id)
+          touched.add(bestEntry)
+          touched.add(owner)
         }
       } else {
         let best = null
@@ -4596,7 +4664,7 @@ export function createMockBackend(options = {}) {
         answer.pages.push({ pageIndex: entry.page.index, pageStatus: entry.page.status })
       }
       answer.pageStatus = page.status
-      recordPageStep(chapterId, DETECTION_LABELS.edit, captured)
+      recordPageStep(chapterId, mode === 'split' ? DETECTION_LABELS.split : DETECTION_LABELS.edit, captured)
       return answer
     },
 

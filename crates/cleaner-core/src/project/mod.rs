@@ -698,6 +698,19 @@ pub struct DetectedRegion {
     /// True when padding is measured from segmentation instead of the legacy fitted masks.
     #[serde(default)]
     pub padding_from_seed: bool,
+    /// The hand splits this detection is a part of, one token per split
+    /// (`{source id}/s{n}`). Two detections that share a token were split
+    /// apart by the user, and a padding never runs them together again
+    /// (`region.rs#run_together`). Empty on every detection no split made.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kept_apart: Vec<String>,
+}
+
+impl DetectedRegion {
+    /// Whether the user split these two apart: they share a split token.
+    pub fn kept_apart_from(&self, other: &DetectedRegion) -> bool {
+        self.kept_apart.iter().any(|token| other.kept_apart.contains(token))
+    }
 }
 
 /// The fit's own answers a clean from a stored mask cannot re-derive: the route
@@ -3480,6 +3493,7 @@ impl Job {
         }
         let fill = patch.engine == Engine::Fill;
         let record = DetectedRegion {
+            kept_apart: Vec::new(),
             id: id.to_owned(),
             source_idx: patch.source_idx,
             bbox: bounds,
@@ -5199,6 +5213,7 @@ mod tests {
 
     fn a_detection(job: &mut Job, bbox: Rect) -> DetectedRegion {
         DetectedRegion {
+            kept_apart: Vec::new(),
             id: job.next_detection_id("c1-p001"),
             source_idx: 0,
             bbox,
@@ -6166,6 +6181,7 @@ mod tests {
         assert_eq!(job.project.counters.detections, u32::MAX);
         let mask = Mask::filled(Rect::new(8, 8, 12, 10));
         let record = DetectedRegion {
+            kept_apart: Vec::new(),
             id: String::new(), source_idx: 0, bbox: mask.bounds, mask_ref: String::new(),
             inside: false, balloon_color: None, script: None, pick: "fill".into(),
             detector: "local".into(), created: 0, mask_sha256: String::new(), order: 0,

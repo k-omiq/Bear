@@ -248,10 +248,10 @@ describe('regionMenuSections', () => {
   it('offers a detection the model list a cleaned region has, none checked, and no Clean shortcuts', () => {
     const region = { id: 'c1-p001-d0', outcome: 'detected', pick: 'lama', mask: masked('lama').mask }
     expect(ids(regionMenuSections(region, { engines: { flux: true }, cloud: true }))).toEqual([
-      'engine:fill', 'engine:lama', 'engine:flux', 'engine:cloud', 'type:inside', 'type:outside', 'padding', 'delete',
+      'engine:fill', 'engine:lama', 'engine:flux', 'engine:cloud', 'type:inside', 'type:outside', 'padding', 'splitPart', 'delete',
     ])
     expect(ids(regionMenuSections(region, { engines: { flux: false }, cloud: false }))).toEqual([
-      'engine:fill', 'engine:lama', 'type:inside', 'type:outside', 'padding', 'delete',
+      'engine:fill', 'engine:lama', 'type:inside', 'type:outside', 'padding', 'splitPart', 'delete',
     ])
     const engine = regionMenuSections(region, { cloud: true }).find((section) => section.id === 'engine')
     expect(engine?.labelKey).toBe('masks.action.engine')
@@ -267,9 +267,16 @@ describe('regionMenuSections', () => {
     const typeOf = (region) => regionMenuSections(region, { engines: { flux: false } })
       .find((section) => section.id === 'type')
 
+    it('offers Split off part on a detection, just above Delete', () => {
+      const sections = regionMenuSections(detection(true), { engines: {} })
+      const split = sections.find((section) => section.id === 'split')
+      expect(split?.items).toEqual([{ id: 'splitPart', labelKey: 'masks.action.splitPart', icon: 'mask-split' }])
+      expect(sections.at(-2)?.id).toBe('split')
+    })
+
     it('sits between Clean with and Delete, named as Text cleanup names the two kinds', () => {
       const sections = regionMenuSections(detection(true), { engines: { flux: false } })
-      expect(sections.map((section) => section.id)).toEqual(['engine', 'type', 'padding', 'remove'])
+      expect(sections.map((section) => section.id)).toEqual(['engine', 'type', 'padding', 'split', 'remove'])
       const type = typeOf(detection(true))
       expect(type.labelKey).toBe('masks.action.textType')
       expect(type.items.map((item) => [item.id, item.labelKey])).toEqual([

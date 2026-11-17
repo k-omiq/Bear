@@ -7234,6 +7234,7 @@ fn overlapping_selection_runs_merge_results_from_fresh_manifests() {
             self.resume.recv_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
             Ok(PageOutcome { regions: vec![RegionOutcome::Detected(Box::new(LoadedDetection {
                 record: cleaner_core::project::DetectedRegion {
+                    kept_apart: Vec::new(),
                     id: String::new(), source_idx: 0, bbox: self.bbox, mask_ref: String::new(), inside: false,
                     balloon_color: None, script: None, pick: "fill".into(), detector: "cloud".into(),
                     created: 0, mask_sha256: String::new(), order: 0, review_state: None, fit: None, group: None,
@@ -7404,6 +7405,7 @@ fn auto_and_detect_test_the_detected_box_against_old_patches() {
             let mut outcome = PageOutcome::default();
             outcome.regions.push(RegionOutcome::Detected(Box::new(LoadedDetection {
                 record: cleaner_core::project::DetectedRegion {
+                    kept_apart: Vec::new(),
                     id: String::new(), source_idx: 0, bbox, mask_ref: String::new(), inside: false,
                     balloon_color: None, script: None, pick: "fill".into(), detector: "local".into(),
                     created: 0, mask_sha256: String::new(), order: 0, review_state: None, fit: None, group: None,
@@ -7710,6 +7712,7 @@ fn a_solid_pick_fills_with_its_measured_balloon_colour_before_the_runs() {
     };
     let stored = |id: &str, bbox: Rect, balloon_color: Option<[u8; 3]>| LoadedDetection {
         record: cleaner_core::project::DetectedRegion {
+            kept_apart: Vec::new(),
             id: id.into(), source_idx: 0, bbox, mask_ref: String::new(), inside: balloon_color.is_some(),
             balloon_color, script: None, pick: "solid".into(), detector: "local".into(), created: 0,
             mask_sha256: String::new(), order: 0, review_state: None, fit: None, group: None,
@@ -7982,6 +7985,7 @@ fn solid_bubbles_only_keeps_what_rung_zero_does_not_settle_and_asks_no_model() {
         let bbox = Rect::new(x, 60, 16, 16);
         LoadedDetection {
             record: DetectedRegion {
+                kept_apart: Vec::new(),
                 id: id.into(), source_idx: 0, bbox, mask_ref: String::new(), inside, balloon_color, script: None,
                 pick: pick.into(), detector: "local".into(), created: 0, mask_sha256: String::new(), order: 0,
                 review_state: None, fit, group: None, padding_from_seed: false, padding_px: 0,

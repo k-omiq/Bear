@@ -57,6 +57,7 @@ const REMOTE_PICK: &str = "flux";
 
 fn record(id: String, page: usize, bbox: Rect, pick: &str, order: u32) -> DetectedRegion {
     DetectedRegion {
+        kept_apart: Vec::new(),
         id, source_idx: page, bbox, mask_ref: String::new(), inside: true,
         balloon_color: Some([200, 200, 200]), script: Some("ja".into()), pick: pick.into(),
         detector: "local".into(), created: 1_760_000_000, mask_sha256: String::new(), order,

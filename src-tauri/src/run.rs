@@ -4386,6 +4386,7 @@ impl Pipeline {
             let tone = ((u32::from(fitted.ring.median) + 128) / 257).min(255) as u8;
             at.outcome.regions.push(RegionOutcome::Detected(Box::new(LoadedDetection {
                 record: DetectedRegion {
+                    kept_apart: Vec::new(),
                     // Both minted by the walk, which holds the manifest.
                     id: String::new(),
                     source_idx: 0,

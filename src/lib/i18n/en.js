@@ -3091,6 +3091,7 @@ export const en = {
       delete: 'Delete layer',
       deleteHint: 'Delete this layer and bring the original text back',
       deleteRegion: 'Dismiss',
+      splitPart: 'Split off part',
       deleteRegionHint: 'Take this off the list and leave the page as it is',
       retry: 'Try again',
       // Try again and Clean with *replace* this layer's result and read only
@@ -3204,6 +3205,7 @@ export const en = {
       // records with the page as it was (`history.rs#record_pages`).
       deleteDetection: 'a detected mask deleted',
       editDetection: 'a detected mask edited',
+      splitDetection: 'a detected mask split',
       detectionPadding: 'mask padding changed',
       detectionType: 'text type changed',
       approveMask: 'a held mask approved',
@@ -3246,7 +3248,7 @@ export const en = {
       // passes: the tool bar renders `t(spec.hintKey)` over a key the tool
       // table chose, and the modifier is a preference. See `provideContextParam`.
       cloneStamp: '{cloneSourceModifier}-click a source',
-      maskSelect: 'add to or remove from the area Clean erases, or detect text in an area you draw',
+      maskSelect: 'add to, remove from or split the area Clean erases, or detect text in an area you draw',
       patch: "select what to fix, then Apply",
       gradient: "select an area, then drag inside it",
     },
@@ -3433,6 +3435,7 @@ export const en = {
       // these are their accessible names and tooltips.
       maskAdd: 'Add to selection',
       maskRemove: 'Remove from selection',
+      maskSplit: 'Split off part',
       maskDetect: 'Detect text in an area',
       brush: 'Brush',
     },

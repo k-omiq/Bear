@@ -593,7 +593,7 @@ export function detectedActions(options = {}) {
 export function regionMenuSections(region, options = {}) {
   // A detection has nothing to try again and no engine yet: Clean with (the
   // same models a cleaned region offers, none checked), then its Text type,
-  // its Mask padding, then Delete.
+  // its Mask padding, Split off part, then Delete.
   if (isDetected(region)) {
     // The two kinds as a checked pair, named as Text cleanup's two engine rows
     // are. A row stored before the flag existed has no answer, so neither is
@@ -624,6 +624,9 @@ export function regionMenuSections(region, options = {}) {
           range: { min: 0, max: MAX_MASK_PADDING, step: 1, value: Number(region?.paddingPx ?? 0), unit: ' px' },
         }],
       },
+      // Arms the selection tool's split on this detection: the gesture
+      // that follows says which part (`maskactions.svelte.js#armSplit`).
+      { id: 'split', labelKey: null, items: [{ id: 'splitPart', labelKey: 'masks.action.splitPart', icon: 'mask-split' }] },
       { id: 'remove', labelKey: null, items: [{ id: 'delete', labelKey: 'masks.action.deleteRegion', icon: 'trash' }] },
     ]
   }

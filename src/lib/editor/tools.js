@@ -691,7 +691,8 @@ export const TOOL_SPECS = [
     // The selection tool: it edits the detected masks that Clean erases,
     // after a Detect and before a Clean, and changes no pixel of the page.
     // Add merges the gesture into the detection it overlaps most, or makes a
-    // new one; remove takes it out of every detection it touches
+    // new one; remove takes it out of every detection it touches; split makes
+    // the part of the detection it overlaps most a detection of its own
     // (`api/backend.js#editDetectionMask`). No engine and no cloud option:
     // what happens to the area is Clean's decision, later.
     // Detect makes the mask that is not there yet: the detector looks again
@@ -706,6 +707,7 @@ export const TOOL_SPECS = [
         choice('mode', 'tools.param.mode', [
           { value: 'add', labelKey: 'tools.option.maskAdd', icon: 'mask-add' },
           { value: 'remove', labelKey: 'tools.option.maskRemove', icon: 'mask-remove' },
+          { value: 'split', labelKey: 'tools.option.maskSplit', icon: 'mask-split' },
           { value: 'detect', labelKey: 'tools.option.maskDetect', icon: 'sparkle' },
         ]),
       ]),

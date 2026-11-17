@@ -414,15 +414,16 @@
 
   /**
    * What the draft does: the Brush paints, the selection tool's remove mode
-   * erases from the detected masks, its Detect mode asks the detector about
-   * the area, and everything else adds.
+   * erases from the detected masks, its split mode cuts a part off one, its
+   * Detect mode asks the detector about the area, and everything else adds.
    *
-   * @returns {'add'|'erase'|'paint'|'detect'}
+   * @returns {'add'|'erase'|'split'|'paint'|'detect'}
    */
   function draftMode() {
     if (tool === 'brush') return 'paint'
     if (tool === 'eraser') return 'erase'
     if (tool === 'maskSelect' && params.mode === 'remove') return 'erase'
+    if (tool === 'maskSelect' && params.mode === 'split') return 'split'
     if (tool === 'maskSelect' && params.mode === 'detect') return 'detect'
     return 'add'
   }

@@ -356,9 +356,15 @@ LaMa gets LaMa. The list is the same four engines a Layers row offers, under the
 
 ### Selection
 
-Key `6`. It adds to or removes from the area Clean erases, or detects text in an area you draw. Draw with a brush, a
-lasso or a rectangle: `S` steps the shape. `A` adds, `X` removes and `D` detects, from any tool; `X` or `D` pressed
-again goes back to adding. There is no separate Content-Aware Fill tool.
+Key `6`. It adds to or removes from the area Clean erases, splits a part off a detected mask, or detects text in an
+area you draw. Draw with a brush, a lasso or a rectangle: `S` steps the shape. `A` adds, `X` removes and `D` detects,
+from any tool; `X` or `D` pressed again goes back to adding. `Q` steps through all four modes.
+**Split off part** cuts the detected mask your gesture covers most in two: the part under the gesture becomes a
+detection of its own, picked when it appears, and the rest stays as it was. The new part keeps the old one's text
+type, engine pick and padding, so each part can then be retyped, cleaned with another engine or dismissed on its own.
+Other masks the gesture touches do not change. A gesture that would leave either part smaller than a small glyph (64
+pixels) changes nothing. A padding change never joins the two parts again. The draft shows the cut as a dashed
+outline over a lighter tint. One undo puts the mask back whole. There is no separate Content-Aware Fill tool.
 Its old id opens the AI Mask Brush, and the fill choices it offered (Fill or a redraw engine, local or cloud) are the
 engine pick on the AI Mask Brush and on each Layers row and region menu. Every cloud render asks first in one dialog.
 
@@ -525,7 +531,8 @@ on the page selects it under every tool, lights its outline and scrolls the matc
 Shift+F10 from the keyboard, selects the region and offers the same three things the row does. On a region that is
 detected and not yet cleaned, the menu also offers **Text type**: Speech bubble text or Text outside bubbles, with the
 current one checked. Changing it sets which engine pick a later Clean starts the region on and the color its mask is
-drawn in. The menu also has that detection's **Mask padding** slider, the same one its Layers row has, with a box
+drawn in. **Split off part** arms the Selection tool in its split mode with that detection picked; the next gesture
+over it says which part to cut off. The menu also has that detection's **Mask padding** slider, the same one its Layers row has, with a box
 to type the value and the wheel to step it once it has the focus (so the wheel still scrolls the menu): the value it
 settles on re-pads that one mask and the menu stays open. An entry picked right after a padding change waits for that
 change to be saved.

@@ -136,6 +136,13 @@
    */
   const maskDraft = $derived(active?.tool === 'maskSelect' && active?.mode !== 'detect')
   const cutting = $derived(maskDraft && active?.mode === 'erase')
+  /**
+   * A split cuts a part off one detection: the marching ants of a remove,
+   * since a line is being cut, over a lighter tint of the mask colour, since
+   * the part stays a mask.
+   */
+  const splitting = $derived(maskDraft && active?.mode === 'split')
+  const ants = $derived(cutting || splitting)
   const maskFill = $derived(Math.max(0, Math.min(100, Number(session.maskOpacity ?? 35))) / 100)
   /**
    * The colour of the detection the gesture would join, speech bubble or
@@ -147,7 +154,9 @@
     maskDraft
       ? cutting
         ? `fill: none; stroke: ${maskColor};`
-        : `fill: ${maskColor}; fill-opacity: ${maskFill}; stroke: ${maskColor};`
+        : splitting
+          ? `fill: ${maskColor}; fill-opacity: ${maskFill / 2}; stroke: ${maskColor};`
+          : `fill: ${maskColor}; fill-opacity: ${maskFill}; stroke: ${maskColor};`
       : undefined,
   )
   /** The hatch a removing stroke is drawn with, in page pixels like the stroke. */
@@ -198,7 +207,7 @@
       ? ''
       : cutting
         ? `stroke: url(#${uid}-hatch);`
-        : `stroke: ${maskColor}; stroke-opacity: ${maskFill};`,
+        : `stroke: ${maskColor}; stroke-opacity: ${splitting ? maskFill / 2 : maskFill};`,
   )
 </script>
 
@@ -314,13 +323,13 @@
         x2={active.points.at(-1).x} y2={active.points.at(-1).y}
         vector-effect="non-scaling-stroke" style="stroke: var(--page-mark-line)" />
     {:else if active?.kind === 'ellipse'}
-      {#if cutting}
+      {#if ants}
         <ellipse class="cut-under" cx={bbox.x + bbox.w / 2} cy={bbox.y + bbox.h / 2} rx={bbox.w / 2} ry={bbox.h / 2}
           vector-effect="non-scaling-stroke" />
       {/if}
       <ellipse
         class="shape"
-        class:cut={cutting}
+        class:cut={ants}
         cx={bbox.x + bbox.w / 2}
         cy={bbox.y + bbox.h / 2}
         rx={bbox.w / 2}
@@ -329,17 +338,17 @@
         style={shapeStyle}
       />
     {:else if closed}
-      {#if cutting}
+      {#if ants}
         <polygon class="cut-under" points={closed} vector-effect="non-scaling-stroke" />
       {/if}
-      <polygon class="shape" class:cut={cutting} points={closed} vector-effect="non-scaling-stroke" style={shapeStyle} />
+      <polygon class="shape" class:cut={ants} points={closed} vector-effect="non-scaling-stroke" style={shapeStyle} />
     {:else if active?.kind !== 'lasso' && active?.kind !== 'polygon' && active?.kind !== 'line'}
-      {#if cutting}
+      {#if ants}
         <rect class="cut-under" x={bbox.x} y={bbox.y} width={bbox.w} height={bbox.h} vector-effect="non-scaling-stroke" />
       {/if}
       <rect
         class="shape"
-        class:cut={cutting}
+        class:cut={ants}
         x={bbox.x}
         y={bbox.y}
         width={bbox.w}
@@ -351,13 +360,13 @@
   {/if}
 
   {#if path}
-    {#if cutting}
+    {#if ants}
       <polyline class="cut-under" points={path} vector-effect="non-scaling-stroke" />
     {/if}
     <polyline
       class="path"
       class:closing={active?.kind === 'polygon'}
-      class:cut={cutting}
+      class:cut={ants}
       points={path}
       vector-effect="non-scaling-stroke"
     />

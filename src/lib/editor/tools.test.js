@@ -368,8 +368,8 @@ describe('the selection tool', () => {
     expect(isDrawingTool('maskSelect')).toBe(true)
   })
 
-  it('adds, removes or detects, and draws with a brush, a lasso or a rectangle', () => {
-    expect(param('mode')?.options.map((option) => option.value)).toEqual(['add', 'remove', 'detect'])
+  it('adds, removes, splits or detects, and draws with a brush, a lasso or a rectangle', () => {
+    expect(param('mode')?.options.map((option) => option.value)).toEqual(['add', 'remove', 'split', 'detect'])
     expect(param('shape')?.options.map((option) => option.value)).toEqual(['brush', 'lasso', 'rect'])
     for (const option of [...(param('mode')?.options ?? []), ...(param('shape')?.options ?? [])]) {
       expect(iconNames, option.value).toContain(option.icon)
@@ -381,6 +381,8 @@ describe('the selection tool', () => {
     expect(activeParams(spec, { mode: 'add', shape: 'brush' }).map((p) => p.key)).toEqual(['mode', 'shape', 'size'])
     expect(activeParams(spec, { mode: 'add', shape: 'lasso' }).map((p) => p.key)).toEqual(['mode', 'shape'])
     expect(activeParams(spec, { mode: 'remove', shape: 'rect' }).map((p) => p.key)).toEqual(['mode', 'shape'])
+    expect(activeParams(spec, { mode: 'split', shape: 'brush' }).map((p) => p.key)).toEqual(['mode', 'shape', 'size'])
+    expect(draftShape('maskSelect', { mode: 'split', shape: 'lasso' })).toBe('lasso')
     // A fresh record with no shape yet is a brush, as the defaults say.
     expect(activeParams(spec, {}).map((p) => p.key)).toContain('size')
   })

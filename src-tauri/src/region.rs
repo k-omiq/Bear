@@ -6103,6 +6103,10 @@ fn edit_detection_mask_at(
                 .saturating_add(changes[at].created.len() as u32);
             changes[at].created.push(found);
         };
+        // A split marks both its parts with one token, so no padding runs
+        // them together again.
+        let split = plan.split;
+        let token = split.as_ref().map(|(from, _, _)| next_split_token(&job, from));
         for (id, mask, ink) in plan.updated {
             let Some((at, found, _, _)) = loaded.iter().find(|(_, found, _, _)| found.record.id == id) else {
                 continue;
@@ -6115,6 +6119,11 @@ fn edit_detection_mask_at(
             // fit, the group, the pick, the reading order and the padding.
             let mut record = found.record.clone();
             record.bbox = mask.bounds;
+            if let (Some((from, _, _)), Some(token)) = (&split, &token) {
+                if *from == id {
+                    record.kept_apart.push(token.clone());
+                }
+            }
             let base = if record.padding_px > 0 {
                 let (base_mask, base_ink) = job.load_detection_base(&id).map_err(|e| e.to_string())?
                     .ok_or_else(|| format!("detection {id} has no stored masks"))?;
@@ -6125,8 +6134,13 @@ fn edit_detection_mask_at(
             };
             // An edit that leaves no ungrown pixel makes the edited masks the
             // new ungrown ones: there is nothing left to pad from.
-            let base = match base {
-                Some((base_mask, base_ink)) if tight(&base_mask).is_some() => Some((base_mask, base_ink)),
+            // Cropped to the pixels they hold, as every stored mask is, so a
+            // padding of 0 gives back a mask whose box is its pixels'.
+            let base = match base.map(|(base_mask, base_ink)| (tight(&base_mask), base_ink)) {
+                Some((Some(base_mask), base_ink)) => {
+                    let base_ink = tight(&base_ink).unwrap_or_else(|| base_mask.clone());
+                    Some((base_mask, base_ink))
+                }
                 _ => {
                     record.padding_px = 0;
                     None
@@ -6180,6 +6194,48 @@ fn edit_detection_mask_at(
                 base: None,
             });
         }
+        if let (Some((from, taken, taken_ink)), Some(token)) = (split, token) {
+            if let Some((at, found, _, _)) = loaded.iter().find(|(_, found, _, _)| found.record.id == from) {
+                let at = *at;
+                let back = (-shift(at).0, -shift(at).1);
+                let (mask, ink) = (translated_mask(&taken, back), translated_mask(&taken_ink, back));
+                // The part takes the record it was cut from: its kind, its
+                // balloon, its pick, its fit and its padding. Not its group,
+                // whose lettering is the part it was cut from, and a new
+                // id, order and box.
+                let mut record = found.record.clone();
+                record.kept_apart.push(token);
+                record.group = None;
+                // Its share of the ungrown pair, so a later padding grows
+                // this part alone.
+                let base = if record.padding_px > 0 {
+                    let (base_mask, base_ink) = job.load_detection_base(&from).map_err(|e| e.to_string())?
+                        .ok_or_else(|| format!("detection {from} has no stored masks"))?;
+                    let old_display = union_masks(&found.mask, &found.ink);
+                    tight(&rebased(&base_mask, &old_display, &mask)).map(|base_mask| {
+                        let base_ink = tight(&rebased(&base_ink, &found.ink, &ink)).unwrap_or_else(|| base_mask.clone());
+                        (base_mask, base_ink)
+                    })
+                } else {
+                    None
+                };
+                if base.is_none() {
+                    record.padding_px = 0;
+                }
+                // On the page holding its top row, as a new detection is.
+                let to = owner_of(&taken);
+                let moved = (shift(at).0 - shift(to).0, shift(at).1 - shift(to).1);
+                let mask = translated_mask(&mask, moved);
+                record.bbox = mask.bounds;
+                made_on(&job, &mut changes, to, cleaner_core::project::LoadedDetection {
+                    record,
+                    ink: translated_mask(&ink, moved),
+                    mask,
+                    evidence: None,
+                    base: base.map(|(base_mask, base_ink)| (translated_mask(&base_mask, moved), translated_mask(&base_ink, moved))),
+                });
+            }
+        }
         let touched: Vec<usize> = (0..pages.len())
             .filter(|&at| !(changes[at].updated.is_empty() && changes[at].created.is_empty() && changes[at].removed.is_empty()))
             .collect();
@@ -6190,7 +6246,12 @@ fn edit_detection_mask_at(
         let sources: Vec<usize> = touched.iter().map(|&at| pages[at].source_idx).collect();
         let page_before = crate::history::capture_pages(&job, &sources);
         edit.created = job.rewrite_detections(changes).map_err(|e| e.to_string())?.into_iter().flatten().collect();
-        crate::history::record_pages(&job, &located.chapter_id, crate::history::EDIT_DETECTION_LABEL, None, page_before);
+        let label = if mode == MaskEditMode::Split {
+            crate::history::SPLIT_DETECTION_LABEL
+        } else {
+            crate::history::EDIT_DETECTION_LABEL
+        };
+        crate::history::record_pages(&job, &located.chapter_id, label, None, page_before);
         edit.pages = touched.iter()
             .map(|&at| EditedPage {
                 page_index: pages[at].position as u32,
@@ -6208,6 +6269,20 @@ fn page_status(chapter_id: &str, project: &cleaner_core::project::Project, page_
     crate::library::page_of(chapter_id, project, page_index)
         .map(|page| page.status.to_owned())
         .unwrap_or_default()
+}
+
+/// A token for a new split of detection `id`, unique in the project: one past
+/// the highest split of that id any detection, or any detection a clean kept,
+/// still names (`{id}/s{n}`).
+fn next_split_token(job: &Job, id: &str) -> String {
+    let prefix = format!("{id}/s");
+    let highest = job.project.detections.iter()
+        .chain(&job.project.cleaned_detections)
+        .flat_map(|record| record.kept_apart.iter())
+        .filter_map(|token| token.strip_prefix(&prefix)?.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0);
+    format!("{prefix}{}", highest.saturating_add(1))
 }
 
 /// The order a detection added to a page takes: after every detection and
@@ -6649,8 +6724,10 @@ pub(crate) const MERGE_REACH: u32 = 4;
 /// or come within [`MERGE_REACH`], at least one of them is padded, and at
 /// least one of them is `fresh`: in the scope of what the caller changed.
 /// Unpadded detections that touch are left as two, because that is how
-/// Detect grouped them. Reaching is carried along: if a first reaches a
-/// second and the second a third, the three are one.
+/// Detect grouped them. Two the user split apart
+/// ([`cleaner_core::project::DetectedRegion::kept_apart`]) are never run
+/// together by their own reach. Reaching is carried along: if a first reaches
+/// a second and the second a third, the three are one.
 pub(crate) fn run_together(
     page: &[cleaner_core::project::LoadedDetection],
     fresh: &[bool],
@@ -6669,7 +6746,8 @@ pub(crate) fn run_together(
     for a in 0..page.len() {
         for b in a + 1..page.len() {
             if !(fresh.get(a) == Some(&true) || fresh.get(b) == Some(&true))
-                || (page[a].record.padding_px == 0 && page[b].record.padding_px == 0) {
+                || (page[a].record.padding_px == 0 && page[b].record.padding_px == 0)
+                || page[a].record.kept_apart_from(&page[b].record) {
                 continue;
             }
             let (Some(first), Some(second)) = (&shown[a], &shown[b]) else {
@@ -6749,6 +6827,12 @@ pub(crate) fn made_one(
     record.padding_from_seed = every(&|other| other.padding_from_seed);
     record.fit = None;
     record.group = None;
+    // Every split a member was part of: the one they become stays apart from
+    // each part split from any of them.
+    let mut tokens: Vec<String> = members.iter().flat_map(|found| found.record.kept_apart.iter().cloned()).collect();
+    tokens.sort();
+    tokens.dedup();
+    record.kept_apart = tokens;
 
     let together = |of: &dyn Fn(&cleaner_core::project::LoadedDetection) -> &Mask| {
         let masks: Vec<&Mask> = members.iter().map(of).collect();
@@ -6791,6 +6875,7 @@ pub(crate) fn merged_by_padding(
 /// about it. It starts on LaMa, the rung that needs no balloon.
 fn hand_detection(source_idx: usize, bbox: Rect, order: u32) -> cleaner_core::project::DetectedRegion {
     cleaner_core::project::DetectedRegion {
+        kept_apart: Vec::new(),
         id: String::new(),
         source_idx,
         bbox,
@@ -6811,11 +6896,13 @@ fn hand_detection(source_idx: usize, bbox: Rect, order: u32) -> cleaner_core::pr
     }
 }
 
-/// Whether a mask edit grows the page's detections or erases from them.
+/// Whether a mask edit grows the page's detections, erases from them, or
+/// splits part of one off as a detection of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MaskEditMode {
     Add,
     Remove,
+    Split,
 }
 
 impl MaskEditMode {
@@ -6823,6 +6910,7 @@ impl MaskEditMode {
         match mode {
             "add" => Some(MaskEditMode::Add),
             "remove" => Some(MaskEditMode::Remove),
+            "split" => Some(MaskEditMode::Split),
             _ => None,
         }
     }
@@ -6904,11 +6992,14 @@ struct MaskEditPlan {
     /// detection makes.
     created: Option<Mask>,
     removed: Vec<String>,
+    /// `(id, mask, ink)` of the part a split takes off detection `id`: a new
+    /// detection made from that one's record. What `id` keeps is in `updated`.
+    split: Option<(String, Mask, Mask)>,
 }
 
 impl MaskEditPlan {
     fn is_empty(&self) -> bool {
-        self.updated.is_empty() && self.created.is_none() && self.removed.is_empty()
+        self.updated.is_empty() && self.created.is_none() && self.removed.is_empty() && self.split.is_none()
     }
 
     /// Record `detection`'s new masks, unless they hold the pixels it already
@@ -6940,6 +7031,14 @@ impl MaskEditPlan {
 /// left with no mask is removed; one left with a mask and no lettering takes
 /// the mask as its lettering, so a clean on any rung still has something to
 /// write through.
+///
+/// **Split.** The one detection showing most of `S` (the rule Add picks by) is
+/// cut in two: the part of its display set inside `S` becomes a new
+/// detection, and it keeps the rest. Each part's lettering is its share of
+/// the old lettering, or its mask where it has none. Other detections never
+/// change. A split that would leave either part with fewer than
+/// [`LEAST_LEFT`] pixels changes nothing, so a gesture over none or all of a
+/// detection, or a slip at its edge, leaves no sliver.
 fn plan_mask_edit(page: &[DetectionMasks<'_>], gesture: &Mask, mode: MaskEditMode) -> MaskEditPlan {
     let mut plan = MaskEditPlan::default();
     let Some(gesture) = tight(gesture) else {
@@ -6950,15 +7049,15 @@ fn plan_mask_edit(page: &[DetectionMasks<'_>], gesture: &Mask, mode: MaskEditMod
         .map(|detection| (detection, detection.overlap(&gesture)))
         .filter(|(_, overlap)| *overlap > 0)
         .collect();
+    let most = touched.iter().min_by(|(a, a_overlap), (b, b_overlap)| {
+        b_overlap
+            .cmp(a_overlap)
+            .then(a.order.cmp(&b.order))
+            .then(a.id.cmp(b.id))
+    });
     match mode {
         MaskEditMode::Add => {
-            let target = touched.iter().min_by(|(a, a_overlap), (b, b_overlap)| {
-                b_overlap
-                    .cmp(a_overlap)
-                    .then(a.order.cmp(&b.order))
-                    .then(a.id.cmp(b.id))
-            });
-            let Some((target, _)) = target else {
+            let Some((target, _)) = most else {
                 plan.created = Some(gesture);
                 return plan;
             };
@@ -6991,6 +7090,24 @@ fn plan_mask_edit(page: &[DetectionMasks<'_>], gesture: &Mask, mode: MaskEditMod
                     plan.change(detection, mask, subtract(detection.ink, &gesture));
                 }
             }
+        }
+        MaskEditMode::Split => {
+            let Some((target, _)) = most else {
+                return plan;
+            };
+            let display = union_masks(target.mask, target.ink);
+            let kept = subtract(&display, &gesture);
+            let taken = subtract(&display, &kept);
+            let (Some(kept), Some(taken)) = (tight(&kept), tight(&taken)) else {
+                return plan;
+            };
+            if kept.count() < LEAST_LEFT || taken.count() < LEAST_LEFT {
+                return plan;
+            }
+            let kept_ink = subtract(target.ink, &gesture);
+            let taken_ink = tight(&subtract(target.ink, &kept_ink)).unwrap_or_else(|| taken.clone());
+            plan.change(target, kept, kept_ink);
+            plan.split = Some((target.id.to_owned(), taken, taken_ink));
         }
     }
     plan
@@ -7938,6 +8055,7 @@ mod tests {
         use cleaner_core::project::{DetectedRegion, DetectionFit};
         let mut job = Job::open(&located.job_path).unwrap();
         job.store_detection(DetectedRegion {
+            kept_apart: Vec::new(),
             id: id.into(),
             source_idx: 0,
             bbox: Rect::new(42, 40, 12, 6),
@@ -12851,6 +12969,7 @@ mod mask_edit_tests {
             StripMode::Single, &[source])).unwrap();
         let id = job.next_detection_id("chapter-p001");
         job.store_detection(DetectedRegion {
+            kept_apart: Vec::new(),
             id: id.clone(), source_idx: 0, bbox: Rect::new(4, 6, 12, 12), mask_ref: String::new(),
             inside: true, balloon_color: Some([240; 3]), script: Some("ja".into()), pick: "fill".into(),
             detector: "local".into(), created: 0, mask_sha256: String::new(), order: 3,
@@ -13009,6 +13128,134 @@ mod mask_edit_tests {
         step(&located, "redo");
         assert!(detection_state(&located.job_path).is_empty());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /* ---------- split ---------- */
+
+    /// A split cuts the one detection the gesture overlaps most: the part
+    /// inside the gesture is the new one, mask and lettering, and the old one
+    /// keeps the rest. Another detection the gesture touches is not changed.
+    #[test]
+    fn a_split_cuts_one_detection_in_two_and_no_other() {
+        let (mask, ink) = (block(0, 0, 20, 10), block(2, 2, 16, 6));
+        let other = block(24, 0, 10, 10);
+        let page = [detection("d0", 0, &mask, &ink), detection("d1", 1, &other, &other)];
+        let plan = plan_mask_edit(&page, &block(10, 0, 16, 10), MaskEditMode::Split);
+        assert_eq!(plan.updated, vec![("d0".to_owned(), block(0, 0, 10, 10), block(2, 2, 8, 6))]);
+        assert_eq!(plan.split, Some(("d0".to_owned(), block(10, 0, 10, 10), block(10, 2, 8, 6))));
+        assert!(plan.created.is_none() && plan.removed.is_empty());
+    }
+
+    /// A split that would leave a part with less than a glyph, over all of a
+    /// detection, or over none, plans nothing. A part with no lettering of its
+    /// own takes its mask as lettering.
+    #[test]
+    fn a_split_with_a_sliver_or_nothing_to_cut_plans_nothing() {
+        let (mask, ink) = (block(0, 0, 20, 10), block(0, 0, 8, 10));
+        let page = [detection("d0", 0, &mask, &ink)];
+        for gesture in [block(0, 0, 3, 10), block(17, 0, 3, 10), block(0, 0, 20, 10), block(40, 40, 8, 8)] {
+            assert!(plan_mask_edit(&page, &gesture, MaskEditMode::Split).is_empty(), "{:?}", gesture.bounds);
+        }
+        let plan = plan_mask_edit(&page, &block(10, 0, 10, 10), MaskEditMode::Split);
+        assert_eq!(plan.split, Some(("d0".to_owned(), block(10, 0, 10, 10), block(10, 0, 10, 10))));
+        assert_eq!(MaskEditMode::parse("split"), Some(MaskEditMode::Split));
+    }
+
+    /// On disk a split answers the old id changed and a new one made. The two
+    /// hold the old pixels between them and none twice; the new one takes the
+    /// old one's kind, balloon, pick and fit, and both carry one split token.
+    /// One undo puts the one detection back exactly, and Redo the two.
+    #[test]
+    fn a_split_on_disk_makes_two_detections_and_undoes_as_one_step() {
+        let (root, located, first) = page_with_a_detection("split");
+        let original = Job::open(&located.job_path).unwrap().load_detection(&first).unwrap().unwrap();
+        let start = detection_state(&located.job_path);
+
+        let split = edit_detection_mask_at(&located, None, MaskEditMode::Split, None,
+            Some(&rect(10.0, 0.0, 30.0, 48.0))).unwrap().expect("an edit");
+        let second = format!("{}-d1", crate::library::page_id("chapter", 0));
+        assert_eq!(split, MaskEdit { page_status: "detected".into(), changed: vec![first.clone()],
+            created: vec![second.clone()], removed: vec![],
+            pages: vec![EditedPage { page_index: 0, page_status: "detected".into() }] });
+
+        let job = Job::open(&located.job_path).unwrap();
+        let (kept, taken) = (job.load_detection(&first).unwrap().unwrap(), job.load_detection(&second).unwrap().unwrap());
+        assert_eq!((&kept.mask, &kept.ink), (&block(4, 6, 6, 12), &block(6, 9, 4, 6)));
+        assert_eq!((&taken.mask, &taken.ink), (&block(10, 6, 6, 12), &block(10, 9, 2, 6)));
+        assert_eq!(Mask::union(&[&kept.mask, &taken.mask], 64, 48), Mask::union(&[&original.mask], 64, 48));
+        assert!(!kept.mask.intersects(&taken.mask));
+        assert_eq!((kept.record.bbox, taken.record.bbox), (kept.mask.bounds, taken.mask.bounds));
+        let token = format!("{first}/s1");
+        assert_eq!((&kept.record.kept_apart, &taken.record.kept_apart), (&vec![token.clone()], &vec![token]));
+        assert!(kept.record.kept_apart_from(&taken.record));
+        assert_eq!((taken.record.inside, taken.record.pick.as_str(), taken.record.script.as_deref()), (true, "fill", Some("ja")));
+        assert_eq!((taken.record.balloon_color, taken.record.fit, taken.record.order), (Some([240; 3]), original.record.fit, 4));
+        assert_eq!((kept.record.order, kept.record.fit), (3, original.record.fit));
+        drop(job);
+
+        let labels: Vec<_> = crate::history::load(&located.job_path).entries.iter().map(|entry| entry.label.clone()).collect();
+        assert_eq!(labels, [crate::history::SPLIT_DETECTION_LABEL]);
+        let parts = detection_state(&located.job_path);
+        step(&located, "undo");
+        assert_eq!(detection_state(&located.job_path), start);
+        let job = Job::open(&located.job_path).unwrap();
+        assert_eq!(job.project.detections.len(), 1);
+        assert!(job.project.detections[0].kept_apart.is_empty());
+        drop(job);
+        step(&located, "redo");
+        assert_eq!(detection_state(&located.job_path), parts);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The parts of a split touch, and a padding would run them together, but
+    /// they stay two at any padding; 0 gives back the parts as split. A
+    /// padded detection is split through its ungrown masks too, so each part
+    /// pads from its own share. A second split of one part takes a new token.
+    #[test]
+    fn a_padding_never_runs_split_parts_together_again() {
+        let (root, located, first) = page_with_a_detection("split-padding");
+        set_detection_padding_at(&located, Some(0), 2).unwrap();
+        edit_detection_mask_at(&located, None, MaskEditMode::Split, None, Some(&rect(10.0, 0.0, 30.0, 48.0)))
+            .unwrap().expect("an edit");
+        let second = format!("{}-d1", crate::library::page_id("chapter", 0));
+        let load = |id: &str| Job::open(&located.job_path).unwrap().load_detection(id).unwrap().unwrap();
+        let base = |id: &str| Job::open(&located.job_path).unwrap().load_detection_base(id).unwrap();
+        assert_eq!(load(&second).record.padding_px, 2);
+        assert_eq!(base(&first).and_then(|(mask, _)| tight(&mask)), Some(block(4, 6, 6, 12)));
+        assert_eq!(base(&second).and_then(|(mask, _)| tight(&mask)), Some(block(10, 6, 6, 12)));
+
+        for padding in [4, 8, 0] {
+            let edit = set_detection_padding_at(&located, Some(0), padding).unwrap();
+            assert!(edit.removed.is_empty(), "padding {padding} merged the parts");
+            assert_eq!(Job::open(&located.job_path).unwrap().project.detections.len(), 2);
+        }
+        assert_eq!((load(&first).mask, load(&second).mask), (block(4, 6, 6, 12), block(10, 6, 6, 12)));
+
+        // Grown down to rows 6..30, then split again at row 18.
+        edit_detection_mask_at(&located, None, MaskEditMode::Add, None, Some(&rect(4.0, 12.0, 10.0, 30.0)))
+            .unwrap().expect("an edit");
+        assert_eq!(load(&first).mask, block(4, 6, 6, 24));
+        let again = edit_detection_mask_at(&located, None, MaskEditMode::Split, None, Some(&rect(0.0, 18.0, 10.0, 48.0)))
+            .unwrap().expect("an edit");
+        let third = again.created.first().expect("a third part").clone();
+        assert_eq!(load(&first).record.kept_apart, vec![format!("{first}/s1"), format!("{first}/s2")]);
+        assert_eq!(load(&third).record.kept_apart, vec![format!("{first}/s1"), format!("{first}/s2")]);
+        assert!(load(&third).record.kept_apart_from(&load(&second).record));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// What a merge makes stays apart from every part any member was split
+    /// from.
+    #[test]
+    fn a_merge_keeps_every_split_token_its_members_had() {
+        let piece = |id: &str, tokens: &[&str], at: i64| {
+            let mut found = loaded(block(at, 0, 10, 10), None);
+            found.record.id = id.into();
+            found.record.kept_apart = tokens.iter().map(|token| (*token).to_owned()).collect();
+            found
+        };
+        let one = made_one(vec![piece("a", &["x/s1"], 0), piece("b", &["y/s1", "x/s1"], 10)], (64, 48)).unwrap();
+        assert_eq!(one.record.kept_apart, vec!["x/s1".to_owned(), "y/s1".to_owned()]);
     }
 
     /// A page something outside the journal changed is not written over: the
