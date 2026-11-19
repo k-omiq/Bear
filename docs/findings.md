@@ -738,13 +738,28 @@ never written as though it were general.
 
 ## What has not been measured
 
+**First-open help on the download page (2026-11-17): what is still open.**
+
+- **The steps were written, not walked.** The macOS Open Anyway steps, the Windows SmartScreen
+  steps and the AppImage FUSE advice on cleaner.komiq.cc and in the README come from how each
+  system behaves for an ad-hoc signed or unsigned app. Nobody ran a release download through them
+  on a clean Mac, a clean Windows 11 PC or a fresh Ubuntu 24.04 desktop.
+- **The AppImage FUSE need is assumed.** The release smoke runs the AppImage with
+  `APPIMAGE_EXTRACT_AND_RUN=1`, so whether it starts without `libfuse2` was never checked.
+- **The prompts stay until the apps are signed.** Apple notarization and a Windows Authenticode
+  certificate would remove them; `release.yml` already signs when those secrets exist.
+
 **Mask split (2026-11-17): what is still open.**
 
 - **No real pages.** The split is covered by Rust unit tests on a 64 x 48 fixture and by the Vite
   mock, which splits boxes, not pixels. It was not tried on the merged balloons or the text plus
   sound effect cases it is for, on copies of real library chapters.
-- **No run of the built app.** The menu item, the armed tool, the dashed preview and Undo were
-  checked in the Vite mock (Chromium) only, not in the WKWebView of the shipped app.
+- **Built apps: Linux and Windows yes, macOS by hand only.** On 2026-11-17 release builds of
+  `d641bc5` were driven on GCE VMs (Ubuntu 22.04 under Xvfb with tauri-driver, Windows Server 2025
+  over WebView2 DevTools): a hand mask, the region menu's Split off part, a real mouse drag, Undo,
+  Redo and a padding of 12 px all behaved on both, and the split and project unit tests passed
+  natively. The macOS app (WKWebView) was installed but not driven; the dashed preview was checked
+  in the Vite mock only.
 - **The 64 pixel minimum was not tuned.** It is the existing sliver rule (`LEAST_LEFT`); a small
   furigana part on a large page may be refused where a user wants it.
 - **A third detection still joins split parts.** Padding keeps two parts apart, but one that

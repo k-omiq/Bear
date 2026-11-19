@@ -109,6 +109,40 @@
       outline: 2px solid var(--accent);
       outline-offset: 3px;
     }
+    .help {
+      margin-top: 2.6rem;
+      max-width: 620px;
+      width: 100%;
+      font-size: .8rem;
+      color: var(--dim);
+      line-height: 1.7;
+    }
+    .help h2 {
+      font-size: .85rem;
+      font-weight: normal;
+      color: var(--text);
+      margin-bottom: .6rem;
+      text-align: center;
+    }
+    .help details {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: .6rem .9rem;
+      margin-top: .5rem;
+    }
+    .help summary { cursor: pointer; color: var(--text); }
+    .help details[open] summary { color: var(--accent); }
+    .help ol { margin: .5rem 0 .2rem 1.3rem; }
+    .help p { margin-top: .5rem; }
+    .help code {
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 0 .3rem;
+      word-break: break-all;
+    }
     @media (max-width: 600px) {
       body {
         padding: 6vh 1.25rem 3rem;
@@ -144,12 +178,57 @@
 
 <p class="tagline">removing text from manga, on your own machine</p>
 
-<div class="buttons">
-  <a class="btn primary" id="dl-mac" href="https://github.com/k-omiq/manga-cleaner/releases">Download for macOS (Apple Silicon)</a>
-  <a class="btn" id="dl-win" href="https://github.com/k-omiq/manga-cleaner/releases">Download for Windows (x64)</a>
+<div class="buttons" id="buttons">
+  <a class="btn primary" id="dl-mac" data-os="mac" href="https://github.com/k-omiq/manga-cleaner/releases">Download for macOS (Apple Silicon)</a>
+  <a class="btn" id="dl-win" data-os="win" href="https://github.com/k-omiq/manga-cleaner/releases">Download for Windows (x64)</a>
+  <a class="btn" id="dl-deb" data-os="linux" href="https://github.com/k-omiq/manga-cleaner/releases">Linux .deb (Ubuntu, Debian)</a>
+  <a class="btn" id="dl-appimage" data-os="linux" href="https://github.com/k-omiq/manga-cleaner/releases">Linux AppImage (other distros)</a>
 </div>
 <p class="meta" id="version">v1.0.0-beta.1 · free · GPL-3.0</p>
-<p class="meta">macOS on apple silicon, windows x64 · models downloaded on first launch · linux builds from source</p>
+<p class="meta">macOS 11+ on apple silicon · windows 10 (1803)+ x64 · linux x64 · the first launch downloads about 350 to 550 MB of models</p>
+
+<section class="help" aria-labelledby="help-title">
+  <h2 id="help-title">first time opening it</h2>
+  <p>the app is free and not yet signed with a paid developer certificate, so your computer asks once if you trust it. this is expected. after the first time it opens normally.</p>
+
+  <details id="help-mac">
+    <summary>macOS: "Apple could not verify Manga Cleaner"</summary>
+    <ol>
+      <li>open the .dmg and drag Manga Cleaner into Applications.</li>
+      <li>open Manga Cleaner from Applications. macOS blocks it. click Done (or Cancel).</li>
+      <li>open System Settings › Privacy &amp; Security. scroll down to Security.</li>
+      <li>next to "Manga Cleaner was blocked", click Open Anyway. enter your password.</li>
+      <li>open Manga Cleaner again and click Open Anyway.</li>
+    </ol>
+    <p>if macOS says the app "is damaged", run this in Terminal, then open it again:<br>
+    <code>xattr -dr com.apple.quarantine "/Applications/Manga Cleaner.app"</code></p>
+    <p>if you saved a cloud GPU profile, an update can ask for your login keychain password. click Always Allow.</p>
+  </details>
+
+  <details id="help-win">
+    <summary>Windows: "Windows protected your PC"</summary>
+    <ol>
+      <li>run the downloaded -setup.exe.</li>
+      <li>if a blue SmartScreen box opens, click More info, then Run anyway.</li>
+      <li>if your browser marks the download as unsafe, open its downloads list and pick Keep.</li>
+    </ol>
+    <p>it installs for your user only, so it needs no admin rights. you do not need to install anything else: the installer fetches WebView2 if Windows lacks it, and the Visual C++ files ship with the app.</p>
+  </details>
+
+  <details id="help-linux">
+    <summary>Linux: install the .deb or run the AppImage</summary>
+    <p>on Ubuntu or Debian, install the .deb. apt gets every library it needs:<br>
+    <code>sudo apt install ./MangaCleaner_*_linux-x86_64.deb</code></p>
+    <p>on other distros, make the AppImage executable and run it:<br>
+    <code>chmod +x MangaCleaner_*_linux-x86_64.AppImage</code></p>
+    <p>if the AppImage does not open and mentions FUSE, install libfuse2 (on Ubuntu 24.04 and later: <code>sudo apt install libfuse2t64</code>), or start it with <code>--appimage-extract-and-run</code>.</p>
+  </details>
+
+  <details id="help-first">
+    <summary>first launch: model downloads</summary>
+    <p>the installer is small. the first launch walks you through the model downloads: about 350 MB on macOS, about 520 MB on Windows. keep the app open until they finish. anything you skip can be fetched later from Settings › Models.</p>
+  </details>
+</section>
 
 <div class="shot">
   <video src="/media/lama-demo.mp4" muted loop playsinline autoplay preload="metadata" aria-label="Manga-LaMa cleaning text over hatching in Manga Cleaner"></video>
@@ -191,14 +270,42 @@
       if (!d || typeof d.version !== 'string') return;
       const v = d.version;
       const base = '/releases/v' + v + '/MangaCleaner_' + v + '_';
-      const mac = document.getElementById('dl-mac');
-      const win = document.getElementById('dl-win');
-      if (mac) mac.href = base + 'darwin-aarch64.dmg';
-      if (win) win.href = base + 'windows-x86_64-setup.exe';
+      const links = {
+        'dl-mac': 'darwin-aarch64.dmg',
+        'dl-win': 'windows-x86_64-setup.exe',
+        'dl-deb': 'linux-x86_64.deb',
+        'dl-appimage': 'linux-x86_64.AppImage',
+      };
+      for (const [id, suffix] of Object.entries(links)) {
+        const a = document.getElementById(id);
+        if (a) a.href = base + suffix;
+      }
       const ver = document.getElementById('version');
       if (ver) ver.textContent = 'v' + v + ' · free · GPL-3.0';
     })
     .catch(() => {});
+
+  // Put the visitor's own system first and open its first-run help. With
+  // no match (a phone, an unknown agent) the order stays mac, windows, linux.
+  (function () {
+    const ua = navigator.userAgent || '';
+    const platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    const probe = (platform + ' ' + ua).toLowerCase();
+    let os = null;
+    if (/android|iphone|ipad|ipod/.test(probe)) os = null;
+    else if (/win/.test(probe)) os = 'win';
+    else if (/mac/.test(probe)) os = 'mac';
+    else if (/linux|x11|cros/.test(probe)) os = 'linux';
+    if (!os) return;
+    const box = document.getElementById('buttons');
+    const mine = Array.from(box.querySelectorAll('a.btn[data-os="' + os + '"]'));
+    if (!mine.length) return;
+    box.querySelectorAll('a.btn').forEach(a => a.classList.remove('primary'));
+    mine[0].classList.add('primary');
+    mine.slice().reverse().forEach(a => box.prepend(a));
+    const help = document.getElementById('help-' + os);
+    if (help) help.open = true;
+  })();
 
   // Pause demo video under reduced-motion preference and offer controls
   const demo = document.querySelector('.shot video');

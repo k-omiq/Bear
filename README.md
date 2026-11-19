@@ -177,12 +177,20 @@ Download the installer from [cleaner.komiq.cc](https://cleaner.komiq.cc). All in
 
 | Platform | Installer | Requirements | Notes |
 |---|---|---|---|
-| macOS, Apple Silicon | `.dmg` | macOS 11 or later | Intel Macs (`x86_64`) are unsupported: ONNX Runtime 1.28.0 publishes no `osx-x86_64` archive. |
+| macOS, Apple Silicon | `.dmg` | macOS 11 or later | Not yet notarized, so macOS blocks the first open (see below). Intel Macs (`x86_64`) are unsupported: ONNX Runtime 1.28.0 publishes no `osx-x86_64` archive. |
 | Windows x64 | `-setup.exe` | Windows 10 version 1803 x64 or later | Not yet Authenticode-signed, so SmartScreen warns the first time it is run. The release workflow signs it automatically as soon as a certificate is configured. |
-| Linux x64 | `.AppImage` or `.deb` | System Vulkan loader for the GPU path | Has a release package and a GPU path (the WebGPU plugin, with CUDA flavours for NVIDIA) that has not been executed on real hardware. |
+| Linux x64 | `.AppImage` or `.deb` | System Vulkan loader for the GPU path | Use the `.deb` on Ubuntu and Debian. The AppImage needs FUSE 2 (see below). Has a GPU path (the WebGPU plugin, with CUDA flavours for NVIDIA) that has not been executed on real hardware. |
 | Linux aarch64 | none | | Best effort, CPU only, and not part of the release workflow. |
 
 Windows 10 version 1803 is what WebView2, the Visual C++ 2015-2022 runtime and ONNX Runtime 1.28 each require on their own. You do not need to install the Visual C++ runtime: the four libraries the ONNX Runtime imports outright ship beside the executable, where the loader finds them first.
+
+**First open.** The app is not yet signed with a paid certificate, so each system asks once:
+
+- **macOS:** open the app, click Done, then **System Settings › Privacy & Security › Open Anyway**, and open it again. If macOS says the app is damaged, run `xattr -dr com.apple.quarantine "/Applications/Manga Cleaner.app"`.
+- **Windows:** on the blue SmartScreen box, click **More info**, then **Run anyway**. The installer is per user and needs no admin rights.
+- **Linux:** `sudo apt install ./MangaCleaner_*_linux-x86_64.deb`, or `chmod +x` the AppImage. If the AppImage does not start for want of FUSE, install `libfuse2` (`libfuse2t64` on Ubuntu 24.04 and later) or run it with `--appimage-extract-and-run`.
+
+The download page at [cleaner.komiq.cc](https://cleaner.komiq.cc) shows the same steps for the visitor's system.
 
 **First launch.** Model weights and the runtime are not bundled, which keeps the installer small and respects weight provenance. The first-launch setup walks through the downloads, the defaults, an optional cloud GPU and app behaviour. Anything declined or missed can be fetched later from **Settings › Models**. For offline setups, place the verified files in the application's `models/` directory instead.
 

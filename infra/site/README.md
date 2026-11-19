@@ -29,6 +29,7 @@ from the same bucket.
 
 ## Download links
 
-The two buttons start with a GitHub releases fallback, then rewrite themselves
-from `/latest.json`. The file names follow the release workflow's rename step,
+The four buttons (macOS, Windows, Linux `.deb`, Linux AppImage) start with a
+GitHub releases fallback, then rewrite themselves from `/latest.json`. The
+visitor's own system goes first and its first-open help starts expanded. The file names follow the release workflow's rename step,
 `MangaCleaner_<version>_<platform>.<ext>`, so a new release needs no edit here.
