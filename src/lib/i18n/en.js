@@ -3092,6 +3092,7 @@ export const en = {
       deleteHint: 'Delete this layer and bring the original text back',
       deleteRegion: 'Dismiss',
       splitPart: 'Split off part',
+      splitPieces: 'Split into pieces',
       deleteRegionHint: 'Take this off the list and leave the page as it is',
       retry: 'Try again',
       // Try again and Clean with *replace* this layer's result and read only
@@ -3206,6 +3207,7 @@ export const en = {
       deleteDetection: 'a detected mask deleted',
       editDetection: 'a detected mask edited',
       splitDetection: 'a detected mask split',
+      splitPieces: 'a detected mask split into pieces',
       detectionPadding: 'mask padding changed',
       detectionType: 'text type changed',
       approveMask: 'a held mask approved',
@@ -4011,6 +4013,7 @@ export const en = {
       rerunFailed: 'That area could not be cleaned: {reasonKey}. It is exactly as it was.',
       // The selection tool's add or remove was refused. Nothing changed.
       selectionFailed: 'Could not change the selection. The page is as it was.',
+      onePiece: 'This mask is one piece. Nothing was split.',
       paddingApplied: 'Mask padding is now {px} px. Detected regions changed: {count}.',
       paddingMerged: 'Masks the padding joined are now one mask. Masks merged: {count}.',
       paddingNothing: 'Nothing to change. No detected masks here, or they already have this padding.',
@@ -4019,6 +4022,7 @@ export const en = {
       // The region menu's Text type was refused: the region was cleaned or
       // removed meanwhile, or could not be saved. Nothing changed.
       typeFailed: 'Could not change the text type. The region is as it was.',
+      splitFailed: 'Could not split the mask. The page is as it was.',
       // The region menu's Approve mask was refused: the held region was
       // cleaned or removed meanwhile, or could not be saved. Nothing changed.
       approveFailed: 'Could not approve the mask. The region is as it was.',

@@ -148,6 +148,7 @@ pub const DELETE_DETECTION_LABEL: &str = "masks.command.deleteDetection";
 pub const DETECTION_TYPE_LABEL: &str = "masks.command.detectionType";
 pub const EDIT_DETECTION_LABEL: &str = "masks.command.editDetection";
 pub const SPLIT_DETECTION_LABEL: &str = "masks.command.splitDetection";
+pub const SPLIT_PIECES_LABEL: &str = "masks.command.splitPieces";
 pub const PADDING_LABEL: &str = "masks.command.detectionPadding";
 pub const APPROVE_LABEL: &str = "masks.command.approveMask";
 pub const DISMISS_LABEL: &str = "masks.command.deleteRegion";

@@ -1895,7 +1895,8 @@ export function showOnPage(region) {
  * region's alone, Approve mask a held region's, and Reject result a cleaned
  * detection's, the three entries with no row control: `setDetectionType`,
  * `approveHeldMask` and `rejectResult`. Split off part arms the selection
- * tool's split on a detection (`armSplit`). Restore mask on a failed clean is
+ * tool's split on a detection (`armSplit`), and Split into pieces splits it
+ * at once (`splitPieces`). Restore mask on a failed clean is
  * `restoreDeclinedMask`, which its row offers too. Make n variations is Try
  * again n times in a row (`makeVariations`); the Variations row's previous
  * and next do not close the menu and are the menu's own (`stepVariation`).
@@ -1934,6 +1935,7 @@ export async function runRegionMenuItem(id, region) {
   if (id === 'type:inside') return setDetectionType(region, true)
   if (id === 'type:outside') return setDetectionType(region, false)
   if (id === 'splitPart') return armSplit(region)
+  if (id === 'splitPieces') return splitPieces(region)
   return false
 }
 
@@ -1952,6 +1954,60 @@ export function armSplit(region) {
   setTool('maskSelect')
   setToolParam('maskSelect', 'mode', 'split')
   select(region.id)
+  return true
+}
+
+/** Detections a Split into pieces is out for. @type {Set<string>} */
+const splitting = new Set()
+
+/**
+ * Split into pieces: every piece of the detection's ungrown mask becomes a
+ * detection of its own, with no gesture (`api/backend.js#editDetectionMask`,
+ * mode `pieces`). It takes apart what a padding ran together, since the
+ * pieces were apart before the padding.
+ *
+ * The backend records the one undo step, as for every edit of a detection.
+ * Every page it wrote is read again, as after a selection edit, and the
+ * detection keeps the selection when it had it. A mask of one piece changes
+ * nothing, and the user is told so: a menu item that seems to do nothing is
+ * a control that looks broken.
+ *
+ * @param {import('../api/backend.js').ApiRegion} region
+ * @returns {Promise<boolean>} whether the detection was split
+ */
+export async function splitPieces(region) {
+  if (!isDetected(region) || splitting.has(region.id)) return false
+  const chapterId = editor.chapter?.id ?? null
+  const pageIndex = pageIndexOf(region.id)
+  if (!chapterId || pageIndex === null || !claimPageEdit(pageIndex)) return false
+  /** @type {Awaited<ReturnType<import('../api/backend.js').Backend['editDetectionMask']>>} */
+  let result
+  // A second click while the first is out would split what the first made.
+  splitting.add(region.id)
+  try {
+    result = await getBackend().editDetectionMask({ chapterId, pageIndex, mode: 'pieces', regionId: region.id })
+  } catch (error) {
+    console.error('a split into pieces was rejected', error)
+    if (!reportJobConflict(error)) notify({ key: 'notice.mask.splitFailed', tone: 'warn' })
+    return false
+  } finally {
+    splitting.delete(region.id)
+  }
+  // No answer: the region or its page is not there any more, or the page
+  // changed under it. Said, so the item does not seem to do nothing.
+  if (!result) {
+    if (stillOpen(chapterId)) notify({ key: 'notice.mask.splitFailed', tone: 'warn' })
+    return false
+  }
+  if (!result.created?.length) {
+    if (stillOpen(chapterId)) notify({ key: 'notice.mask.onePiece' })
+    return false
+  }
+  if (!stillOpen(chapterId)) return true
+  const written = result.pages?.length ? result.pages.map((page) => page.pageIndex) : [pageIndex]
+  await Promise.all([...new Set(written)].map((index) => reloadPage(index).catch((error) => {
+    console.error('the page could not be read again after a split into pieces', error)
+  })))
   return true
 }
 

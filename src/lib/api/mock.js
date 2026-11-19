@@ -1085,6 +1085,71 @@ export function createMockBackend(options = {}) {
   }
 
   /**
+   * Split into pieces, as `region.rs#split_detection_pieces_at` does it. The
+   * mock has no pixels, so it has no islands either. Its stand-in: a
+   * detection whose unpadded box is at least twice as wide as it is tall, or
+   * twice as tall as it is wide, in page pixels, is two pieces, the two
+   * halves along its long side; any other is one piece, and nothing changes,
+   * as natively for a mask with fewer than two pieces of 64 pixels. Nothing
+   * is padded again: the shown box and the unpadded one are each cut in two,
+   * as natively the stored masks are cut. The first half keeps the old id,
+   * the second is new at the end of the page's order, and both carry one new
+   * split token. One undo step under its own label.
+   *
+   * @returns {{pageStatus: string, changed: string[], created: string[], removed: string[], pages: Array<{pageIndex: number, pageStatus: string}>}|null}
+   */
+  const splitIntoPieces = (chapterId, page, regionId) => {
+    const region = detectionsOf(page).find((candidate) => candidate.id === regionId)
+    if (!region) return null
+    const answer = { pageStatus: page.status, changed: [], created: [], removed: [], pages: [] }
+    const base = region.baseBbox ?? region.bbox
+    // In page pixels: the box is in page percent, and a page is not square.
+    const across = base.w * (page.width || 1600)
+    const down = base.h * (page.height || 2400)
+    const wide = across >= down * 2
+    if (!wide && down < across * 2) return answer
+    const captured = capturePages([page])
+    /** The two halves of a box along the long side of the unpadded one. */
+    const halves = (box) => {
+      if (wide) {
+        const cut = base.x + base.w / 2
+        return [{ ...box, w: cut - box.x }, { ...box, x: cut, w: box.x + box.w - cut }]
+      }
+      const cut = base.y + base.h / 2
+      return [{ ...box, h: cut - box.y }, { ...box, y: cut, h: box.y + box.h - cut }]
+    }
+    const shown = halves(region.bbox)
+    const unpadded = region.baseBbox ? halves(region.baseBbox) : null
+    const token = `${region.id}/s${(splitCounter += 1)}`
+    /** @type {any} */
+    const part = snapshot(region)
+    part.id = `${page.id}-s${splitCounter}`
+    part.keptApart = [...(region.keptApart ?? []), token]
+    part.bbox = shown[1]
+    if (unpadded) part.baseBbox = unpadded[1]
+    if (Number.isInteger(region.order)) part.order = Math.max(...page.regions.map((candidate) => candidate.order ?? 0)) + 1
+    if (part.mask) {
+      part.mask.id = `${part.id}-m${part.mask.sequence ?? 1}`
+      part.mask.regionId = part.id
+      if (part.mask.provenance) part.mask.provenance.mask_sha256 = sha256Hex(`mask-pieces:${part.id}`)
+    }
+    region.keptApart = [...(region.keptApart ?? []), token]
+    region.bbox = shown[0]
+    if (unpadded) region.baseBbox = unpadded[0]
+    maskEdits += 1
+    if (region.mask?.provenance) region.mask.provenance.mask_sha256 = sha256Hex(`mask-edit:${region.id}:${maskEdits}`)
+    if (region.mask) region.mask.sequence = (Number.isInteger(region.mask.sequence) ? region.mask.sequence : 1) + 1
+    page.regions.push(part)
+    answer.changed.push(region.id)
+    answer.created.push(part.id)
+    page.status = settledStatus(page)
+    answer.pageStatus = page.status
+    answer.pages.push({ pageIndex: page.index, pageStatus: page.status })
+    recordPageStep(chapterId, DETECTION_LABELS.pieces, captured)
+    return answer
+  }
+
+  /**
    * What a page is once a step has been through it: `detected` while a
    * detection waits, `cleaned` when something on it is cleaned and nothing is
    * left pending, `unclean` otherwise. Detect never marks a page examined.
@@ -2190,6 +2255,7 @@ export function createMockBackend(options = {}) {
     type: 'masks.command.detectionType',
     edit: 'masks.command.editDetection',
     split: 'masks.command.splitDetection',
+    pieces: 'masks.command.splitPieces',
     padding: 'masks.command.detectionPadding',
     approve: 'masks.command.approveMask',
     dismiss: 'masks.command.deleteRegion',
@@ -4515,15 +4581,17 @@ export function createMockBackend(options = {}) {
       }
     },
 
-    async editDetectionMask({ chapterId, pageIndex, sourceIndex, sourceSha, mode, stroke, painted } = {}) {
+    async editDetectionMask({ chapterId, pageIndex, sourceIndex, sourceSha, mode, stroke, painted, regionId } = {}) {
       await delay(timing.method)
-      if (mode !== 'add' && mode !== 'remove' && mode !== 'split') throw new Error('mask_edit_mode_invalid')
+      if (mode !== 'add' && mode !== 'remove' && mode !== 'split' && mode !== 'pieces') throw new Error('mask_edit_mode_invalid')
+      if (mode === 'pieces' && regionId == null) throw new Error('mask_edit_target_invalid')
       const found = findChapter(chapterId)
       const page = found?.chapter.pages.find((candidate) => candidate.index === pageIndex)
       if (!page) return null
       if (sourceIndex !== undefined && page.sourceIndex !== sourceIndex) return null
       if (sourceSha !== undefined && page.sourceSha !== sourceSha) return null
       refuseBusyPage(chapterId, pageIndex)
+      if (mode === 'pieces') return splitIntoPieces(chapterId, page, regionId)
       const frame = maskEditFrame(found, page)
       const box = gestureBox(page, stroke, painted, frame)
       if (!box) return null

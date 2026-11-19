@@ -418,6 +418,21 @@ never written as though it were general.
   one of the 12 furigana pieces the 5 px masks had missed. The balloon detector's box is no wall:
   it is a rectangle with the outline inside its corners, and clamping to it took 2,451 at 10 px
   where no clamp took 2,596.
+- **An ungrown mask is one island per glyph, so Split into pieces cuts the shown mask
+  (2026-11-19).** The plan was to make each 8-connected island of a detection's ungrown mask its
+  own detection. On copies of two real chapters, 226 of 341 detections of c87 (padding 8) and 73
+  of 190 of c112 (a long strip, padding 7) had five or more islands of at least 64 pixels: a click
+  would have made one detection per letter. Flooded on the mask the detection shows (grown by its
+  padding, hand edits and all), 264 of 341 and 135 of 190 are one piece. Of the detections a
+  padding merge made (padded, with no fit and no group), 18 of 24 on c87 and 3 of 6 on c112 come
+  apart, mostly in two. Splitting 40 detections of each chapter kept every shown and every ungrown
+  pixel in exactly one piece. A first version grew each piece again from its ungrown share; review
+  found that it brought back a hand-erased padding ring and could grow a piece into a held
+  neighbour, so each piece is now cut from the stored masks as a lasso split cuts them. The probe
+  also found that a piece's lettering had been cut to its mask, which lost the lettering that
+  reached past it. The probe was a temporary ignored test in `region.rs` run on scratch copies of
+  `library/p71/c87.mtclean` and `library/p26/c112.mtclean` with their `.mtclean.d` folders; it was
+  removed after the run and its numbers are not kept in a file.
 - **The wall's paper band cannot ask for 90% flat.** The band of paper beside the lettering is
   where the outline is. An outline two pixels thick along one side of a narrow column is a third
   of a 3 px band, so the share `flat_tone` asks of ordinary paper returned no wall on exactly the
@@ -749,6 +764,29 @@ never written as though it were general.
 - **The prompts stay until the apps are signed.** Apple notarization and a Windows Authenticode
   certificate would remove them; `release.yml` already signs when those secrets exist.
 
+**Split into pieces (2026-11-19): what is still open.**
+
+- **No picture of a real split was looked at.** The real-page probe on copies of chapters c87 and
+  c112 counted pieces and checked pixels; nobody looked at which balloons came apart. A balloon
+  whose padded columns do not touch comes apart too, and a merge whose balloons overlapped once
+  padded stays one piece. How many of the 77 and 55 splittable detections are ones a user would
+  want split was not judged.
+- **Small paddings were not measured.** Both chapters were padded by 7 and 8. At a padding of 1 to
+  3 a seed mask's glyphs may not touch, and a balloon may come apart in more pieces than wanted. At
+  padding 0 islands up to 8 px apart (`PIECE_REACH`) are joined, a value taken from those two
+  paddings; no unpadded real detection was in the probe.
+- **No run of the built app.** The menu item, the one-piece notice, Undo and Redo were checked by
+  hand in the Vite mock (Chromium) only, not in the WKWebView of the shipped app. The mock has no
+  pixels: it cuts a box twice as long as it is deep into halves.
+- **No Clean after a split.** Cleaning each piece with its own engine was not run on a real page.
+- **Across a long-strip join each page journals its own step**, as every edit across a join
+  does: a piece moved to the next page is undone there. The real probe had no piece that crossed
+  a join; the case is covered by a unit test only.
+- **The command's refusal of `pieces` with no region** (`mask_edit_target_invalid`) is in the Tauri
+  command itself and has no Rust test; the mock's is tested.
+- **A third detection still joins pieces**, as for the lasso split: one that reaches two pieces
+  runs all three together.
+
 **Mask split (2026-11-17): what is still open.**
 
 - **No real pages.** The split is covered by Rust unit tests on a 64 x 48 fixture and by the Vite
@@ -764,8 +802,7 @@ never written as though it were general.
   furigana part on a large page may be refused where a user wants it.
 - **A third detection still joins split parts.** Padding keeps two parts apart, but one that
   reaches both runs all three together. How often that happens on a real page was not counted.
-- **Split into pieces is not built.** The one-click split of a mask into its separate blobs is a
-  plan only (`docs/mask-split-plan.md`).
+- **Split into pieces is built (2026-11-19).** See its own entry above.
 
 **Padding inside a balloon (2026-11-16): what is still open.**
 

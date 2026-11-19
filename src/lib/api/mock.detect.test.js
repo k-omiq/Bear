@@ -315,6 +315,88 @@ describe('editing the detected masks', () => {
     expect((await firstPage(mock)).regions.length).toBe(before.regions.length)
   })
 
+  /** Whether a box is one piece to the mock: under twice as long as it is deep, in page pixels. */
+  const onePiece = (page, { w, h }) => {
+    const [across, down] = [w * page.width, h * page.height]
+    return across < down * 2 && down < across * 2
+  }
+
+  /** The first detection, grown by an add until its box is twice as tall as it is wide in page pixels. */
+  async function tallDetection(mock) {
+    const page = await firstPage(mock)
+    const [target] = page.regions.filter((region) => region.outcome === 'detected')
+    const { x, y, w, h } = target.bbox
+    const bottom = y + Math.max(h, (2 * w * page.width) / page.height + 1)
+    expect(bottom).toBeLessThan(100)
+    const painted = { kind: 'rect', feather: 0, points: [{ x, y }, { x: x + w, y }, { x: x + w, y: bottom }, { x, y: bottom }] }
+    await edit(mock, { mode: 'add', painted })
+    return (await firstPage(mock)).regions.find((region) => region.id === target.id)
+  }
+
+  it('splits a detection into its pieces in one step, each kept apart from the other', async () => {
+    const mock = makeMock()
+    await ranToEnd(mock, () => mock.runClean(runOn('detect')))
+    const target = await tallDetection(mock)
+    const before = await firstPage(mock)
+    const steps = (await mock.historyLoad({ chapterId: CHAPTER })).entries.length
+
+    const answer = await edit(mock, { mode: 'pieces', regionId: target.id })
+    expect(answer).toMatchObject({ pageStatus: 'detected', changed: [target.id], removed: [],
+      pages: [{ pageIndex: 0, pageStatus: 'detected' }] })
+    expect(answer.created).toHaveLength(1)
+    const page = await firstPage(mock)
+    const kept = page.regions.find((region) => region.id === target.id)
+    const part = page.regions.find((region) => region.id === answer.created[0])
+    const { x, y, w, h } = target.bbox
+    expect(kept.bbox).toEqual({ x, y, w, h: h / 2 })
+    expect(part.bbox).toEqual({ x, y: y + h / 2, w, h: h / 2 })
+    expect(part).toMatchObject({ outcome: 'detected', pick: target.pick, insideBubble: target.insideBubble })
+    expect(part.mask.regionId).toBe(part.id)
+    expect(kept.keptApart).toHaveLength(1)
+    expect(part.keptApart).toEqual(kept.keptApart)
+
+    const history = await mock.historyLoad({ chapterId: CHAPTER })
+    expect(history.entries).toHaveLength(steps + 1)
+    expect(history.entries.at(-1)).toMatchObject({ label: 'masks.command.splitPieces', page: 0 })
+    await mock.historyMove({ chapterId: CHAPTER, pageIndex: 0, direction: 'undo' })
+    expect((await firstPage(mock)).regions).toEqual(before.regions)
+  })
+
+  it('cuts a padded detection as it is shown, padding nothing again', async () => {
+    const mock = makeMock()
+    await ranToEnd(mock, () => mock.runClean(runOn('detect')))
+    const target = await tallDetection(mock)
+    await mock.setDetectionPadding({ chapterId: CHAPTER, pageIndex: 0, regionId: target.id, paddingPx: 8 })
+    const padded = (await firstPage(mock)).regions.find((region) => region.id === target.id)
+    const answer = await edit(mock, { mode: 'pieces', regionId: target.id })
+    const page = await firstPage(mock)
+    const kept = page.regions.find((region) => region.id === target.id)
+    const part = page.regions.find((region) => region.id === answer.created[0])
+    const { x, y, w, h } = target.bbox
+    expect(kept.baseBbox).toEqual({ x, y, w, h: h / 2 })
+    expect(part.baseBbox).toEqual({ x, y: y + h / 2, w, h: h / 2 })
+    expect([kept.paddingPx, part.paddingPx]).toEqual([8, 8])
+    // The shown boxes are the padded box cut where the unpadded one is.
+    expect(kept.bbox).toEqual({ ...padded.bbox, h: y + h / 2 - padded.bbox.y })
+    expect(part.bbox.y + part.bbox.h).toBeCloseTo(padded.bbox.y + padded.bbox.h)
+    expect(part.mask.id).toBe(`${part.id}-m${part.mask.sequence}`)
+  })
+
+  it('splits nothing for a mask of one piece, records no step, and needs the region named', async () => {
+    const mock = makeMock()
+    await ranToEnd(mock, () => mock.runClean(runOn('detect')))
+    const before = await firstPage(mock)
+    const square = before.regions.find((region) => region.outcome === 'detected' && onePiece(before, region.bbox))
+    expect(square).toBeTruthy()
+    const steps = (await mock.historyLoad({ chapterId: CHAPTER })).entries.length
+    const answer = await edit(mock, { mode: 'pieces', regionId: square.id })
+    expect(answer).toMatchObject({ changed: [], created: [], removed: [], pages: [] })
+    expect((await firstPage(mock)).regions).toEqual(before.regions)
+    expect((await mock.historyLoad({ chapterId: CHAPTER })).entries).toHaveLength(steps)
+    expect(await edit(mock, { mode: 'pieces', regionId: 'no-such-region' })).toBeNull()
+    await expect(edit(mock, { mode: 'pieces' })).rejects.toThrow('mask_edit_target_invalid')
+  })
+
   it('never touches a cleaned layer', async () => {
     const mock = makeMock()
     await ranToEnd(mock, () => mock.runClean(runOn('detect')))

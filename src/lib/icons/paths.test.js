@@ -27,6 +27,8 @@ const REQUIRED = [
   'star', 'star-filled', 'pause', 'download',
   // The selection tool on the rail, and its add and remove modes.
   'selection', 'mask-add', 'mask-remove', 'mask-split',
+  // Split into pieces in a detection's region menu.
+  'mask-pieces',
   // The language picker.
   'globe',
   // The Patch and Gradient tools on the rail.

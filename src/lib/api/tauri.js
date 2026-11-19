@@ -758,7 +758,7 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     // The answer comes back as the command wrote it, `pages` included: every
     // page the edit wrote, which on a longstrip can be a neighbour of the
     // anchor.
-    editDetectionMask: ({ chapterId, pageIndex, sourceIndex, sourceSha, mode, stroke, painted }) =>
+    editDetectionMask: ({ chapterId, pageIndex, sourceIndex, sourceSha, mode, stroke, painted, regionId }) =>
       call(IMPLEMENTED.editDetectionMask, {
         chapterId,
         pageIndex,
@@ -767,6 +767,7 @@ export function createTauriBackend({ fallback, invoke, listen }) {
         mode,
         stroke: stroke ?? null,
         painted: painted ?? null,
+        regionId: regionId ?? null,
       }),
     // Bound to the source the gesture was drawn over, as `createRegion` is.
     erasePaint: ({ chapterId, pageIndex, sourceIndex, sourceSha, points, size, hardness, opacity, tip }) =>
