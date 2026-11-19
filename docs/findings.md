@@ -356,6 +356,22 @@ never written as though it were general.
   so every region routes to flat fill and the denoise rung never executes: the page added for it
   carries normal grain at sigma 2.6 levels, because a uniform draw over a handful of levels is
   bimodal by the ring's own test and would be refused as multimodal.
+- **koharu-layout-highres finds the same text, fewer sound effects, and has no runtime here
+  (2026-11-19).** `mayocream/koharu-layout-highres` (RF-DETR Seg 2XL, 46.6 M parameters, 1920 px
+  input, boxes and glyph masks for text, sound effect, balloon and panel, Apache-2.0, 186 MB) was
+  run against CTD, RT-DETR Full and SAM-TS-L on 32 real pages (15 bench pages, 17 of chapter 56).
+  Every box from both sides was pooled and judged by eye. Of 148 text items koharu found 146 and
+  our models 148. Of 87 sound effects koharu found 69 and ours 82, all through SAM-TS-L; RT and
+  CTD boxes hold only 4. On 92 fake outlined sound effects drawn over real drawing koharu found 70
+  and SAM 92. Koharu's class is right (69 of 69 sound effects), and only 6 of its 259 boxes sat on
+  art or covered a page, against 17 of RT's 193. Its glyph masks cover more of small balloon text
+  than raw SAM at 1024 px: median 0.971 of the ink against 0.891 on 93 real items, 0.984 against
+  0.812 on 63 fake ones. It boxes touching balloons as one. On the M5, beside a game stream, it
+  took 3.3 to 6.8 s a page on MPS with a 12.2 to 13.7 GiB peak, 92 s a page on torch CPU, and its
+  ONNX export on ONNX Runtime CPU never finished a page: on a quiet machine it passed 26 GiB in
+  12 s and was stopped by a cap, and an uncapped run alone reached 41 GB.
+  Our three models together took 6.2 to 6.7 s a page on CPU with a 6.4 GiB peak. Rejected for
+  now. Numbers, sheets and scripts: `koharu-layout-2026-11-19/` (untracked, copyrighted pages).
 
 ## Mask fitting
 
@@ -737,6 +753,27 @@ never written as though it were general.
   beside every Windows and Linux x64 runtime.
 
 ## What has not been measured
+
+**koharu-layout-highres bench (2026-11-19): what is still open.**
+
+- **No GPU ONNX run.** The app runs ONNX, and the CPU export does not fit in 32 GB at 1920 px.
+  ONNX Runtime WebGPU and CoreML were not tried, so whether any app path can run it is unknown.
+- **No smaller input.** 1152 or 1536 px would cut memory. The model card's older 1152 model had
+  about half the sound-effect accuracy, and this model was not run below 1920.
+- **Recall is out of pooled items.** Lettering that neither side boxed or masked was never
+  looked for, so both sides' recall is an upper bound.
+- **Not inside the app.** No Rust port and no Detect with its boxes. Whether its sound-effect
+  class would let the app clean sound effects it now holds (17 of 45 on the bench pages were
+  cleaned without review) is untested. That, with a GPU path under about 8 GB, is what would make
+  it worth taking as the box source in place of RT-DETR Full.
+- **Ours on GPU was not timed.** Our models ran on CPU only; the WebGPU SAM time is from the
+  2026-10-21 bench.
+- **A busy machine.** A game stream ran through the speed timings (only the capped ONNX run was
+  on a quiet machine). The two sides ran in turns, but the absolute times are high.
+- **Clean PNG and WebP manga only.** No noisy or JPEG scans, colour pages or webtoons.
+- **Licence chain.** Apache-2.0 on the weights, but the training set mixes Manga109, COO and
+  other sources under their own terms, as SAM-TS-L does. Fine for this non-commercial app; any
+  bundled download would need the same review `docs/model-rights-decision.md` asks for SAM-TS-L.
 
 **First-open help on the download page (2026-11-17): what is still open.**
 
