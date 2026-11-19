@@ -248,10 +248,10 @@ describe('regionMenuSections', () => {
   it('offers a detection the model list a cleaned region has, none checked, and no Clean shortcuts', () => {
     const region = { id: 'c1-p001-d0', outcome: 'detected', pick: 'lama', mask: masked('lama').mask }
     expect(ids(regionMenuSections(region, { engines: { flux: true }, cloud: true }))).toEqual([
-      'engine:fill', 'engine:lama', 'engine:flux', 'engine:cloud', 'type:inside', 'type:outside', 'padding', 'splitPart', 'delete',
+      'engine:fill', 'engine:lama', 'engine:flux', 'engine:cloud', 'type:inside', 'type:outside', 'padding', 'splitPart', 'splitPieces', 'delete',
     ])
     expect(ids(regionMenuSections(region, { engines: { flux: false }, cloud: false }))).toEqual([
-      'engine:fill', 'engine:lama', 'type:inside', 'type:outside', 'padding', 'splitPart', 'delete',
+      'engine:fill', 'engine:lama', 'type:inside', 'type:outside', 'padding', 'splitPart', 'splitPieces', 'delete',
     ])
     const engine = regionMenuSections(region, { cloud: true }).find((section) => section.id === 'engine')
     expect(engine?.labelKey).toBe('masks.action.engine')
@@ -267,10 +267,13 @@ describe('regionMenuSections', () => {
     const typeOf = (region) => regionMenuSections(region, { engines: { flux: false } })
       .find((section) => section.id === 'type')
 
-    it('offers Split off part on a detection, just above Delete', () => {
+    it('offers Split off part and Split into pieces on a detection, just above Delete', () => {
       const sections = regionMenuSections(detection(true), { engines: {} })
       const split = sections.find((section) => section.id === 'split')
-      expect(split?.items).toEqual([{ id: 'splitPart', labelKey: 'masks.action.splitPart', icon: 'mask-split' }])
+      expect(split?.items).toEqual([
+        { id: 'splitPart', labelKey: 'masks.action.splitPart', icon: 'mask-split' },
+        { id: 'splitPieces', labelKey: 'masks.action.splitPieces', icon: 'mask-pieces' },
+      ])
       expect(sections.at(-2)?.id).toBe('split')
     })
 

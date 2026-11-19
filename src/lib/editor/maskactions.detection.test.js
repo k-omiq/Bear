@@ -862,3 +862,72 @@ describe('Split off part', () => {
     expect(editor.tool).toBe('brush')
   })
 })
+
+describe('Split into pieces', () => {
+  it('splits the detection at once, with no gesture, and reads its page again', async () => {
+    const { backend, regions } = await detected()
+    const target = regions.find((/** @type {any} */ region) => region.outcome === 'detected')
+    const page = editor.chapter.pages.find((/** @type {any} */ candidate) => candidate.regions.includes(target))
+    // Twice as tall as it is wide in page pixels: two pieces to the mock.
+    const { x, y, w, h } = target.bbox
+    const bottom = y + Math.max(h, (2 * w * page.width) / page.height + 1)
+    expect(bottom).toBeLessThan(100)
+    await backend.editDetectionMask({ chapterId: CHAPTER, pageIndex: page.index, mode: 'add',
+      painted: { kind: 'rect', feather: 0, points: [{ x, y }, { x: x + w, y }, { x: x + w, y: bottom }, { x, y: bottom }] } })
+    await reloadPage(page.index)
+    const wide = current(target.id)
+    const edit = vi.spyOn(backend, 'editDetectionMask')
+    const count = editor.chapter.pages.find((/** @type {any} */ candidate) => candidate.index === page.index).regions.length
+
+    expect(await runRegionMenuItem('splitPieces', wide)).toBe(true)
+    expect(edit).toHaveBeenCalledWith({ chapterId: CHAPTER, pageIndex: page.index, mode: 'pieces', regionId: target.id })
+    const [made] = (await edit.mock.results[0].value).created
+    expect(current(made)).toMatchObject({ outcome: 'detected' })
+    expect(current(target.id).bbox.h).toBeCloseTo(wide.bbox.h / 2)
+    expect(editor.chapter.pages.find((/** @type {any} */ candidate) => candidate.index === page.index).regions).toHaveLength(count + 1)
+    expect(app.notices.filter((notice) => notice.tone === 'warn')).toEqual([])
+  })
+
+  it('says a mask of one piece was not split, and changes nothing', async () => {
+    const { regions } = await detected()
+    const square = regions.find((/** @type {any} */ region) => {
+      const page = editor.chapter.pages.find((/** @type {any} */ candidate) => candidate.regions.includes(region))
+      const [across, down] = [region.bbox.w * page.width, region.bbox.h * page.height]
+      return region.outcome === 'detected' && across < down * 2 && down < across * 2
+    })
+    const before = structuredClone(current(square.id))
+    expect(await runRegionMenuItem('splitPieces', square)).toBe(false)
+    expect(current(square.id)).toEqual(before)
+    expect(app.notices.map((notice) => notice.key)).toContain('notice.mask.onePiece')
+  })
+
+  it('says a refused split, and sends one request for a double click', async () => {
+    const { backend, regions } = await detected()
+    const target = regions.find((/** @type {any} */ region) => region.outcome === 'detected')
+    const before = structuredClone(current(target.id))
+    /** @type {(value: any) => void} */
+    let answer = () => {}
+    const edit = vi.spyOn(backend, 'editDetectionMask').mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
+    const first = runRegionMenuItem('splitPieces', target)
+    expect(await runRegionMenuItem('splitPieces', target)).toBe(false)
+    answer(null)
+    expect(await first).toBe(false)
+    expect(edit).toHaveBeenCalledTimes(1)
+    expect(app.notices.map((notice) => notice.key)).toContain('notice.mask.splitFailed')
+    clearNotices()
+
+    edit.mockRejectedValueOnce(new Error('disk full'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(await runRegionMenuItem('splitPieces', target)).toBe(false)
+    expect(app.notices.map((notice) => notice.key)).toContain('notice.mask.splitFailed')
+    expect(current(target.id)).toEqual(before)
+  })
+
+  it('is not offered to a region that is not a detection', async () => {
+    const { backend } = await detected()
+    const edit = vi.spyOn(backend, 'editDetectionMask')
+    const cleaned = { id: 'c1-p001-r1', outcome: 'cleaned', mask: { id: 'c1-p001-r1-m1', provenance: { engine: 'fill' } } }
+    expect(await runRegionMenuItem('splitPieces', /** @type {any} */ (cleaned))).toBe(false)
+    expect(edit).not.toHaveBeenCalled()
+  })
+})

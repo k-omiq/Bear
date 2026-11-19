@@ -532,7 +532,12 @@ Shift+F10 from the keyboard, selects the region and offers the same three things
 detected and not yet cleaned, the menu also offers **Text type**: Speech bubble text or Text outside bubbles, with the
 current one checked. Changing it sets which engine pick a later Clean starts the region on and the color its mask is
 drawn in. **Split off part** arms the Selection tool in its split mode with that detection picked; the next gesture
-over it says which part to cut off. The menu also has that detection's **Mask padding** slider, the same one its Layers row has, with a box
+over it says which part to cut off. **Split into pieces** needs no gesture: each separate piece of the detection's mask
+becomes a detection of its own at once. The pieces are the parts of the mask as it is shown, padding and hand edits
+included, so a balloon's letters stay together, and two balloons a padding ran into one mask come apart again where
+their padded shapes did not touch. Each piece keeps the old one's text type, engine pick and padding, a padding change never joins them again,
+and one undo puts the mask back whole (on a long strip, a piece that went to the next page is undone on that page). A piece smaller than a small glyph (64 pixels) stays with the piece nearest
+it, and a mask of one piece is left as it is, with a notice that says so. The menu also has that detection's **Mask padding** slider, the same one its Layers row has, with a box
 to type the value and the wheel to step it once it has the focus (so the wheel still scrolls the menu): the value it
 settles on re-pads that one mask and the menu stays open. An entry picked right after a padding change waits for that
 change to be saved.

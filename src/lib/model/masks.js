@@ -626,7 +626,12 @@ export function regionMenuSections(region, options = {}) {
       },
       // Arms the selection tool's split on this detection: the gesture
       // that follows says which part (`maskactions.svelte.js#armSplit`).
-      { id: 'split', labelKey: null, items: [{ id: 'splitPart', labelKey: 'masks.action.splitPart', icon: 'mask-split' }] },
+      // Split into pieces needs no gesture: each piece of the ungrown mask
+      // becomes a detection of its own (`maskactions.svelte.js#splitPieces`).
+      { id: 'split', labelKey: null, items: [
+        { id: 'splitPart', labelKey: 'masks.action.splitPart', icon: 'mask-split' },
+        { id: 'splitPieces', labelKey: 'masks.action.splitPieces', icon: 'mask-pieces' },
+      ] },
       { id: 'remove', labelKey: null, items: [{ id: 'delete', labelKey: 'masks.action.deleteRegion', icon: 'trash' }] },
     ]
   }

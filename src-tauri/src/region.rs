@@ -5662,7 +5662,11 @@ pub(crate) fn mint_hand_id(job: &Job, page_id: &str) -> String {
 /// the fill and solid rungs write through the mask and the model rungs through
 /// the lettering, and a stored lettering can reach past its mask.
 ///
-/// `mode` is `add` or `remove`; anything else is `mask_edit_mode_invalid`.
+/// `mode` is `add`, `remove`, `split` or `pieces`; anything else is
+/// `mask_edit_mode_invalid`. `pieces` takes no gesture: it names the detection
+/// in `region_id` and makes one detection of each piece of its ungrown mask
+/// ([`split_detection_pieces_at`]); with no `region_id` it is
+/// `mask_edit_target_invalid`.
 /// `stroke` is a [`PaintedStroke`] and `painted` a [`PaintedShape`] other than
 /// a line, which has no area; with both, the stroke is used. `null` for a
 /// chapter or page that is not there, a source that is not the one the
@@ -5680,9 +5684,13 @@ pub async fn edit_detection_mask(
     mode: String,
     stroke: Option<serde_json::Value>,
     painted: Option<serde_json::Value>,
+    region_id: Option<String>,
 ) -> Result<Option<MaskEdit>, String> {
     crate::library::blocking(move || {
         let mode = MaskEditMode::parse(&mode).ok_or_else(|| "mask_edit_mode_invalid".to_owned())?;
+        if mode == MaskEditMode::Pieces && region_id.is_none() {
+            return Err("mask_edit_target_invalid".to_owned());
+        }
         let expected_source = match (expected_source_idx, expected_source_sha) {
             (Some(index), Some(hash)) => Some((index, hash)),
             (None, None) => None,
@@ -5694,6 +5702,9 @@ pub async fn edit_detection_mask(
             Ok(None) | Err(LibraryError::Unknown { .. } | LibraryError::NoJob { .. }) => return Ok(None),
             Err(error) => return Err(error.into()),
         };
+        if let (MaskEditMode::Pieces, Some(id)) = (mode, region_id.as_deref()) {
+            return split_detection_pieces_at(&located, expected_source.as_ref(), id);
+        }
         edit_detection_mask_at(&located, expected_source.as_ref(), mode, stroke.as_ref(), painted.as_ref())
     })
     .await
@@ -6261,6 +6272,242 @@ fn edit_detection_mask_at(
     }
     edit.page_status = page_status(&located.chapter_id, &job.project, located.page_index);
     Ok(Some(edit))
+}
+
+/// Split into pieces: detection `region_id`, on the located page, made into
+/// one detection per piece of its ungrown mask ([`mask_pieces`]), with no
+/// gesture.
+///
+/// The pieces are the islands of the mask the detection shows, grown and
+/// edited as it is, so what a padding merge ran together comes apart again
+/// wherever the two padded shapes did not touch, and one balloon's glyphs,
+/// which its padding joined, stay one piece. Nothing is grown again: each
+/// piece is cut from the stored masks and from the ungrown pair a padding
+/// grows from, as a lasso split cuts them, so a hand edit of the padding
+/// ring, a cut clear of a neighbour and a padding stopped at a balloon's
+/// outline all stay as they were. At padding 0 the shown mask is the ungrown
+/// one, one island per glyph on a seed mask, so islands up to [`PIECE_REACH`]
+/// apart are joined there. The piece that holds the topmost row keeps the
+/// old id, its group and its order; each other piece is a new detection made
+/// from the old record, as a lasso split's part is, with no group, on the
+/// page that holds its top row. Every piece carries one new split token
+/// ([`next_split_token`]), so no padding runs any two of them together again.
+///
+/// Fewer than two pieces of at least [`LEAST_LEFT`] pixels changes nothing
+/// and records no undo step: the answer's lists are empty. Otherwise one undo
+/// step under its own label, across every page it wrote. `None` for a
+/// detection that is not on the page, and for a source that is not the one
+/// the interface drew.
+fn split_detection_pieces_at(
+    located: &Located,
+    expected_source: Option<&(usize, String)>,
+    region_id: &str,
+) -> Result<Option<MaskEdit>, String> {
+    let _lock = run::lock_page(&located.job_path, &located.chapter_id, located.page_index)?;
+    let mut job = Job::open(&located.job_path).map_err(|e| e.to_string())?;
+    let Some(source_idx) = Library::resolve_page(&job.project, located.page_index) else {
+        return Ok(None);
+    };
+    let Some(source) = job.project.sources.get(source_idx) else {
+        return Ok(None);
+    };
+    if expected_source.is_some_and(|(index, sha)| *index != source_idx || *sha != source.sha256) {
+        return Ok(None);
+    }
+    if !job.project.detections.iter().any(|record| record.id == region_id && record.source_idx == source_idx) {
+        return Ok(None);
+    }
+    let Some(found) = job.load_detection(region_id).map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let pages = mask_edit_pages(&job.project, located.page_index, source.orientation.size(source.w, source.h));
+    let Some(anchor) = pages.first().map(|page| page.placement) else {
+        return Ok(None);
+    };
+    let frame = pages.iter().fold(anchor.rect(), |frame, page| span(frame, page.placement.rect()));
+    let in_frame: Vec<Rect> = pages.iter()
+        .map(|page| Rect::new(page.placement.x_offset - frame.x, page.placement.y_offset - frame.y,
+            page.placement.width, page.placement.height))
+        .collect();
+    let shift = |at: usize| (in_frame[at].x, in_frame[at].y);
+
+    let mut edit = MaskEdit {
+        page_status: String::new(),
+        changed: Vec::new(),
+        created: Vec::new(),
+        removed: Vec::new(),
+        pages: Vec::new(),
+    };
+    let base = if found.record.padding_px > 0 {
+        Some(job.load_detection_base(region_id).map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("detection {region_id} has no stored masks"))?)
+    } else {
+        None
+    };
+    let reach = if found.record.padding_px == 0 { PIECE_REACH } else { 0 };
+    let mut pieces = mask_pieces(&found.mask, &found.ink, base.as_ref(), reach);
+    if pieces.len() >= 2 {
+        // The topmost piece first: it keeps the old id on the old page.
+        pieces.sort_by_key(|piece| (piece.mask.bounds.y, piece.mask.bounds.x));
+        let mut changes: Vec<cleaner_core::project::PageDetectionChanges> = pages.iter()
+            .map(|page| cleaner_core::project::PageDetectionChanges {
+                source_idx: page.source_idx,
+                page_id: crate::library::page_id(&located.chapter_id, page.position),
+                ..Default::default()
+            })
+            .collect();
+        let token = next_split_token(&job, region_id);
+        for (number, piece) in pieces.into_iter().enumerate() {
+            // The page holding the piece's top row; the old one keeps its page.
+            let top = piece.mask.bounds.y + shift(0).1;
+            let to = if number == 0 {
+                0
+            } else {
+                in_frame.iter().position(|page| top >= page.y && top < page.bottom()).unwrap_or(0)
+            };
+            let moved = (shift(0).0 - shift(to).0, shift(0).1 - shift(to).1);
+            let mut record = found.record.clone();
+            record.kept_apart.push(token.clone());
+            let mask = translated_mask(&piece.mask, moved);
+            record.bbox = mask.bounds;
+            let piece = cleaner_core::project::LoadedDetection {
+                record,
+                mask,
+                ink: translated_mask(&piece.ink, moved),
+                evidence: None,
+                base: piece.base.map(|(base_mask, base_ink)| (translated_mask(&base_mask, moved), translated_mask(&base_ink, moved))),
+            };
+            if number == 0 {
+                edit.changed.push(region_id.to_owned());
+                changes[0].updated.push(piece);
+                continue;
+            }
+            // A new detection, as a lasso split's part is: its own id, order
+            // and box, and no group.
+            let mut piece = piece;
+            piece.record.group = None;
+            piece.record.order = order_after_page(&job, pages[to].source_idx)
+                .saturating_add(changes[to].created.len() as u32);
+            changes[to].created.push(piece);
+        }
+        let touched: Vec<usize> = (0..pages.len())
+            .filter(|&at| !(changes[at].updated.is_empty() && changes[at].created.is_empty()))
+            .collect();
+        let changes: Vec<_> = changes.into_iter().enumerate()
+            .filter(|(at, _)| touched.contains(at))
+            .map(|(_, change)| change)
+            .collect();
+        let sources: Vec<usize> = touched.iter().map(|&at| pages[at].source_idx).collect();
+        let page_before = crate::history::capture_pages(&job, &sources);
+        edit.created = job.rewrite_detections(changes).map_err(|e| e.to_string())?.into_iter().flatten().collect();
+        crate::history::record_pages(&job, &located.chapter_id, crate::history::SPLIT_PIECES_LABEL, None, page_before);
+        edit.pages = touched.iter()
+            .map(|&at| EditedPage {
+                page_index: pages[at].position as u32,
+                page_status: page_status(&located.chapter_id, &job.project, pages[at].position),
+            })
+            .collect();
+    }
+    edit.page_status = page_status(&located.chapter_id, &job.project, located.page_index);
+    Ok(Some(edit))
+}
+
+/// How far apart, in page pixels, two islands of an unpadded detection's
+/// mask may be and still be one piece of a Split into pieces: the paddings
+/// of the real chapters it was measured on (7 and 8), which joined each
+/// balloon's glyphs and left two balloons a padding merge ran together apart.
+const PIECE_REACH: u32 = 8;
+
+/// One piece of a Split into pieces: its share of the shown mask and
+/// lettering, and of the ungrown pair when the detection has one.
+#[derive(Debug, Clone, PartialEq)]
+struct MaskPiece {
+    mask: Mask,
+    ink: Mask,
+    base: Option<(Mask, Mask)>,
+}
+
+/// The pieces Split into pieces makes of a detection: one per 8-connected
+/// island ([`mask_islands`], the flood `text_groups.rs#ink_islands` runs) of
+/// its shown display set, the mask and lettering together, grown by `reach`
+/// first, that holds at least [`LEAST_LEFT`] pixels of the ungrown pair
+/// (`base`, or the shown masks when there is none). Each piece is the
+/// island's share of the mask, or of the display set where it holds no mask
+/// pixel; of the lettering, or its mask where it holds none; and of each
+/// ungrown mask in the same way. A smaller island is a speck, not a region:
+/// it goes with the nearest piece (by the gap between their boxes, then the
+/// first piece), and so does any ungrown pixel the shown masks lost to a
+/// hand edit, so the pieces hold every pixel of each mask between them and
+/// none twice. Empty when fewer than two islands are that large.
+fn mask_pieces(mask: &Mask, ink: &Mask, base: Option<&(Mask, Mask)>, reach: u32) -> Vec<MaskPiece> {
+    let within = |a: &Mask, b: &Mask| subtract(a, &subtract(a, b));
+    let display = union_masks(mask, ink);
+    let base_display = base.map_or_else(|| display.clone(), |(base_mask, base_ink)| union_masks(base_mask, base_ink));
+    let islands = mask_islands(&display.dilated(reach, u32::MAX, u32::MAX));
+    let (mut pieces, mut specks): (Vec<Mask>, Vec<Mask>) = islands
+        .into_iter()
+        .partition(|island| within(&base_display, island).count() >= LEAST_LEFT);
+    if pieces.len() < 2 {
+        return Vec::new();
+    }
+    // Ungrown pixels no island holds: a hand erase took them off the shown
+    // mask and not off the ungrown one.
+    let held = pieces.iter().chain(&specks).fold(Mask::empty(base_display.bounds), |all, island| union_masks(&all, island));
+    specks.extend(mask_islands(&subtract(&base_display, &held)));
+    let gap = |a: Rect, b: Rect| {
+        let gx = (b.x - a.right()).max(a.x - b.right()).max(0);
+        let gy = (b.y - a.bottom()).max(a.y - b.bottom()).max(0);
+        gx * gx + gy * gy
+    };
+    for speck in specks {
+        let nearest = (0..pieces.len())
+            .min_by_key(|&at| (gap(speck.bounds, pieces[at].bounds), at))
+            .unwrap_or(0);
+        pieces[nearest] = union_masks(&pieces[nearest], &speck);
+    }
+    let share = |of: &Mask, or: &Mask, area: &Mask| tight(&within(of, area)).or_else(|| tight(&within(or, area)));
+    pieces.into_iter()
+        .filter_map(|area| {
+            let mask = share(mask, &display, &area)?;
+            let ink = tight(&within(ink, &area)).unwrap_or_else(|| mask.clone());
+            let base = base.map(|(base_mask, base_ink)| {
+                let base_mask = share(base_mask, &base_display, &area).unwrap_or_else(|| mask.clone());
+                let base_ink = tight(&within(base_ink, &area)).unwrap_or_else(|| base_mask.clone());
+                (base_mask, base_ink)
+            });
+            Some(MaskPiece { mask, ink, base })
+        })
+        .collect()
+}
+
+/// The 8-connected islands of a mask, in the scan order of their first
+/// pixels, each cropped to its pixels: the labeling
+/// `text_groups.rs#ink_islands` floods glyphs with
+/// ([`cleaner_core::text_groups::label`]).
+fn mask_islands(mask: &Mask) -> Vec<Mask> {
+    let bounds = mask.bounds;
+    let (w, h) = (bounds.w as usize, bounds.h as usize);
+    if w == 0 || h == 0 {
+        return Vec::new();
+    }
+    let mut raster = vec![0u8; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            if mask.contains(bounds.x + x as i64, bounds.y + y as i64) {
+                raster[y * w + x] = 1;
+            }
+        }
+    }
+    let labeled = cleaner_core::text_groups::label(bounds.w, bounds.h, &raster);
+    let mut islands: Vec<Mask> = labeled.components.iter()
+        .map(|(rect, _)| Mask::empty(Rect::new(bounds.x + rect.x, bounds.y + rect.y, rect.w, rect.h)))
+        .collect();
+    for (at, &number) in labeled.labels.iter().enumerate() {
+        if number != 0 {
+            islands[number as usize - 1].set(bounds.x + (at % w) as i64, bounds.y + (at / w) as i64, true);
+        }
+    }
+    islands
 }
 
 /// A page's status as the interface lists it, or empty for a page that is
@@ -6896,13 +7143,15 @@ fn hand_detection(source_idx: usize, bbox: Rect, order: u32) -> cleaner_core::pr
     }
 }
 
-/// Whether a mask edit grows the page's detections, erases from them, or
-/// splits part of one off as a detection of its own.
+/// Whether a mask edit grows the page's detections, erases from them,
+/// splits part of one off as a detection of its own, or splits one into its
+/// pieces ([`split_detection_pieces_at`], which takes no gesture).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MaskEditMode {
     Add,
     Remove,
     Split,
+    Pieces,
 }
 
 impl MaskEditMode {
@@ -6911,6 +7160,7 @@ impl MaskEditMode {
             "add" => Some(MaskEditMode::Add),
             "remove" => Some(MaskEditMode::Remove),
             "split" => Some(MaskEditMode::Split),
+            "pieces" => Some(MaskEditMode::Pieces),
             _ => None,
         }
     }
@@ -7109,6 +7359,9 @@ fn plan_mask_edit(page: &[DetectionMasks<'_>], gesture: &Mask, mode: MaskEditMod
             plan.change(target, kept, kept_ink);
             plan.split = Some((target.id.to_owned(), taken, taken_ink));
         }
+        // Pieces names its detection and takes no gesture
+        // (`split_detection_pieces_at`): nothing to plan here.
+        MaskEditMode::Pieces => {}
     }
     plan
 }
@@ -13256,6 +13509,317 @@ mod mask_edit_tests {
         };
         let one = made_one(vec![piece("a", &["x/s1"], 0), piece("b", &["y/s1", "x/s1"], 10)], (64, 48)).unwrap();
         assert_eq!(one.record.kept_apart, vec!["x/s1".to_owned(), "y/s1".to_owned()]);
+    }
+
+    /* ---------- split into pieces ---------- */
+
+    /// The pieces of a mask are its islands of at least a glyph. They hold
+    /// every pixel between them and none twice: a speck goes with the piece
+    /// nearest it, and a piece with no lettering of its own takes its mask as
+    /// lettering.
+    #[test]
+    fn pieces_hold_every_pixel_once_and_a_speck_goes_with_the_nearest() {
+        let (left, right, speck) = (block(0, 0, 10, 10), block(20, 0, 10, 10), block(32, 4, 2, 2));
+        let mask = union_masks(&union_masks(&left, &right), &speck);
+        let ink = block(2, 2, 6, 6);
+        let pieces = mask_pieces(&mask, &ink, None, 0);
+        assert_eq!(pieces.len(), 2);
+        assert_eq!((&pieces[0].mask, &pieces[0].ink), (&left, &ink));
+        let far = union_masks(&right, &speck);
+        assert_eq!((&pieces[1].mask, &pieces[1].ink, &pieces[1].base), (&far, &far, &None));
+        assert!(!pieces[0].mask.intersects(&pieces[1].mask));
+        let all: Vec<&Mask> = pieces.iter().map(|piece| &piece.mask).collect();
+        assert_eq!(Mask::union(&all, 64, 48), Mask::union(&[&mask], 64, 48));
+        // Diagonal neighbours are one island, as `ink_islands` floods them.
+        let touching = union_masks(&block(0, 0, 10, 10), &block(10, 10, 10, 10));
+        assert!(mask_pieces(&touching, &touching, None, 0).is_empty());
+        // One piece, or one piece and a speck, is no split.
+        assert!(mask_pieces(&left, &left, None, 0).is_empty());
+        let one = union_masks(&left, &speck);
+        assert!(mask_pieces(&one, &one, None, 0).is_empty());
+    }
+
+    /// Lettering that reaches past its mask goes with the piece it lies in,
+    /// so no lettering pixel is lost. Found on a real page: a piece's
+    /// lettering was first cut to its mask.
+    #[test]
+    fn a_pieces_lettering_past_its_mask_is_kept() {
+        let mask = union_masks(&block(0, 0, 10, 10), &block(30, 0, 10, 10));
+        let ink = union_masks(&block(8, 2, 6, 4), &block(32, 2, 4, 4));
+        let pieces = mask_pieces(&mask, &ink, None, 0);
+        assert_eq!(pieces.len(), 2);
+        assert_eq!((&pieces[0].mask, &pieces[0].ink), (&block(0, 0, 10, 10), &block(8, 2, 6, 4)));
+        let display: Vec<Mask> = pieces.iter().map(|piece| union_masks(&piece.mask, &piece.ink)).collect();
+        assert_eq!(Mask::union(&display.iter().collect::<Vec<_>>(), 64, 48), Mask::union(&[&union_masks(&mask, &ink)], 64, 48));
+    }
+
+    /// An unpadded seed mask is one island per glyph: at padding 0 islands
+    /// up to the reach apart are one piece, so one balloon's glyphs stay
+    /// together and two balloons further apart come apart.
+    #[test]
+    fn an_unpadded_masks_glyphs_are_joined_by_the_reach() {
+        // Two balloons of three glyphs each, the glyphs 3 px apart, the
+        // balloons 20 px apart.
+        let glyphs = |x: i64| (0..3).fold(Mask::empty(Rect::new(x, 0, 30, 10)), |all, at| union_masks(&all, &block(x + at * 11, 0, 8, 10)));
+        let both = union_masks(&glyphs(0), &glyphs(50));
+        assert_eq!(mask_pieces(&both, &both, None, 0).len(), 6, "with no reach, one piece per glyph");
+        let pieces = mask_pieces(&both, &both, None, PIECE_REACH);
+        assert_eq!(pieces.iter().map(|piece| piece.mask.clone()).collect::<Vec<_>>(), vec![glyphs(0), glyphs(50)]);
+        assert!(mask_pieces(&both, &both, None, 12).is_empty(), "a reach of 12 joins the two balloons");
+    }
+
+    /// A padded detection is cut, not grown again: each piece's shown masks
+    /// are the shown masks' share and its ungrown pair the ungrown pair's,
+    /// so a hand edit of the padding ring stays, and an ungrown pixel a hand
+    /// erase left off the shown mask goes with the nearest piece.
+    #[test]
+    fn a_padded_detection_is_cut_as_it_is_shown() {
+        let base = union_masks(&block(4, 4, 10, 10), &block(30, 4, 10, 10));
+        let mut shown = base.dilated(3, 64, 48);
+        // A hand erase took a strip of the ring, and a pixel of the ungrown
+        // mask with it.
+        for y in 0..20 {
+            shown.set(2, y, false);
+        }
+        shown.set(10, 10, false);
+        let pieces = mask_pieces(&shown, &shown, Some(&(base.clone(), base.clone())), 0);
+        assert_eq!(pieces.len(), 2);
+        assert!(!pieces[0].mask.contains(2, 8), "the erased ring came back");
+        assert!(!pieces[0].mask.contains(10, 10));
+        assert_eq!(pieces[0].base, Some((block(4, 4, 10, 10), block(4, 4, 10, 10))));
+        assert_eq!(pieces[1].base, Some((block(30, 4, 10, 10), block(30, 4, 10, 10))));
+        let shown_all: Vec<&Mask> = pieces.iter().map(|piece| &piece.mask).collect();
+        assert_eq!(Mask::union(&shown_all, 64, 48), Mask::union(&[&shown], 64, 48));
+    }
+
+    /// Two detections of one page, `gap` columns apart, with their masks
+    /// as their lettering: blocks at x 4 and at x `16 + gap`, 12 x 12, at row 6.
+    fn page_with_two_detections(name: &str, gap: i64) -> (PathBuf, Located, String, String) {
+        let (root, located, first) = page_with_a_detection(name);
+        let mut job = Job::open(&located.job_path).unwrap();
+        let second_mask = block(16 + gap, 6, 12, 12);
+        let id = job.next_detection_id("chapter-p001");
+        let mut record = job.project.detections[0].clone();
+        record.id = id.clone();
+        record.inside = false;
+        record.balloon_color = None;
+        record.order = 4;
+        record.mask_ref = String::new();
+        job.store_detection(record, &second_mask, &second_mask).unwrap();
+        // The first as plain as the second, so a padding is the plain growth.
+        let mut first_record = job.project.detections[0].clone();
+        first_record.inside = false;
+        first_record.balloon_color = None;
+        first_record.mask_ref = String::new();
+        job.store_detection(first_record, &block(4, 6, 12, 12), &block(4, 6, 12, 12)).unwrap();
+        drop(job);
+        (root, located, first, id)
+    }
+
+    /// One detection, whole: its record, its masks and its ungrown pair.
+    type WholeDetection = (cleaner_core::project::DetectedRegion, Mask, Mask, Option<(Mask, Mask)>);
+
+    /// Every detection on the page, whole. What one undo must give back
+    /// byte for byte.
+    fn whole_state(job_path: &std::path::Path) -> Vec<WholeDetection> {
+        let job = Job::open(job_path).unwrap();
+        let mut state: Vec<_> = job.project.detections.iter().map(|row| {
+            let found = job.load_detection(&row.id).unwrap().unwrap();
+            let base = job.load_detection_base(&row.id).unwrap();
+            (row.clone(), found.mask, found.ink, base)
+        }).collect();
+        state.sort_by(|a, b| a.0.id.cmp(&b.0.id));
+        state
+    }
+
+    /// The case it is for: a padding ran two balloons together (6 px apart,
+    /// padded by 2, so 2 px apart once grown), and Split into pieces makes
+    /// them two again with no drawing. The pieces' ungrown
+    /// masks are the two that were run together, pixel for pixel; both carry
+    /// one split token, and no padding runs them together again; 0 gives back
+    /// the masks as they were first stored.
+    #[test]
+    fn split_into_pieces_takes_a_padding_merge_apart_and_keeps_it_apart() {
+        let (root, located, first, second) = page_with_two_detections("pieces-merge", 6);
+        let ran = set_detection_padding_at(&located, Some(0), 2).unwrap();
+        assert_eq!(ran.removed, vec![second.clone()], "the padding did not run the two together");
+        let merged_base = Job::open(&located.job_path).unwrap().load_detection_base(&first).unwrap().unwrap();
+
+        let edit = split_detection_pieces_at(&located, None, &first).unwrap().expect("an edit");
+        let [made] = edit.created.as_slice() else { panic!("one new piece, got {edit:?}") };
+        assert_eq!((edit.changed.clone(), edit.removed.len()), (vec![first.clone()], 0));
+        assert_eq!(edit.pages, vec![EditedPage { page_index: 0, page_status: "detected".into() }]);
+
+        let job = Job::open(&located.job_path).unwrap();
+        let (kept, part) = (job.load_detection(&first).unwrap().unwrap(), job.load_detection(made).unwrap().unwrap());
+        let (kept_base, part_base) = (job.load_detection_base(&first).unwrap().unwrap(), job.load_detection_base(made).unwrap().unwrap());
+        assert_eq!((&kept_base.0, &part_base.0), (&block(4, 6, 12, 12), &block(22, 6, 12, 12)));
+        assert_eq!(Mask::union(&[&kept_base.0, &part_base.0], 64, 48), Mask::union(&[&merged_base.0], 64, 48));
+        assert!(!kept_base.0.intersects(&part_base.0));
+        // Each grown from its own piece, as a padding of 2 grows it.
+        assert_eq!(kept.mask, padded_pair(&kept_base.0, &kept_base.1, 2, (64, 48), 1.0, None).0);
+        assert_eq!(part.mask, padded_pair(&part_base.0, &part_base.1, 2, (64, 48), 1.0, None).0);
+        assert_eq!((kept.record.bbox, part.record.bbox), (kept.mask.bounds, part.mask.bounds));
+        let token = format!("{first}/s1");
+        assert_eq!((&kept.record.kept_apart, &part.record.kept_apart), (&vec![token.clone()], &vec![token]));
+        assert_eq!((part.record.padding_px, part.record.pick.as_str(), part.record.fit), (2, "fill", kept.record.fit));
+        assert!(part.record.group.is_none());
+        drop(job);
+        let labels: Vec<_> = crate::history::load(&located.job_path).entries.iter().map(|entry| entry.label.clone()).collect();
+        assert_eq!(labels.last().map(String::as_str), Some(crate::history::SPLIT_PIECES_LABEL));
+
+        // The same padding again has nothing to do: the pieces are what it
+        // would grow.
+        let again = set_detection_padding_at(&located, Some(0), 2).unwrap();
+        assert!(again.changed.is_empty() && again.removed.is_empty(), "{again:?}");
+        for padding in [4, 8, 0] {
+            let edit = set_detection_padding_at(&located, Some(0), padding).unwrap();
+            assert!(edit.removed.is_empty(), "padding {padding} ran the pieces together");
+            assert_eq!(Job::open(&located.job_path).unwrap().project.detections.len(), 2);
+        }
+        let job = Job::open(&located.job_path).unwrap();
+        assert_eq!(job.load_detection(&first).unwrap().unwrap().mask, block(4, 6, 12, 12));
+        assert_eq!(job.load_detection(made).unwrap().unwrap().mask, block(22, 6, 12, 12));
+        drop(job);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// One undo gives back the one detection exactly, record, masks and
+    /// ungrown pair, and Redo the pieces.
+    #[test]
+    fn one_undo_of_split_into_pieces_gives_back_the_detection_byte_for_byte() {
+        let (root, located, first, _) = page_with_two_detections("pieces-undo", 6);
+        set_detection_padding_at(&located, Some(0), 2).unwrap();
+        let start = whole_state(&located.job_path);
+        assert_eq!(start.len(), 1);
+        let steps = crate::history::load(&located.job_path).entries.len();
+
+        let edit = split_detection_pieces_at(&located, None, &first).unwrap().expect("an edit");
+        assert_eq!(edit.created.len(), 1);
+        assert_eq!(crate::history::load(&located.job_path).entries.len(), steps + 1, "one undo step");
+        let pieces = whole_state(&located.job_path);
+        step(&located, "undo");
+        assert_eq!(whole_state(&located.job_path), start);
+        step(&located, "redo");
+        assert_eq!(whole_state(&located.job_path), pieces);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Three balloons in one padded detection on a balloon's paper: three
+    /// pieces, each grown as a padding inside a balloon grows it (the page is
+    /// read), each kept apart from both others. The topmost keeps the old id,
+    /// its group and its order; the two new ones have no group and take the
+    /// next two places in the page's order.
+    #[test]
+    fn split_into_pieces_makes_three_inside_a_balloon_and_keeps_each_apart() {
+        let (root, located, first) = page_with_a_detection("pieces-three");
+        let blocks = [block(4, 4, 12, 10), block(24, 18, 12, 10), block(44, 32, 12, 10)];
+        let all = blocks.iter().fold(Mask::empty(Rect::new(4, 4, 52, 38)), |all, piece| union_masks(&all, piece));
+        let mut job = Job::open(&located.job_path).unwrap();
+        let mut record = job.project.detections[0].clone();
+        record.mask_ref = String::new();
+        record.group = Some(serde_json::from_value(serde_json::json!({
+            "version": 1, "id": "tg-fixture", "origin": "maskLayout",
+            "bounds": { "x": 4, "y": 4, "w": 52, "h": 38 }, "lettering_pixels": 360,
+            "lettering_sha256": "0", "components": [], "boxes": [], "models": [],
+        })).unwrap());
+        job.store_detection(record, &all, &all).unwrap();
+        drop(job);
+        set_detection_padding_at(&located, Some(0), 2).unwrap();
+        let start = whole_state(&located.job_path);
+
+        let edit = split_detection_pieces_at(&located, None, &first).unwrap().expect("an edit");
+        assert_eq!(edit.changed, vec![first.clone()]);
+        assert_eq!(edit.created.len(), 2, "{edit:?}");
+        let job = Job::open(&located.job_path).unwrap();
+        let page = page_pixels(&job, 0);
+        assert!(page.is_some(), "the fixture page reads");
+        let ids: Vec<&String> = std::iter::once(&first).chain(&edit.created).collect();
+        let found: Vec<_> = ids.iter().map(|id| job.load_detection(id).unwrap().unwrap()).collect();
+        for (piece, expected) in found.iter().zip(&blocks) {
+            let (base, _) = job.load_detection_base(&piece.record.id).unwrap().unwrap();
+            assert_eq!(&base, expected, "{}", piece.record.id);
+            let grown = padded_pair(expected, expected, 2, (64, 48), 1.0, page.as_ref());
+            assert_eq!((&piece.mask, &piece.ink), (&grown.0, &grown.1), "{}", piece.record.id);
+            assert!(piece.record.inside);
+        }
+        for a in 0..found.len() {
+            for b in a + 1..found.len() {
+                assert!(found[a].record.kept_apart_from(&found[b].record), "{a} and {b}");
+            }
+        }
+        assert_eq!(found[0].record.group.as_ref().map(|group| group.id.as_str()), Some("tg-fixture"));
+        assert!(found[1].record.group.is_none() && found[2].record.group.is_none());
+        assert_eq!(found.iter().map(|piece| piece.record.order).collect::<Vec<_>>(), vec![3, 4, 5]);
+        drop(job);
+        let again = set_detection_padding_at(&located, Some(0), 6).unwrap();
+        assert!(again.removed.is_empty(), "{again:?}");
+        step(&located, "undo");
+        step(&located, "undo");
+        assert_eq!(whole_state(&located.job_path), start);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A mask of one piece, or of one piece and specks, is not split: the
+    /// answer lists nothing, nothing is written, and no undo step is
+    /// recorded. A detection that is not on the page is not there.
+    #[test]
+    fn split_into_pieces_with_fewer_than_two_pieces_changes_nothing() {
+        let (root, located, first) = page_with_a_detection("pieces-none");
+        let mut job = Job::open(&located.job_path).unwrap();
+        let mut record = job.project.detections[0].clone();
+        record.mask_ref = String::new();
+        let speckled = union_masks(&block(4, 6, 12, 12), &block(30, 30, 3, 3));
+        job.store_detection(record, &speckled, &speckled).unwrap();
+        drop(job);
+        let start = whole_state(&located.job_path);
+        let steps = crate::history::load(&located.job_path).entries.len();
+        let edit = split_detection_pieces_at(&located, None, &first).unwrap().expect("an answer");
+        assert_eq!(edit, MaskEdit { page_status: "detected".into(), changed: vec![], created: vec![], removed: vec![], pages: vec![] });
+        assert_eq!(whole_state(&located.job_path), start);
+        assert_eq!(crate::history::load(&located.job_path).entries.len(), steps);
+        assert_eq!(split_detection_pieces_at(&located, None, "chapter-p001-d99"), Ok(None));
+        let stale = (0usize, "0".repeat(64));
+        assert_eq!(split_detection_pieces_at(&located, Some(&stale), &first), Ok(None));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A detection hanging across a longstrip join, one piece above the join
+    /// and one below it: the piece above keeps the old id on its page, and
+    /// the one below is made on the page that holds its top row, in that
+    /// page's pixels, each grown by the padding on its own page. Each page
+    /// journals its own step, as every edit across a join does
+    /// (`history::record_pages`): an undo on each puts the one detection
+    /// back.
+    #[test]
+    fn split_into_pieces_across_a_join_puts_each_piece_on_the_page_of_its_top_row() {
+        let (root, located) = strip_edit_fixture("pieces-join");
+        let hanging = union_masks(&Mask::filled(Rect::new(10, 380, 12, 12)), &Mask::filled(Rect::new(10, 404, 12, 12)));
+        let id = strip_detection(&located, 0, &hanging);
+        set_detection_padding_at(&located, Some(0), 2).unwrap();
+        let start = whole_state(&located.job_path);
+
+        let edit = split_detection_pieces_at(&located, None, &id).unwrap().expect("an edit");
+        assert_eq!(edit.changed, vec![id.clone()]);
+        let [made] = edit.created.as_slice() else { panic!("one new piece, got {edit:?}") };
+        assert!(made.starts_with(&format!("{}-d", crate::library::page_id("chapter", 1))), "{made}");
+        assert_eq!(edited_pages(&edit), vec![0, 1]);
+        let job = Job::open(&located.job_path).unwrap();
+        let (kept, part) = (job.load_detection(&id).unwrap().unwrap(), job.load_detection(made).unwrap().unwrap());
+        let base = |id: &str| job.load_detection_base(id).unwrap().unwrap().0;
+        assert_eq!((kept.record.source_idx, base(&id)), (0, Mask::filled(Rect::new(10, 380, 12, 12))));
+        assert_eq!(part.record.source_idx, Library::resolve_page(&job.project, 1).unwrap());
+        assert_eq!(base(made), Mask::filled(Rect::new(10, 4, 12, 12)));
+        // Each grown by the padding of 2 on its own page.
+        assert_eq!(kept.mask, Mask::filled(Rect::new(10, 380, 12, 12)).dilated(2, 64, 400));
+        assert_eq!(part.mask, Mask::filled(Rect::new(10, 4, 12, 12)).dilated(2, 64, 400));
+        assert_eq!((kept.record.padding_px, part.record.padding_px), (2, 2));
+        assert!(kept.record.kept_apart_from(&part.record));
+        drop(job);
+        step(&located, "undo");
+        step(&strip_page(&located, 1), "undo");
+        assert_eq!(whole_state(&located.job_path), start);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// A page something outside the journal changed is not written over: the

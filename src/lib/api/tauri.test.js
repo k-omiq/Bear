@@ -239,7 +239,7 @@ describe('the Tauri adapter', () => {
       sourceIndex: 7, sourceSha: 'scan-digest', mode: 'add', stroke })
     expect(invoke).toHaveBeenCalledWith('edit_detection_mask', {
       chapterId: 'c1', pageIndex: 2, expectedSourceIdx: 7, expectedSourceSha: 'scan-digest',
-      mode: 'add', stroke, painted: null,
+      mode: 'add', stroke, painted: null, regionId: null,
     })
     expect(answer).toEqual(written)
 
@@ -247,7 +247,14 @@ describe('the Tauri adapter', () => {
     await backend.editDetectionMask({ chapterId: 'c1', pageIndex: 0, mode: 'remove', painted })
     expect(invoke).toHaveBeenLastCalledWith('edit_detection_mask', {
       chapterId: 'c1', pageIndex: 0, expectedSourceIdx: null, expectedSourceSha: null,
-      mode: 'remove', stroke: null, painted,
+      mode: 'remove', stroke: null, painted, regionId: null,
+    })
+
+    // Split into pieces names its detection and draws nothing.
+    await backend.editDetectionMask({ chapterId: 'c1', pageIndex: 0, mode: 'pieces', regionId: 'c1-p001-d0' })
+    expect(invoke).toHaveBeenLastCalledWith('edit_detection_mask', {
+      chapterId: 'c1', pageIndex: 0, expectedSourceIdx: null, expectedSourceSha: null,
+      mode: 'pieces', stroke: null, painted: null, regionId: 'c1-p001-d0',
     })
   })
 
