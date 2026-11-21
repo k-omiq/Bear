@@ -1677,9 +1677,10 @@ pub fn discard_partial(app: tauri::AppHandle, id: String) -> Result<bool, String
 
 /// Download and unpack the ONNX Runtime this platform needs.
 ///
-/// The archive is the platform's own - a `.tgz` on macOS and Linux, a `.nupkg`
-/// on Windows - and only [`package::Artefact::library_dir`] is unpacked, flat,
-/// into `<app_data>/runtimes`, which is where
+/// The archive is a NuGet `.nupkg` on every platform since the GitHub release
+/// archives went (2026-11-21, see `runtime::package`), and only
+/// [`package::Artefact::library_dir`] is unpacked, flat, into
+/// `<app_data>/runtimes`, which is where
 /// [`cleaner_core::runtime::search_paths`] looks. A package with companions  - 
 /// `DirectML.dll`, the WebGPU plugin - has every artefact land in that same
 /// directory, which is where the loader expects the plugin.

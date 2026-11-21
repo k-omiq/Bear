@@ -658,6 +658,20 @@ never written as though it were general.
   and loads once the attribute is cleared, which a browser download sets and a library download
   does not; and the dylib's own load command names a versioned filename, so a copy saved under
   another name fails to resolve itself with an error that reads exactly like a signing failure.
+- **The runtime's GitHub host went away, and NuGet carries the same builds (2026-11-21).** An
+  install test of main (1.0.0-beta.20 plus 78 commits) on clean GCE VMs installed, opened and
+  uninstalled on Ubuntu 22.04 and 24.04, Debian 13 and Fedora 44 (`.deb` and AppImage) and on
+  Windows Server 2022 and 2025 (NSIS, which also installed WebView2 157 on 2022). Every Linux
+  launch check then failed at the runtime stage: `github.com/microsoft/onnxruntime` answered 404,
+  the repository and every release asset with it, while other `microsoft/` repositories answered.
+  Only Windows passed, because its default rows were already NuGet. Every row now points at
+  NuGet: `Microsoft.ML.OnnxRuntime` 1.28.0 (one 139 MB nupkg for every platform, against 9 to
+  32 MB for one archive), and `Microsoft.ML.OnnxRuntime.Gpu.Windows` and `.Gpu.Linux` 1.28.0,
+  which are the CUDA 13 build (`libcudart.so.13`, `cublas64_13.dll`). NuGet has no CUDA 12 build,
+  so that flavour left the table. On this Mac the NuGet `osx-arm64` library, unpacked by the
+  app's own `unpack`, offers CPU, CoreML and WebGPU, and the 27 LaMa engine tests ran on it in
+  84 s. It ships with no `libonnxruntime.1.dylib` beside it and loads anyway. A runtime already
+  installed keeps loading, because the install record holds only the flavour and version.
 - **Throughput has a target because nothing else measured it:** at least 20 pages per minute on
   the two cheap rungs. Detection at 350 to 383 ms a page on CoreML leaves that budget intact.
 
@@ -768,6 +782,27 @@ never written as though it were general.
   beside every Windows and Linux x64 runtime.
 
 ## What has not been measured
+
+**Runtime moved to NuGet and the GCE install test (2026-11-21): what is still open.**
+
+- **No fixed build was installed on Linux or Windows.** Only the macOS path ran end to end. The
+  Linux x64 library was checked by its dependencies alone (glibc, libstdc++; soname
+  `libonnxruntime.so.1` under the file name `libonnxruntime.so`), and the WebGPU plugin by its
+  own (no link to `libonnxruntime`). Rerun the six VMs on a build of this change before a release.
+- **The CUDA 13 NuGet packages never ran.** No NVIDIA machine was used. Whether their
+  `onnxruntime.dll` carries DirectML, and whether `cuda::report` reads them right, is assumed
+  from the GitHub archives they replace.
+- **`.github/scripts/cuda-probe.py` is broken.** It still fetches both CUDA builds from the
+  GitHub releases, which answer 404, and CUDA 12 has no NuGet build. It needs a CUDA 13 only
+  rewrite against the NuGet package.
+- **The bigger first download was not timed.** macOS and Linux now fetch 139 MB for the stock
+  runtime where they fetched 9 to 32 MB.
+- **Windows window close was not checked.** The install test ran from an S4U task, which has no
+  desktop, so the close-to-exit step had no window to close. Install, helper self check, the
+  launch check and uninstall passed on both Windows Servers.
+- **AppImage without extract-and-run.** `libfuse.so.2` was absent on the Ubuntu 24.04, Debian 13
+  and Fedora 44 cloud images. The test ran the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1`, so a
+  plain double click on those systems is still unchecked.
 
 **koharu-layout-highres bench (2026-11-19): what is still open.**
 

@@ -43,23 +43,16 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dest="$root/runtimes/packages"
 mkdir -p "$dest"
 
-github="https://github.com/microsoft/onnxruntime/releases/download/v${version}"
 nuget="https://api.nuget.org/v3-flatcontainer"
 
-# name|url. The GitHub archives are the stock builds plus the two NVIDIA ones;
-# the NuGet packages are the builds Microsoft publishes nowhere else, and the
-# DirectML one is the whole of the Windows GPU path.
+# name|url. Every package is on NuGet: the microsoft/onnxruntime GitHub
+# releases answered 404 from 2026-11-21. The stock package carries every
+# platform in one nupkg; the GPU ones are the CUDA 13 build, and NuGet has no
+# CUDA 12 build. The DirectML one is the whole of the Windows GPU path.
 packages=(
-	"onnxruntime-osx-arm64-${version}.tgz|${github}/onnxruntime-osx-arm64-${version}.tgz"
-	"onnxruntime-osx-x86_64-${version}.tgz|${github}/onnxruntime-osx-x86_64-${version}.tgz"
-	"onnxruntime-win-x64-${version}.zip|${github}/onnxruntime-win-x64-${version}.zip"
-	"onnxruntime-win-arm64-${version}.zip|${github}/onnxruntime-win-arm64-${version}.zip"
-	"onnxruntime-win-x64-gpu_cuda12-${version}.zip|${github}/onnxruntime-win-x64-gpu_cuda12-${version}.zip"
-	"onnxruntime-win-x64-gpu_cuda13-${version}.zip|${github}/onnxruntime-win-x64-gpu_cuda13-${version}.zip"
-	"onnxruntime-linux-x64-gpu_cuda12-${version}.tgz|${github}/onnxruntime-linux-x64-gpu_cuda12-${version}.tgz"
-	"onnxruntime-linux-x64-gpu_cuda13-${version}.tgz|${github}/onnxruntime-linux-x64-gpu_cuda13-${version}.tgz"
-	"onnxruntime-linux-x64-${version}.tgz|${github}/onnxruntime-linux-x64-${version}.tgz"
-	"onnxruntime-linux-aarch64-${version}.tgz|${github}/onnxruntime-linux-aarch64-${version}.tgz"
+	"microsoft.ml.onnxruntime.${version}.nupkg|${nuget}/microsoft.ml.onnxruntime/${version}/microsoft.ml.onnxruntime.${version}.nupkg"
+	"microsoft.ml.onnxruntime.gpu.windows.${version}.nupkg|${nuget}/microsoft.ml.onnxruntime.gpu.windows/${version}/microsoft.ml.onnxruntime.gpu.windows.${version}.nupkg"
+	"microsoft.ml.onnxruntime.gpu.linux.${version}.nupkg|${nuget}/microsoft.ml.onnxruntime.gpu.linux/${version}/microsoft.ml.onnxruntime.gpu.linux.${version}.nupkg"
 	"microsoft.ml.onnxruntime.directml.1.24.4.nupkg|${nuget}/microsoft.ml.onnxruntime.directml/1.24.4/microsoft.ml.onnxruntime.directml.1.24.4.nupkg"
 	"microsoft.ai.directml.1.15.4.nupkg|${nuget}/microsoft.ai.directml/1.15.4/microsoft.ai.directml.1.15.4.nupkg"
 	# The WebGPU plugin provider: one package, four platforms, registered at

@@ -348,7 +348,11 @@ fn report_for(flavour: Option<String>, rescan: bool) -> RuntimeReport {
     } else if flavour.is_some() {
         report.wanted = None;
     }
-    let recommended = [("cuda13", 13), ("cuda12", 12)].into_iter().find_map(|(id, major)| {
+    // Only a build this platform still publishes: `cuda12` has had no row
+    // since the GitHub releases went (runtime::package), and recommending it
+    // would point at a download that falls back to the default.
+    let published = cleaner_core::runtime::package::host_flavours();
+    let recommended = [("cuda13", 13), ("cuda12", 12)].into_iter().filter(|(id, _)| published.iter().any(|p| p.flavour.id() == *id)).find_map(|(id, major)| {
         let candidate = cuda::Report { wanted: Some(major), ..report.clone() };
         matches!(candidate.verdict(), cuda::Verdict::Ready { .. }).then_some(id)
     });

@@ -17,18 +17,33 @@
 //!
 //! | package | size | providers |
 //! |---|---|---|
-//! | `onnxruntime-osx-arm64-1.28.0` | 32 MB | cpu, **coreml**, **webgpu** |
-//! | `onnxruntime-win-x64-1.28.0` | 79 MB | cpu |
-//! | `onnxruntime-win-arm64-1.28.0` | 80 MB | cpu |
-//! | `onnxruntime-linux-x64-1.28.0` | 9 MB | cpu |
-//! | `onnxruntime-linux-aarch64-1.28.0` | 8 MB | cpu |
+//! | `Microsoft.ML.OnnxRuntime` 1.28.0, `osx-arm64` | 139 MB | cpu, **coreml**, **webgpu** |
+//! | `Microsoft.ML.OnnxRuntime` 1.28.0, `linux-x64` | (same package) | cpu |
+//! | `Microsoft.ML.OnnxRuntime` 1.28.0, `linux-arm64` | (same package) | cpu |
 //! | `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4 | 13 MB | cpu, **dml** |
 //! | `Microsoft.AI.DirectML` 1.15.4 | 202 MB | *(`DirectML.dll` only)* |
-//! | `onnxruntime-win-x64-gpu_cuda12-1.28.0` | 455 MB | cpu, **cuda**, **tensorrt** |
-//! | `onnxruntime-win-x64-gpu_cuda13-1.28.0` | 366 MB | cpu, **cuda**, **tensorrt** |
-//! | `onnxruntime-linux-x64-gpu_cuda12-1.28.0` | 424 MB | cpu, **cuda**, **tensorrt** |
-//! | `onnxruntime-linux-x64-gpu_cuda13-1.28.0` | 241 MB | cpu, **cuda**, **tensorrt** |
+//! | `Microsoft.ML.OnnxRuntime.Gpu.Windows` 1.28.0 | 234 MB | cpu, **cuda**, **tensorrt** *(CUDA 13)* |
+//! | `Microsoft.ML.OnnxRuntime.Gpu.Linux` 1.28.0 | 241 MB | cpu, **cuda**, **tensorrt** *(CUDA 13)* |
 //! | `Microsoft.ML.OnnxRuntime.EP.WebGpu` 0.3.0 | 39 MB | **webgpu** *(plugin: win-x64, win-arm64, linux-x64, osx-arm64)* |
+//!
+//! ## Every artefact comes from NuGet
+//!
+//! Until 2026-11-21 the stock and CUDA rows were the GitHub release archives
+//! of `microsoft/onnxruntime`. That repository then answered 404, every
+//! release asset with it, so a new install on macOS or Linux could not fetch a
+//! runtime at all (found by the install test on clean GCE VMs, where only the
+//! NuGet-fed Windows default passed). Microsoft publishes the same 1.28.0
+//! builds on NuGet, which the Windows rows already used:
+//!
+//! - The stock package is **one 139 MB nupkg for every platform**, against
+//!   9 to 32 MB for one GitHub archive. Only the platform's own directory is
+//!   unpacked, so the cost is network, not disk. Its `osx-arm64` library was
+//!   loaded on a Mac and offers CPU, CoreML and WebGPU, as the archive did.
+//! - The GPU packages are the **CUDA 13** build: the provider library needs
+//!   `libcudart.so.13` and `cublas64_13.dll`. NuGet carries no CUDA 12 build,
+//!   so the CUDA 12 flavour is no longer offered; a stored `cuda12` falls back
+//!   to the default like any other unknown id, and a runtime already
+//!   installed under it keeps loading from disk.
 //!
 //! Those sizes are on the table itself now, as [`Artefact::bytes`], read from
 //! each host's `Content-Length` rather than rounded off a directory listing -
@@ -73,7 +88,7 @@
 //! worth writing down because it is the one against CUDA: the ONNX Runtime half
 //! is 13 MB and `Microsoft.AI.DirectML` is **202 MB**, of which one 18 MB
 //! `DirectML.dll` is used - the package carries eight architectures, three of
-//! them Xbox. So Windows costs about 215 MB either way and CUDA costs 366–455
+//! them Xbox. So Windows costs about 215 MB either way and CUDA costs 234
 //! MB *plus* a toolkit the user installs. Size is therefore the weaker half of
 //! the argument; reaching every vendor with nothing to install is the whole of
 //! it.
@@ -93,13 +108,13 @@
 //!   `cudart`, no cuDNN**. The user installs those, and
 //!   [`crate::accel::Accelerator::availability`] says which is missing.
 //!
-//! Two CUDA rows rather than one, because ONNX Runtime publishes two and a
-//! machine has whichever toolkit it has. Neither has been run here.
+//! One CUDA row, CUDA 13, because that is the one build NuGet publishes (the
+//! CUDA 12 row went with the GitHub releases). It has not been run here.
 //!
-//! **Linux x64 has the same three flavours**, for the same reasons: the stock
+//! **Linux x64 has the same two flavours**, for the same reasons: the stock
 //! build with the WebGPU plugin is the default and reaches every vendor with
-//! nothing to install, and the two CUDA archives are offered to an NVIDIA
-//! machine whose owner has the toolkit. Linux aarch64 has the stock build and
+//! nothing to install, and the CUDA package is offered to an NVIDIA machine
+//! whose owner has the toolkit. Linux aarch64 has the stock build and
 //! nothing else - no CUDA archive and no plugin are published for it.
 //!
 //! Two things still deliberately not taken:
@@ -174,7 +189,7 @@ pub struct Artefact {
     /// for that, because it is the answer for the transfer actually happening.
     /// It is here so the **runtime row can say how large its download is before
     /// anything is downloaded**, the way a weight's row does, and so a
-    /// flavour picker can put 455 MB against 215 MB in front of the person
+    /// flavour picker can put 234 MB against 215 MB in front of the person
     /// choosing.
     pub bytes: u64,
     /// The path inside the archive holding the loadable library.
@@ -196,7 +211,9 @@ pub enum Flavour {
     /// nothing for the user to install.
     DirectMl,
     /// NVIDIA, built against CUDA 12.x. Needs a CUDA install this application
-    /// does not ship, of 12.8 or later (`cuda::minor_floor`).
+    /// does not ship, of 12.8 or later (`cuda::minor_floor`). **No longer
+    /// published** (see the module docs): no row offers it, and the id still
+    /// parses so a stored setting or an install record that names it reads.
     Cuda12,
     /// The same, built against CUDA 13.x.
     Cuda13,
@@ -314,6 +331,21 @@ const fn webgpu_plugin(library_dir: &'static str) -> Artefact {
     }
 }
 
+/// `Microsoft.ML.OnnxRuntime` for one platform. One nupkg for all of them,
+/// so the digest and the size are the same on every row and only
+/// `library_dir` differs.
+const fn stock_runtime(library_dir: &'static str) -> Artefact {
+    Artefact {
+        url: concat!(
+            "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime",
+            "/1.28.0/microsoft.ml.onnxruntime.1.28.0.nupkg"
+        ),
+        sha256: "769d1d3ea8ab6cd69f737c9dd4d4462aa4ad0ccfa106eaf506efc40d7bead5db",
+        bytes: 139_145_017,
+        library_dir,
+    }
+}
+
 /// The plugin's version. Separate from [`Package::ort_version`] because it is
 /// a different package on a different cadence - 0.3.0 registers into any
 /// runtime from 1.24.4 up, which is every row that carries it.
@@ -332,15 +364,7 @@ pub const PACKAGES: &[Package] = &[
         flavour: Flavour::Stock,
         default_flavour: true,
         ort_version: "1.28.0",
-        runtime: Artefact {
-            url: concat!(
-                "https://github.com/microsoft/onnxruntime/releases/download",
-                "/v1.28.0/onnxruntime-osx-arm64-1.28.0.tgz"
-            ),
-            sha256: "1268b359718099bde2cedb55787f182a130067bc4f31e8c88478c445b850d3d8",
-            bytes: 32_396_562,
-            library_dir: "onnxruntime-osx-arm64-1.28.0/lib",
-        },
+        runtime: stock_runtime("runtimes/osx-arm64/native"),
         companions: &[],
         advertised: &["CPUExecutionProvider", "CoreMLExecutionProvider", "WebGpuExecutionProvider"],
         user_installed: &[],
@@ -363,34 +387,9 @@ pub const PACKAGES: &[Package] = &[
         advertised: &["CPUExecutionProvider", "DmlExecutionProvider", "WebGpuExecutionProvider"],
         user_installed: &[],
     },
-    // The two CUDA flavours. Same release as the stock macOS pin, one per CUDA
-    // major, because a machine has whichever toolkit it has and ONNX Runtime
-    // publishes both. Neither is a default anywhere: see the module docs for
-    // why an NVIDIA machine is still better off on DirectML unless its owner has
-    // measured otherwise.
-    Package {
-        platform: Platform { os: Os::Windows, arch: Arch::X86_64 },
-        flavour: Flavour::Cuda12,
-        default_flavour: false,
-        ort_version: "1.28.0",
-        runtime: Artefact {
-            url: concat!(
-                "https://github.com/microsoft/onnxruntime/releases/download",
-                "/v1.28.0/onnxruntime-win-x64-gpu_cuda12-1.28.0.zip"
-            ),
-            sha256: "6b7bf16d6d30180db7f386fb179aa4e4f1313f0924531a2879b7b090b56518c1",
-            bytes: 455_344_532,
-            library_dir: "onnxruntime-win-x64-gpu_cuda12-1.28.0/lib",
-        },
-        companions: WIN_X64_PLUGIN_ONLY,
-        advertised: &[
-            "CPUExecutionProvider",
-            "CUDAExecutionProvider",
-            "TensorrtExecutionProvider",
-            "WebGpuExecutionProvider",
-        ],
-        user_installed: &["CUDA 12.8+", "cuDNN 9.x"],
-    },
+    // The CUDA flavour, the only one NuGet publishes (CUDA 13). Never a
+    // default anywhere: see the module docs for why an NVIDIA machine is still
+    // better off on DirectML unless its owner has measured otherwise.
     Package {
         platform: Platform { os: Os::Windows, arch: Arch::X86_64 },
         flavour: Flavour::Cuda13,
@@ -398,12 +397,12 @@ pub const PACKAGES: &[Package] = &[
         ort_version: "1.28.0",
         runtime: Artefact {
             url: concat!(
-                "https://github.com/microsoft/onnxruntime/releases/download",
-                "/v1.28.0/onnxruntime-win-x64-gpu_cuda13-1.28.0.zip"
+                "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.gpu.windows",
+                "/1.28.0/microsoft.ml.onnxruntime.gpu.windows.1.28.0.nupkg"
             ),
-            sha256: "137f0822a4923b1d84d3e09496e0792ebbb221eb3a61a0657f71a12ab68ab1e2",
-            bytes: 365_825_268,
-            library_dir: "onnxruntime-win-x64-gpu_cuda13-1.28.0/lib",
+            sha256: "6a0748af6f6bd5c87c5f948932759d156d08e964c493e48371e3a820f9c3f070",
+            bytes: 234_399_144,
+            library_dir: "runtimes/win-x64/native",
         },
         companions: WIN_X64_PLUGIN_ONLY,
         advertised: &[
@@ -441,46 +440,14 @@ pub const PACKAGES: &[Package] = &[
         flavour: Flavour::Stock,
         default_flavour: true,
         ort_version: "1.28.0",
-        runtime: Artefact {
-            url: concat!(
-                "https://github.com/microsoft/onnxruntime/releases/download",
-                "/v1.28.0/onnxruntime-linux-x64-1.28.0.tgz"
-            ),
-            sha256: "a3e1b79d7bb1bf09696ce675f49e4064e6c81f6202b8225624fff0e93f8d6407",
-            bytes: 9_125_960,
-            library_dir: "onnxruntime-linux-x64-1.28.0/lib",
-        },
+        runtime: stock_runtime("runtimes/linux-x64/native"),
         companions: LINUX_X64_PLUGIN_ONLY,
         advertised: &["CPUExecutionProvider", "WebGpuExecutionProvider"],
         user_installed: &[],
     },
-    // Linux's two CUDA flavours, the same shape as Windows's and offered on
-    // the same terms: never a default, the toolkit installed by the user, and
-    // the WebGPU plugin beside them so the inpainter stays on the GPU. The
-    // digests are the release's own, from the GitHub asset record.
-    Package {
-        platform: Platform { os: Os::Linux, arch: Arch::X86_64 },
-        flavour: Flavour::Cuda12,
-        default_flavour: false,
-        ort_version: "1.28.0",
-        runtime: Artefact {
-            url: concat!(
-                "https://github.com/microsoft/onnxruntime/releases/download",
-                "/v1.28.0/onnxruntime-linux-x64-gpu_cuda12-1.28.0.tgz"
-            ),
-            sha256: "ea6bd2b65d7dfabbeb92c4af5dd8f12e5aed8601e544ad378d2f872275438b1a",
-            bytes: 423_724_908,
-            library_dir: "onnxruntime-linux-x64-gpu_cuda12-1.28.0/lib",
-        },
-        companions: LINUX_X64_PLUGIN_ONLY,
-        advertised: &[
-            "CPUExecutionProvider",
-            "CUDAExecutionProvider",
-            "TensorrtExecutionProvider",
-            "WebGpuExecutionProvider",
-        ],
-        user_installed: &["CUDA 12.8+", "cuDNN 9.x"],
-    },
+    // Linux's CUDA flavour, the same shape as Windows's and offered on the
+    // same terms: never a default, the toolkit installed by the user, and the
+    // WebGPU plugin beside it so the inpainter stays on the GPU.
     Package {
         platform: Platform { os: Os::Linux, arch: Arch::X86_64 },
         flavour: Flavour::Cuda13,
@@ -488,12 +455,12 @@ pub const PACKAGES: &[Package] = &[
         ort_version: "1.28.0",
         runtime: Artefact {
             url: concat!(
-                "https://github.com/microsoft/onnxruntime/releases/download",
-                "/v1.28.0/onnxruntime-linux-x64-gpu_cuda13-1.28.0.tgz"
+                "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.gpu.linux",
+                "/1.28.0/microsoft.ml.onnxruntime.gpu.linux.1.28.0.nupkg"
             ),
-            sha256: "84d28f27589090b280d4312743efd3d450cd4ac7d1e1d75e7d9076d9637bf9de",
-            bytes: 240_874_643,
-            library_dir: "onnxruntime-linux-x64-gpu_cuda13-1.28.0/lib",
+            sha256: "6d82b065357558e8bea4f3d938ed95b9a2a0cb94c82749adf8e14401441c5346",
+            bytes: 241_252_012,
+            library_dir: "runtimes/linux-x64/native",
         },
         companions: LINUX_X64_PLUGIN_ONLY,
         advertised: &[
@@ -509,15 +476,7 @@ pub const PACKAGES: &[Package] = &[
         flavour: Flavour::Stock,
         default_flavour: true,
         ort_version: "1.28.0",
-        runtime: Artefact {
-            url: concat!(
-                "https://github.com/microsoft/onnxruntime/releases/download",
-                "/v1.28.0/onnxruntime-linux-aarch64-1.28.0.tgz"
-            ),
-            sha256: "e15ff8b5d85afe6c144d97c6fd432254bf76a219daaf17658087d6ecb3e8f0bb",
-            bytes: 8_116_278,
-            library_dir: "onnxruntime-linux-aarch64-1.28.0/lib",
-        },
+        runtime: stock_runtime("runtimes/linux-arm64/native"),
         // No plugin: `Microsoft.ML.OnnxRuntime.EP.WebGpu` publishes no
         // linux-arm64 library, and no CUDA archive is published either. This
         // is the one row that is still the CPU alone.
@@ -625,12 +584,12 @@ mod tests {
 
         // The two figures the module docs argue with: Windows costs about 254
         // MB by default - 215 for DirectML and 39 for the WebGPU plugin - and
-        // CUDA 12 costs 455 MB before its own plugin.
+        // CUDA 13 costs 234 MB before its own plugin.
         let windows = Platform { os: Os::Windows, arch: Arch::X86_64 };
         let directml = for_platform(windows).expect("a default").bytes();
         assert_eq!(directml, 12_458_649 + 202_292_617 + 39_485_572);
-        let cuda12 = for_flavour(windows, Flavour::Cuda12).expect("a CUDA row").bytes();
-        assert!(cuda12 > directml, "the CUDA archive is the larger download");
+        let cuda13 = for_flavour(windows, Flavour::Cuda13).expect("a CUDA row").bytes();
+        assert!(cuda13 > directml, "the CUDA package, with its plugin, is the larger download");
     }
 
     /// A stored flavour id that this platform does not publish gets the default
@@ -644,9 +603,15 @@ mod tests {
 
         // A choice this platform does publish is honoured.
         assert_eq!(
-            for_platform_flavour(windows, "cuda12").map(|p| p.flavour),
-            Some(Flavour::Cuda12)
+            for_platform_flavour(windows, "cuda13").map(|p| p.flavour),
+            Some(Flavour::Cuda13)
         );
+        // And one that is no longer published lands on the default: `cuda12`
+        // went with the GitHub releases, and a setting saved before that still
+        // names it.
+        let linux = Platform { os: Os::Linux, arch: Arch::X86_64 };
+        assert_eq!(for_platform_flavour(windows, "cuda12").map(|p| p.flavour), Some(Flavour::DirectMl));
+        assert_eq!(for_platform_flavour(linux, "cuda12").map(|p| p.flavour), Some(Flavour::Stock));
 
         // Everything else lands on the default, one case per way of being wrong.
         for id in ["", "rocm", "cuda12", "directml"] {
@@ -710,16 +675,16 @@ mod tests {
     }
 
     /// **The Linux decision, as a test.** The stock build with the plugin is
-    /// the default and needs nothing installed; the two CUDA archives are
-    /// offered beside it on the same terms as on Windows; and every one of the
-    /// three keeps a GPU provider for the inpainter, so no flavour puts it back
+    /// the default and needs nothing installed; the CUDA package is offered
+    /// beside it on the same terms as on Windows; and both keep a GPU provider
+    /// for the inpainter, so no flavour puts it back
     /// on the CPU. Linux aarch64 has one build and it is the CPU.
     #[test]
     fn linux_x64_defaults_to_the_plugin_and_offers_cuda_beside_it() {
         let linux = Platform { os: Os::Linux, arch: Arch::X86_64 };
         assert_eq!(
             flavours(linux).iter().map(|p| p.flavour).collect::<Vec<_>>(),
-            [Flavour::Stock, Flavour::Cuda12, Flavour::Cuda13],
+            [Flavour::Stock, Flavour::Cuda13],
             "the default must be first"
         );
         let default = for_platform(linux).expect("a default");
@@ -729,7 +694,7 @@ mod tests {
         for package in flavours(linux) {
             assert!(package.advertised.contains(&"WebGpuExecutionProvider"), "{}", package.flavour.id());
         }
-        for flavour in [Flavour::Cuda12, Flavour::Cuda13] {
+        for flavour in [Flavour::Cuda13] {
             let package = for_flavour(linux, flavour).expect("a CUDA row");
             assert!(!package.default_flavour);
             assert!(package.advertised.contains(&"CUDAExecutionProvider"));
@@ -752,7 +717,7 @@ mod tests {
         let offered = flavours(windows);
         assert_eq!(
             offered.iter().map(|p| p.flavour).collect::<Vec<_>>(),
-            [Flavour::DirectMl, Flavour::Cuda12, Flavour::Cuda13],
+            [Flavour::DirectMl, Flavour::Cuda13],
             "the default must be first"
         );
 
@@ -761,7 +726,7 @@ mod tests {
         assert!(default.advertised.contains(&"DmlExecutionProvider"));
         assert!(default.user_installed.is_empty(), "the default must need nothing installed");
 
-        for flavour in [Flavour::Cuda12, Flavour::Cuda13] {
+        for flavour in [Flavour::Cuda13] {
             let package = for_flavour(windows, flavour).expect("a CUDA row");
             assert!(!package.default_flavour);
             assert!(package.advertised.contains(&"CUDAExecutionProvider"));
@@ -779,6 +744,24 @@ mod tests {
         let arm = Platform { os: Os::Windows, arch: Arch::Aarch64 };
         assert_eq!(flavours(arm).len(), 1);
         assert_eq!(for_platform(arm).unwrap().flavour, Flavour::DirectMl);
+    }
+
+    /// **Every artefact comes from NuGet.** The `microsoft/onnxruntime` GitHub
+    /// releases answered 404 from 2026-11-21 and broke every new install on
+    /// macOS and Linux; NuGet is where Microsoft still publishes these builds.
+    /// A row that points anywhere else is a host nothing has checked.
+    #[test]
+    fn every_artefact_comes_from_nuget() {
+        for package in PACKAGES {
+            for artefact in package.artefacts() {
+                assert!(
+                    artefact.url.starts_with("https://api.nuget.org/v3-flatcontainer/"),
+                    "{}",
+                    artefact.url
+                );
+                assert!(artefact.url.ends_with(".nupkg"), "{}", artefact.url);
+            }
+        }
     }
 
     /// A flavour id survives a round trip, because it is what the setting and

@@ -10,6 +10,9 @@
 #
 # **It is not one build.** Verified by scripts/verify-runtime-packages.sh:
 #
+# Every artefact is a NuGet package: the microsoft/onnxruntime GitHub releases
+# answered 404 from 2026-11-21. The stock package carries every platform.
+#
 #   macOS arm64   stock ORT 1.28.0                 cpu, coreml, webgpu
 #   Windows       Microsoft.ML.OnnxRuntime.DirectML 1.24.4 + Microsoft.AI.DirectML 1.15.4
 #                 + Microsoft.ML.OnnxRuntime.EP.WebGpu 0.3.0
@@ -27,12 +30,12 @@
 # and both have a DFT kernel - which is what lets the inpainter run on the GPU
 # at all. Set
 #
-#   ORT_FLAVOUR=cuda12   (or cuda13)
+#   ORT_FLAVOUR=cuda13   (the one CUDA build NuGet publishes)
 #
 # for the NVIDIA build instead. Read the trade first: on Windows those archives
 # carry no DirectML and the process loads exactly one library. CUDA has no DFT
 # kernel, so the detector reaches CUDA and the inpainter stays on the WebGPU
-# plugin unpacked beside it. They are also 241-455 MB against 9-12 MB and
+# plugin unpacked beside it. They are also 234-241 MB and
 # need CUDA and cuDNN 9 installed by hand, which the archives do not carry.
 # Point ORT_DYLIB_PATH at your own build if you want something else again.
 #
@@ -54,7 +57,7 @@ webgpu_plugin() {
 case "$(uname -s)-$(uname -m)" in
 	Darwin-arm64)
 		artefacts=(
-			"onnxruntime-osx-arm64-1.28.0.tgz|1268b359718099bde2cedb55787f182a130067bc4f31e8c88478c445b850d3d8|https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-osx-arm64-1.28.0.tgz|onnxruntime-osx-arm64-1.28.0/lib"
+			"microsoft.ml.onnxruntime.1.28.0.nupkg|769d1d3ea8ab6cd69f737c9dd4d4462aa4ad0ccfa106eaf506efc40d7bead5db|https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.28.0/microsoft.ml.onnxruntime.1.28.0.nupkg|runtimes/osx-arm64/native"
 		)
 		;;
 	Darwin-x86_64)
@@ -68,21 +71,16 @@ case "$(uname -s)-$(uname -m)" in
 		case "$flavour" in
 			stock)
 				artefacts=(
-					"onnxruntime-linux-x64-1.28.0.tgz|a3e1b79d7bb1bf09696ce675f49e4064e6c81f6202b8225624fff0e93f8d6407|https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-linux-x64-1.28.0.tgz|onnxruntime-linux-x64-1.28.0/lib"
-				)
-				;;
-			cuda12)
-				artefacts=(
-					"onnxruntime-linux-x64-gpu_cuda12-1.28.0.tgz|ea6bd2b65d7dfabbeb92c4af5dd8f12e5aed8601e544ad378d2f872275438b1a|https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-linux-x64-gpu_cuda12-1.28.0.tgz|onnxruntime-linux-x64-gpu_cuda12-1.28.0/lib"
+					"microsoft.ml.onnxruntime.1.28.0.nupkg|769d1d3ea8ab6cd69f737c9dd4d4462aa4ad0ccfa106eaf506efc40d7bead5db|https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.28.0/microsoft.ml.onnxruntime.1.28.0.nupkg|runtimes/linux-x64/native"
 				)
 				;;
 			cuda13)
 				artefacts=(
-					"onnxruntime-linux-x64-gpu_cuda13-1.28.0.tgz|84d28f27589090b280d4312743efd3d450cd4ac7d1e1d75e7d9076d9637bf9de|https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-linux-x64-gpu_cuda13-1.28.0.tgz|onnxruntime-linux-x64-gpu_cuda13-1.28.0/lib"
+					"microsoft.ml.onnxruntime.gpu.linux.1.28.0.nupkg|6d82b065357558e8bea4f3d938ed95b9a2a0cb94c82749adf8e14401441c5346|https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.gpu.linux/1.28.0/microsoft.ml.onnxruntime.gpu.linux.1.28.0.nupkg|runtimes/linux-x64/native"
 				)
 				;;
 			*)
-				echo "unknown ORT_FLAVOUR: $flavour (stock, cuda12, cuda13)" >&2
+				echo "unknown ORT_FLAVOUR: $flavour (stock, cuda13)" >&2
 				exit 2
 				;;
 		esac
@@ -92,7 +90,7 @@ case "$(uname -s)-$(uname -m)" in
 		;;
 	Linux-aarch64)
 		artefacts=(
-			"onnxruntime-linux-aarch64-1.28.0.tgz|e15ff8b5d85afe6c144d97c6fd432254bf76a219daaf17658087d6ecb3e8f0bb|https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-linux-aarch64-1.28.0.tgz|onnxruntime-linux-aarch64-1.28.0/lib"
+			"microsoft.ml.onnxruntime.1.28.0.nupkg|769d1d3ea8ab6cd69f737c9dd4d4462aa4ad0ccfa106eaf506efc40d7bead5db|https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.28.0/microsoft.ml.onnxruntime.1.28.0.nupkg|runtimes/linux-arm64/native"
 		)
 		;;
 	MINGW*|MSYS*|CYGWIN*|Windows*)
@@ -120,21 +118,16 @@ case "$(uname -s)-$(uname -m)" in
 					"microsoft.ai.directml.1.15.4.nupkg|4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9|https://api.nuget.org/v3-flatcontainer/microsoft.ai.directml/1.15.4/microsoft.ai.directml.1.15.4.nupkg|bin/${arch/win-/}-win"
 				)
 				;;
-			cuda12)
+			cuda13)
 				# One artefact and no companion: what this build is missing is
 				# on the machine - cudart and cuDNN - rather than in a second
 				# download.
 				artefacts=(
-					"onnxruntime-win-x64-gpu_cuda12-1.28.0.zip|6b7bf16d6d30180db7f386fb179aa4e4f1313f0924531a2879b7b090b56518c1|https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-win-x64-gpu_cuda12-1.28.0.zip|onnxruntime-win-x64-gpu_cuda12-1.28.0/lib"
-				)
-				;;
-			cuda13)
-				artefacts=(
-					"onnxruntime-win-x64-gpu_cuda13-1.28.0.zip|137f0822a4923b1d84d3e09496e0792ebbb221eb3a61a0657f71a12ab68ab1e2|https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-win-x64-gpu_cuda13-1.28.0.zip|onnxruntime-win-x64-gpu_cuda13-1.28.0/lib"
+					"microsoft.ml.onnxruntime.gpu.windows.1.28.0.nupkg|6a0748af6f6bd5c87c5f948932759d156d08e964c493e48371e3a820f9c3f070|https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.gpu.windows/1.28.0/microsoft.ml.onnxruntime.gpu.windows.1.28.0.nupkg|runtimes/win-x64/native"
 				)
 				;;
 			*)
-				echo "unknown ORT_FLAVOUR: $flavour (directml, cuda12, cuda13)" >&2
+				echo "unknown ORT_FLAVOUR: $flavour (directml, cuda13)" >&2
 				exit 2
 				;;
 		esac
