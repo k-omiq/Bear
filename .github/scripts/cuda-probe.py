@@ -121,20 +121,69 @@ def runtime_dir(major: int) -> Path:
     return WORK / ("rt-a" if major == 12 else "rt-b")
 
 
+# The CUDA builds the app downloads (`runtime::package`, `scripts/fetch-runtime.sh`):
+# the CUDA 12 wheel from Microsoft's CUDA 12 feed, the CUDA 13 NuGet package.
+# Each is (url, sha256, directory of the libraries inside the archive).
+CUDA12_FEED = (
+    "https://aiinfra.pkgs.visualstudio.com/2692857e-05ef-43b4-ba9c-ccf1c22c437c/_packaging/"
+    "9387c3aa-d9ad-4513-968c-383f6f7f53b8/pypi/download/onnxruntime-gpu/1.28/"
+)
+NUGET = "https://api.nuget.org/v3-flatcontainer/"
+if WINDOWS:
+    RUNTIMES = {
+        12: (CUDA12_FEED + "onnxruntime_gpu-1.28.0-cp312-cp312-win_amd64.whl",
+             "5a5bed7e28c7342ee965820cb5c5db184b3c09d2d11906d72497ea96242d324c", "onnxruntime/capi"),
+        13: (NUGET + "microsoft.ml.onnxruntime.gpu.windows/1.28.0/microsoft.ml.onnxruntime.gpu.windows.1.28.0.nupkg",
+             "6a0748af6f6bd5c87c5f948932759d156d08e964c493e48371e3a820f9c3f070", "runtimes/win-x64/native"),
+    }
+else:
+    RUNTIMES = {
+        12: (CUDA12_FEED + "onnxruntime_gpu-1.28.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+             "6e33c999981b746684fea80f3cc3d42dd651a76431a7bb4b03368a58e2db5b88", "onnxruntime/capi"),
+        13: (NUGET + "microsoft.ml.onnxruntime.gpu.linux/1.28.0/microsoft.ml.onnxruntime.gpu.linux.1.28.0.nupkg",
+             "6d82b065357558e8bea4f3d938ed95b9a2a0cb94c82749adf8e14401441c5346", "runtimes/linux-x64/native"),
+    }
+
+
+def installed_name(name: str) -> str | None:
+    """The name the app gives a file it unpacks (`weights::installed_name`), or
+    None for one it leaves behind (`weights::is_loadable`): the wheel's Python."""
+    lower = name.lower()
+    if lower.endswith((".pdb", ".lib", ".py", ".pyi")) or "pybind11_state" in lower:
+        return None
+    version = name.removeprefix("libonnxruntime.so.")
+    if version != name and version and all(c.isdigit() or c == "." for c in version):
+        return "libonnxruntime.so"
+    return name
+
+
 def setup_runtimes() -> None:
     """Both CUDA builds, flat in a directory with the app's install record."""
-    base = f"https://github.com/microsoft/onnxruntime/releases/download/v{ORT_VERSION}/"
+    import hashlib
+
     for major in BUILDS:
-        name = f"onnxruntime-{'win' if WINDOWS else 'linux'}-x64-gpu_cuda{major}-{ORT_VERSION}"
-        archive = fetch(base + name + (".zip" if WINDOWS else ".tgz"), WORK / "downloads" / (name + (".zip" if WINDOWS else ".tgz")))
-        top = extract(archive, WORK / f"ort-{major}")
+        url, sha256, library_dir = RUNTIMES[major]
+        archive = fetch(url, WORK / "downloads" / url.rsplit("/", 1)[1])
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if digest != sha256:
+            sys.exit(f"{archive.name}: sha256 {digest}, expected {sha256}")
         target = runtime_dir(major)
         if target.exists():
             shutil.rmtree(target)
-        shutil.copytree(top / "lib", target, symlinks=True)
+        target.mkdir(parents=True)
+        prefix = library_dir.rstrip("/") + "/"
+        with zipfile.ZipFile(archive) as zipped:
+            for entry in zipped.infolist():
+                if entry.is_dir() or not entry.filename.startswith(prefix) or "/" in entry.filename[len(prefix):]:
+                    continue
+                name = installed_name(entry.filename[len(prefix):])
+                if name is None:
+                    continue
+                with zipped.open(entry) as source, open(target / name, "wb") as out:
+                    shutil.copyfileobj(source, out)
         record = {"flavour": f"cuda{major}", "version": ORT_VERSION, "files": sorted(p.name for p in target.iterdir())}
         (target / ".installed.json").write_text(json.dumps(record))
-        print(f"runtime cuda{major}: {target}", flush=True)
+        print(f"runtime cuda{major}: {target}: {', '.join(record['files'])}", flush=True)
 
 
 def setup_model() -> None:
