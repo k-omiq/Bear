@@ -808,13 +808,15 @@ never written as though it were general.
 - **The six GCE VMs were not rerun on the fixed build.** The release workflow's launch checks
   passed with it (five Linux containers and the Windows runner), and the macOS path ran end to
   end here, but the clean VM install test ran only before the change.
-- **The Windows CUDA builds never ran.** The GPU test was Linux only. Whether the Windows wheel
-  and NuGet `onnxruntime.dll` load beside the user's toolkit as the Linux ones do is assumed.
+- **The Windows CUDA builds never ran on a card.** The GPU test was Linux only. The CUDA probe
+  (below) loads both Windows builds beside CUDA 12.9, 13.0 and their cuDNN on a runner with no
+  card, so the libraries resolve, but no Windows session has run on a GPU.
 - **The `LD_LIBRARY_PATH` fallback above is not fixed.** It needs a Linux launcher that cleans
   the variable and executes again.
-- **`.github/scripts/cuda-probe.py` is broken.** It still fetches both CUDA builds from the
-  GitHub releases, which answer 404. It needs the NuGet package for CUDA 13 and the CUDA 12
-  feed's wheel, the same sources as `runtime::package`.
+- **The CUDA probe needs no card, and that is all it covers.** `.github/scripts/cuda-probe.py`
+  now takes the CUDA 12 wheel and the CUDA 13 NuGet package, unpacked by the app's rules, and
+  passed on Windows and Linux on 2026-11-22 (run 44972039456). Its runners have no GPU, so cuDNN
+  never opens its sub libraries there, and the `LD_LIBRARY_PATH` failure above does not show.
 - **The bigger first download was not timed.** macOS and Linux now fetch 139 MB for the stock
   runtime where they fetched 9 to 32 MB.
 - **Windows window close was not checked.** The install test ran from an S4U task, which has no
