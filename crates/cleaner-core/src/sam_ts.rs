@@ -965,7 +965,7 @@ mod tests {
     #[test]
     fn a_missing_cuda_is_refused_before_the_permit_and_the_eviction() {
         let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../runtimes/onnxruntime-osx-arm64-1.28.0/lib")
+            .join("../../runtimes/lib")
             .join(crate::runtime::DYLIB_NAME);
         if !dev.exists() {
             eprintln!("skipped: no runtime - run scripts/fetch-runtime.sh");

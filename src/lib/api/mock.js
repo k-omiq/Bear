@@ -2402,6 +2402,7 @@ export function createMockBackend(options = {}) {
   /** The Windows builds, with the real archive sizes from `runtime/package.rs`. */
   const MOCK_WINDOWS_FLAVOURS = [
     { id: 'directml', ortVersion: '1.28.0', bytes: 215_000_000, isDefault: true, userInstalled: [] },
+    { id: 'cuda12', ortVersion: '1.28.0', bytes: 338_000_000, isDefault: false, userInstalled: ['CUDA 12.8+', 'cuDNN 9.x'] },
     { id: 'cuda13', ortVersion: '1.28.0', bytes: 234_000_000, isDefault: false, userInstalled: ['CUDA 13.x', 'cuDNN 9.x'] },
   ]
 
@@ -2446,7 +2447,7 @@ export function createMockBackend(options = {}) {
       verdictKey,
       verdictHave: tooOld ? `${newest.major}.${newest.minor}` : null,
       verdictNeed: tooOld ? `${wanted}.${MINOR_FLOOR[wanted]}` : null,
-      recommended: [['cuda13', 13]].find(([, major]) => verdict(major) === 'accel.cudaCheck.ready')?.[0] ?? null,
+      recommended: [['cuda13', 13], ['cuda12', 12]].find(([, major]) => verdict(major) === 'accel.cudaCheck.ready')?.[0] ?? null,
       restartNeeded: false,
     }
   }

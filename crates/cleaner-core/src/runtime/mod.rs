@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn an_installed_runtime_loads_and_reports_itself() {
         let dev_copy = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../runtimes/onnxruntime-osx-arm64-1.28.0/lib")
+            .join("../../runtimes/lib")
             .join(DYLIB_NAME);
         if !dev_copy.exists() {
             eprintln!("skipped: no runtime at {} - run scripts/fetch-runtime.sh", dev_copy.display());

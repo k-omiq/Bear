@@ -3391,9 +3391,36 @@ fn is_zip(archive: &Path) -> bool {
 /// A crash dump off a released build is symbolised from the symbol server the
 /// package came from rather than from a file beside the library, so nothing is
 /// lost that was being used.
+///
+/// **A wheel's Python half is skipped too.** The CUDA 12 build comes as
+/// Microsoft's `onnxruntime-gpu` wheel, whose `onnxruntime/capi` directory holds
+/// the C library beside Python modules and the 19 to 26 MB
+/// `onnxruntime_pybind11_state` extension. This application loads none of them.
 fn is_loadable(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    !(name.ends_with(".pdb") || name.ends_with(".lib"))
+    !(name.ends_with(".pdb")
+        || name.ends_with(".lib")
+        || name.ends_with(".py")
+        || name.ends_with(".pyi")
+        || name.contains("pybind11_state"))
+}
+
+/// The name a runtime file is written under.
+///
+/// One rename, for the CUDA 12 wheel's Linux library: it ships as
+/// `libonnxruntime.so.1.28.0` and nothing else, while
+/// [`cleaner_core::runtime::search_paths`] looks for
+/// [`cleaner_core::runtime::DYLIB_NAME`], `libonnxruntime.so`. The library's
+/// soname is `libonnxruntime.so.1` either way and it is opened by path, so the
+/// file name is the only thing that differs. Zip archives only: a `.tgz` carries
+/// the versioned file and its links together, and renaming there would collide.
+fn installed_name(name: &str) -> &str {
+    match name.strip_prefix("libonnxruntime.so.") {
+        Some(version) if !version.is_empty() && version.chars().all(|c| c.is_ascii_digit() || c == '.') => {
+            "libonnxruntime.so"
+        }
+        _ => name,
+    }
 }
 
 /// Whether an archive entry is a file directly inside `library_dir`, and what
@@ -3452,7 +3479,7 @@ fn unpack_zip(archive: &Path, library_dir: &str, dest: &Path) -> Result<(), Stri
         if !is_loadable(name) {
             continue;
         }
-        let out = dest.join(name);
+        let out = dest.join(installed_name(name));
         let mut sink =
             std::fs::File::create(&out).map_err(|e| format!("{}: {e}", out.display()))?;
         std::io::copy(&mut entry, &mut sink).map_err(|e| format!("{}: {e}", out.display()))?;
@@ -5727,6 +5754,54 @@ mod tests {
         for absent in ["onnxruntime.pdb", "onnxruntime.lib", "x.dll", "nested", "onnxruntime.props"] {
             assert!(!dest.join(absent).exists(), "{absent}");
         }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The CUDA 12 wheel unpacks to what the loader looks for.** Its
+    /// `onnxruntime/capi` holds the C library under a versioned name beside
+    /// Python modules and the pybind extension: the library lands as
+    /// `libonnxruntime.so`, the providers keep their names, and the Python half
+    /// is neither written nor counted.
+    #[test]
+    fn a_gpu_wheel_unpacks_its_libraries_and_leaves_its_python_behind() {
+        assert_eq!(installed_name("libonnxruntime.so.1.28.0"), "libonnxruntime.so");
+        assert_eq!(installed_name("libonnxruntime.so"), "libonnxruntime.so");
+        assert_eq!(installed_name("libonnxruntime.so.x"), "libonnxruntime.so.x");
+        assert_eq!(installed_name("libonnxruntime_providers_cuda.so"), "libonnxruntime_providers_cuda.so");
+        assert_eq!(installed_name("onnxruntime.dll"), "onnxruntime.dll");
+        for skipped in ["__init__.py", "onnxruntime_pybind11_state.pyd", "onnxruntime_pybind11_state.cpython-312-x86_64-linux-gnu.so"] {
+            assert!(!is_loadable(skipped), "{skipped}");
+        }
+
+        let dir = std::env::temp_dir().join(format!("mc-wheel-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let dest = dir.join("dest");
+        std::fs::create_dir_all(&dest).unwrap();
+        let archive = dir.join("onnxruntime_gpu-1.28.0-cp312-cp312-manylinux_2_28_x86_64.whl");
+        let capi = "onnxruntime/capi";
+        let entries: Vec<(String, &[u8])> = vec![
+            (format!("{capi}/libonnxruntime.so.1.28.0"), b"the runtime".as_slice()),
+            (format!("{capi}/libonnxruntime_providers_cuda.so"), b"cuda".as_slice()),
+            (format!("{capi}/libonnxruntime_providers_shared.so"), b"bridge".as_slice()),
+            (format!("{capi}/onnxruntime_pybind11_state.cpython-312-x86_64-linux-gnu.so"), b"python".as_slice()),
+            (format!("{capi}/__init__.py"), b"python".as_slice()),
+        ];
+        let file = std::fs::File::create(&archive).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, body) in &entries {
+            zip.start_file(name.as_str(), stored).unwrap();
+            std::io::Write::write_all(&mut zip, body).unwrap();
+        }
+        zip.finish().unwrap();
+
+        assert_eq!(unpacked_bytes(&archive, capi), Some((b"the runtime".len() + b"cuda".len() + b"bridge".len()) as u64));
+        unpack(&archive, capi, &dest).unwrap();
+        let mut names: Vec<_> = std::fs::read_dir(&dest).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        names.sort();
+        assert_eq!(names, ["libonnxruntime.so", "libonnxruntime_providers_cuda.so", "libonnxruntime_providers_shared.so"]);
+        assert_eq!(std::fs::read(dest.join("libonnxruntime.so")).unwrap(), b"the runtime");
 
         std::fs::remove_dir_all(&dir).ok();
     }

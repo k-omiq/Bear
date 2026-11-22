@@ -1010,7 +1010,7 @@ mod tests {
             }
             let runtime = crate::runtime::find(None).ok().or_else(|| {
                 let dev = root
-                    .join("runtimes/onnxruntime-osx-arm64-1.28.0/lib")
+                    .join("runtimes/lib")
                     .join(crate::runtime::DYLIB_NAME);
                 dev.exists().then_some(dev)
             })?;

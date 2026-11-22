@@ -952,8 +952,12 @@ pub(crate) struct LocalFlux {
     /// A stand-in for the helper in tests: the pixels it answers a crop with
     /// at a seed, or the refusal. The rest of [`LocalFlux::render`] is as it is.
     #[cfg(test)]
-    pub(crate) test_render: Option<fn(&Raster, &Fitted, u64) -> Result<Raster, &'static str>>,
+    pub(crate) test_render: Option<FakeRender>,
 }
+
+/// The helper stand-in [`LocalFlux::test_render`] holds.
+#[cfg(test)]
+pub(crate) type FakeRender = fn(&Raster, &Fitted, u64) -> Result<Raster, &'static str>;
 
 impl LocalFlux {
     pub(crate) fn from_settings(settings: Option<&serde_json::Value>, app_data: Option<PathBuf>) -> LocalFlux {

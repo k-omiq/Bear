@@ -47,12 +47,15 @@ nuget="https://api.nuget.org/v3-flatcontainer"
 
 # name|url. Every package is on NuGet: the microsoft/onnxruntime GitHub
 # releases answered 404 from 2026-11-21. The stock package carries every
-# platform in one nupkg; the GPU ones are the CUDA 13 build, and NuGet has no
-# CUDA 12 build. The DirectML one is the whole of the Windows GPU path.
+# platform in one nupkg; the GPU ones are the CUDA 13 build. CUDA 12 is only on
+# Microsoft's CUDA 12 Python feed, as onnxruntime-gpu wheels (pinned to 1.28).
+# The DirectML one is the whole of the Windows GPU path.
 packages=(
 	"microsoft.ml.onnxruntime.${version}.nupkg|${nuget}/microsoft.ml.onnxruntime/${version}/microsoft.ml.onnxruntime.${version}.nupkg"
 	"microsoft.ml.onnxruntime.gpu.windows.${version}.nupkg|${nuget}/microsoft.ml.onnxruntime.gpu.windows/${version}/microsoft.ml.onnxruntime.gpu.windows.${version}.nupkg"
 	"microsoft.ml.onnxruntime.gpu.linux.${version}.nupkg|${nuget}/microsoft.ml.onnxruntime.gpu.linux/${version}/microsoft.ml.onnxruntime.gpu.linux.${version}.nupkg"
+	"onnxruntime_gpu-1.28.0-cp312-cp312-win_amd64.whl|https://aiinfra.pkgs.visualstudio.com/2692857e-05ef-43b4-ba9c-ccf1c22c437c/_packaging/9387c3aa-d9ad-4513-968c-383f6f7f53b8/pypi/download/onnxruntime-gpu/1.28/onnxruntime_gpu-1.28.0-cp312-cp312-win_amd64.whl"
+	"onnxruntime_gpu-1.28.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl|https://aiinfra.pkgs.visualstudio.com/2692857e-05ef-43b4-ba9c-ccf1c22c437c/_packaging/9387c3aa-d9ad-4513-968c-383f6f7f53b8/pypi/download/onnxruntime-gpu/1.28/onnxruntime_gpu-1.28.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
 	"microsoft.ml.onnxruntime.directml.1.24.4.nupkg|${nuget}/microsoft.ml.onnxruntime.directml/1.24.4/microsoft.ml.onnxruntime.directml.1.24.4.nupkg"
 	"microsoft.ai.directml.1.15.4.nupkg|${nuget}/microsoft.ai.directml/1.15.4/microsoft.ai.directml.1.15.4.nupkg"
 	# The WebGPU plugin provider: one package, four platforms, registered at
@@ -85,7 +88,7 @@ for entry in "${packages[@]}"; do
 	mkdir -p "$work"
 	case "$archive" in
 		*.tgz) tar xzf "$path" -C "$work" ;;
-		*.zip | *.nupkg) unzip -qo "$path" -d "$work" ;;
+		*.zip | *.nupkg | *.whl) unzip -qo "$path" -d "$work" ;;
 	esac
 
 	# A header ships only where the provider was built. `provider_options.h` and

@@ -12,6 +12,7 @@
 #
 # Every artefact is a NuGet package: the microsoft/onnxruntime GitHub releases
 # answered 404 from 2026-11-21. The stock package carries every platform.
+# CUDA 12 is the one exception: a wheel from Microsoft's CUDA 12 Python feed.
 #
 #   macOS arm64   stock ORT 1.28.0                 cpu, coreml, webgpu
 #   Windows       Microsoft.ML.OnnxRuntime.DirectML 1.24.4 + Microsoft.AI.DirectML 1.15.4
@@ -30,12 +31,12 @@
 # and both have a DFT kernel - which is what lets the inpainter run on the GPU
 # at all. Set
 #
-#   ORT_FLAVOUR=cuda13   (the one CUDA build NuGet publishes)
+#   ORT_FLAVOUR=cuda12   (or cuda13)
 #
 # for the NVIDIA build instead. Read the trade first: on Windows those archives
 # carry no DirectML and the process loads exactly one library. CUDA has no DFT
 # kernel, so the detector reaches CUDA and the inpainter stays on the WebGPU
-# plugin unpacked beside it. They are also 234-241 MB and
+# plugin unpacked beside it. They are also 234-432 MB and
 # need CUDA and cuDNN 9 installed by hand, which the archives do not carry.
 # Point ORT_DYLIB_PATH at your own build if you want something else again.
 #
@@ -74,13 +75,20 @@ case "$(uname -s)-$(uname -m)" in
 					"microsoft.ml.onnxruntime.1.28.0.nupkg|769d1d3ea8ab6cd69f737c9dd4d4462aa4ad0ccfa106eaf506efc40d7bead5db|https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.28.0/microsoft.ml.onnxruntime.1.28.0.nupkg|runtimes/linux-x64/native"
 				)
 				;;
+			cuda12)
+				# Microsoft's CUDA 12 Python feed: the wheel's onnxruntime/capi
+				# holds the C library, renamed below to libonnxruntime.so.
+				artefacts=(
+					"onnxruntime_gpu-1.28.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl|6e33c999981b746684fea80f3cc3d42dd651a76431a7bb4b03368a58e2db5b88|https://aiinfra.pkgs.visualstudio.com/2692857e-05ef-43b4-ba9c-ccf1c22c437c/_packaging/9387c3aa-d9ad-4513-968c-383f6f7f53b8/pypi/download/onnxruntime-gpu/1.28/onnxruntime_gpu-1.28.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl|onnxruntime/capi"
+				)
+				;;
 			cuda13)
 				artefacts=(
 					"microsoft.ml.onnxruntime.gpu.linux.1.28.0.nupkg|6d82b065357558e8bea4f3d938ed95b9a2a0cb94c82749adf8e14401441c5346|https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.gpu.linux/1.28.0/microsoft.ml.onnxruntime.gpu.linux.1.28.0.nupkg|runtimes/linux-x64/native"
 				)
 				;;
 			*)
-				echo "unknown ORT_FLAVOUR: $flavour (stock, cuda13)" >&2
+				echo "unknown ORT_FLAVOUR: $flavour (stock, cuda12, cuda13)" >&2
 				exit 2
 				;;
 		esac
@@ -118,6 +126,11 @@ case "$(uname -s)-$(uname -m)" in
 					"microsoft.ai.directml.1.15.4.nupkg|4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9|https://api.nuget.org/v3-flatcontainer/microsoft.ai.directml/1.15.4/microsoft.ai.directml.1.15.4.nupkg|bin/${arch/win-/}-win"
 				)
 				;;
+			cuda12)
+				artefacts=(
+					"onnxruntime_gpu-1.28.0-cp312-cp312-win_amd64.whl|5a5bed7e28c7342ee965820cb5c5db184b3c09d2d11906d72497ea96242d324c|https://aiinfra.pkgs.visualstudio.com/2692857e-05ef-43b4-ba9c-ccf1c22c437c/_packaging/9387c3aa-d9ad-4513-968c-383f6f7f53b8/pypi/download/onnxruntime-gpu/1.28/onnxruntime_gpu-1.28.0-cp312-cp312-win_amd64.whl|onnxruntime/capi"
+				)
+				;;
 			cuda13)
 				# One artefact and no companion: what this build is missing is
 				# on the machine - cudart and cuDNN - rather than in a second
@@ -127,7 +140,7 @@ case "$(uname -s)-$(uname -m)" in
 				)
 				;;
 			*)
-				echo "unknown ORT_FLAVOUR: $flavour (directml, cuda13)" >&2
+				echo "unknown ORT_FLAVOUR: $flavour (directml, cuda12, cuda13)" >&2
 				exit 2
 				;;
 		esac
@@ -172,6 +185,7 @@ for entry in "${artefacts[@]}"; do
 	unpacked="${name%.tgz}"
 	unpacked="${unpacked%.zip}"
 	unpacked="${unpacked%.nupkg}"
+	unpacked="${unpacked%.whl}"
 	case "$name" in
 		*.tgz)
 			rm -rf "$unpacked"
@@ -183,7 +197,7 @@ for entry in "${artefacts[@]}"; do
 			unzip -qo "$name"
 			libs="$library_dir"
 			;;
-		*.nupkg)
+		*.nupkg | *.whl)
 			rm -rf "$unpacked"
 			mkdir -p "$unpacked"
 			unzip -qo "$name" -d "$unpacked"
@@ -191,7 +205,14 @@ for entry in "${artefacts[@]}"; do
 			;;
 	esac
 	xattr -d com.apple.quarantine "$libs"/* 2>/dev/null || true
-	cp -a "$libs"/. "$flat"/
+	# Only the libraries: a wheel's capi also holds Python files.
+	find "$libs" -maxdepth 1 -type f ! -name '*.py' ! -name '*.pyi' ! -name '*pybind11_state*' -exec cp -a {} "$flat"/ \;
+	# The CUDA 12 wheel names its Linux library by version only.
+	for versioned in "$flat"/libonnxruntime.so.[0-9]*; do
+		if [[ -e "$versioned" && ! -e "$flat/libonnxruntime.so" ]]; then
+			mv "$versioned" "$flat/libonnxruntime.so"
+		fi
+	done
 	echo "  $name ok -> $dest/$libs"
 done
 

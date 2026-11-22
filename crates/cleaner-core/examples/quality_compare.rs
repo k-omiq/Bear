@@ -17,7 +17,7 @@ const EVIDENCE: &str = "/Users/caved/dev/manga-release-validation-2026-09-27/evi
 const STAGES: &str = "/private/tmp/claude-501/-Users-caved-dev-manga-cleaner/91c8cbd2-8f58-4d81-a78e-9448a6df5765/scratchpad/mask/stages";
 const OUTPUT: &str = "/Users/caved/dev/manga-release-validation-2026-09-27/quality/lama";
 const MODEL: &str = "/Users/caved/Library/Application Support/com.mangacleaner.studio/models/lama-manga.onnx";
-const RUNTIME: &str = "/Users/caved/dev/manga-cleaner/runtimes/onnxruntime-osx-arm64-1.28.0/lib/libonnxruntime.dylib";
+const RUNTIME: &str = "/Users/caved/dev/manga-cleaner/runtimes/lib/libonnxruntime.dylib";
 const REGIONS: [&str; 6] = [
     "c32-p004-d107", "c32-p004-d81", "c32-p006-d190",
     "c32-p002-d27", "c32-p006-d212", "c32-p004-d67",

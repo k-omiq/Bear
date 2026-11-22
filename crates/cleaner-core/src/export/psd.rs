@@ -1358,9 +1358,10 @@ pub(crate) mod tests {
             );
 
             let merged = composite(page, &[a.clone(), b.clone()]).unwrap();
-            for channel in 0..page.mode.samples() {
+            assert!(psd.merged.len() >= page.mode.samples(), "{}: merged planes", fixture.name);
+            for (channel, plane) in psd.merged.iter().enumerate().take(page.mode.samples()) {
                 assert_eq!(
-                    psd.merged[channel],
+                    *plane,
                     plane_expected(&merged, channel),
                     "{}: merged {channel}",
                     fixture.name

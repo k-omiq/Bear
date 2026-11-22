@@ -667,11 +667,31 @@ never written as though it were general.
   Only Windows passed, because its default rows were already NuGet. Every row now points at
   NuGet: `Microsoft.ML.OnnxRuntime` 1.28.0 (one 139 MB nupkg for every platform, against 9 to
   32 MB for one archive), and `Microsoft.ML.OnnxRuntime.Gpu.Windows` and `.Gpu.Linux` 1.28.0,
-  which are the CUDA 13 build (`libcudart.so.13`, `cublas64_13.dll`). NuGet has no CUDA 12 build,
-  so that flavour left the table. On this Mac the NuGet `osx-arm64` library, unpacked by the
+  which are the CUDA 13 build (`libcudart.so.13`, `cublas64_13.dll`). NuGet and PyPI have no
+  CUDA 12 build; Microsoft's own `onnxruntime-cuda-12` Python feed does, as `onnxruntime-gpu`
+  1.28.0 wheels (338 MB Windows, 432 MB Linux) whose `onnxruntime/capi` holds the C library. The
+  download skips the wheel's Python files and writes the Linux `libonnxruntime.so.1.28.0` as
+  `libonnxruntime.so`.
+  On a GCE L4 (driver 595, Ubuntu 24.04, CUDA 12.9 and 13.0 with cuDNN 9.14 side by side, each
+  build fetched by `scripts/fetch-runtime.sh` with the app's unpack rules), both builds took a
+  forced CUDA session through `accel::open_session`, and `cuda::report` picked the toolkit of the
+  build's own major: LaMa 512² ran in 66 ms on CUDA 12 and 67 ms on CUDA 13 against 4.2 s on the
+  CPU, the detector 1024² in 23 and 24 ms. A validate-only release run then passed every launch
+  check (five Linux legs and Windows) with the new download. On this Mac the NuGet `osx-arm64` library, unpacked by the
   app's own `unpack`, offers CPU, CoreML and WebGPU, and the 27 LaMa engine tests ran on it in
   84 s. It ships with no `libonnxruntime.1.dylib` beside it and loads anyway. A runtime already
   installed keeps loading, because the install record holds only the flavour and version.
+- **A CUDA build fails its self test when the other CUDA's folder is on `LD_LIBRARY_PATH`.**
+  Same L4, both toolkits installed, the other major's library folder exported: both builds
+  failed the convolution proof with `CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED` and fell back to the
+  CPU, with `accel.declined.selfTest` as the reason. `cuda::prepare` loads the chosen cuDNN by its
+  soname paths (`libcudnn_ops.so.9`), but cuDNN then opens its parts by their full version names
+  (`libcudnn_ops.so.9.14.0`). glibc matches a loaded library by soname or by the name it was
+  opened under, so neither matches, and the search goes to `LD_LIBRARY_PATH` first: the trace
+  shows four parts loaded from the other toolkit's folder beside the right `libcudnn.so.9`. Not
+  part of the 2026-11-21 download change; the GitHub builds used the same cuDNN. Nothing in the
+  process can reorder a search that `LD_LIBRARY_PATH` leads, so a fix is a launcher that drops
+  the other major's folders and executes again.
 - **Throughput has a target because nothing else measured it:** at least 20 pages per minute on
   the two cheap rungs. Detection at 350 to 383 ms a page on CoreML leaves that budget intact.
 
@@ -785,16 +805,16 @@ never written as though it were general.
 
 **Runtime moved to NuGet and the GCE install test (2026-11-21): what is still open.**
 
-- **No fixed build was installed on Linux or Windows.** Only the macOS path ran end to end. The
-  Linux x64 library was checked by its dependencies alone (glibc, libstdc++; soname
-  `libonnxruntime.so.1` under the file name `libonnxruntime.so`), and the WebGPU plugin by its
-  own (no link to `libonnxruntime`). Rerun the six VMs on a build of this change before a release.
-- **The CUDA 13 NuGet packages never ran.** No NVIDIA machine was used. Whether their
-  `onnxruntime.dll` carries DirectML, and whether `cuda::report` reads them right, is assumed
-  from the GitHub archives they replace.
+- **The six GCE VMs were not rerun on the fixed build.** The release workflow's launch checks
+  passed with it (five Linux containers and the Windows runner), and the macOS path ran end to
+  end here, but the clean VM install test ran only before the change.
+- **The Windows CUDA builds never ran.** The GPU test was Linux only. Whether the Windows wheel
+  and NuGet `onnxruntime.dll` load beside the user's toolkit as the Linux ones do is assumed.
+- **The `LD_LIBRARY_PATH` fallback above is not fixed.** It needs a Linux launcher that cleans
+  the variable and executes again.
 - **`.github/scripts/cuda-probe.py` is broken.** It still fetches both CUDA builds from the
-  GitHub releases, which answer 404, and CUDA 12 has no NuGet build. It needs a CUDA 13 only
-  rewrite against the NuGet package.
+  GitHub releases, which answer 404. It needs the NuGet package for CUDA 13 and the CUDA 12
+  feed's wheel, the same sources as `runtime::package`.
 - **The bigger first download was not timed.** macOS and Linux now fetch 139 MB for the stock
   runtime where they fetched 9 to 32 MB.
 - **Windows window close was not checked.** The install test ran from an S4U task, which has no
