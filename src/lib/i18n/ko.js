@@ -1230,6 +1230,13 @@ export const ko = {
       move: '옮기기',
       later: '나중에',
     },
+    dataFolderPrompt: {
+      title: 'Manga Cleaner와 Pear가 함께 쓰는 데이터 폴더',
+      body: '옮기기를 누르면 라이브러리가 {path} 폴더로 옮겨집니다. Manga Cleaner와 Pear가 이 폴더를 함께 씁니다. 여기서 저장한 정리된 챕터는 Pear에 나타납니다.',
+      move: '옮기기',
+      choose: '폴더 선택',
+      notNow: '지금은 안 함',
+    },
     section: {
       projects: '프로젝트',
       chapters: '챕터',

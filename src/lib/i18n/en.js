@@ -1483,6 +1483,14 @@ export const en = {
       move: 'Move',
       later: 'Later',
     },
+    // The first-run card in Legacy mode (home/DataFolderPrompt.svelte).
+    dataFolderPrompt: {
+      title: 'One data folder for Manga Cleaner and Pear',
+      body: 'Move puts your library in {path}. Manga Cleaner and Pear share that folder. Cleaned chapters you save here then show up in Pear.',
+      move: 'Move',
+      choose: 'Choose folder',
+      notNow: 'Not now',
+    },
     section: {
       projects: 'Projects',
       chapters: 'Chapters',

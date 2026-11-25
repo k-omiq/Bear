@@ -1241,6 +1241,13 @@ export const pt = {
       move: 'Mover',
       later: 'Depois',
     },
+    dataFolderPrompt: {
+      title: 'Uma pasta de dados para o Manga Cleaner e o Pear',
+      body: 'Mover coloca a sua biblioteca em {path}. O Manga Cleaner e o Pear compartilham essa pasta. Os capítulos limpos que você salvar aqui aparecem depois no Pear.',
+      move: 'Mover',
+      choose: 'Escolher pasta',
+      notNow: 'Agora não',
+    },
     section: {
       projects: 'Projetos',
       chapters: 'Capítulos',

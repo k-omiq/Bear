@@ -1233,6 +1233,13 @@ export const ja = {
       move: '移動',
       later: 'あとで',
     },
+    dataFolderPrompt: {
+      title: 'Manga Cleaner と Pear で共有するデータフォルダー',
+      body: '「移動」でライブラリを {path} に移します。Manga Cleaner と Pear はこのフォルダーを共有します。ここで保存したクリーニング済みのチャプターは Pear に表示されます。',
+      move: '移動',
+      choose: 'フォルダーを選択',
+      notNow: '今はしない',
+    },
     section: {
       projects: 'プロジェクト',
       chapters: 'チャプター',
