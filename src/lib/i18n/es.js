@@ -1473,6 +1473,12 @@ export const es = {
     },
   },
   editor: {
+    save: {
+      saving: 'Guardando…',
+      noChapter: 'Abre un capítulo para guardarlo.',
+      needsDataFolder: 'Guardar necesita la carpeta de datos compartida. Configúrala en Ajustes.',
+      running: 'Espera a que termine la ejecución y guarda.',
+    },
     region: {
       identity: 'Proyecto y capítulo',
       windows: 'Paneles',
@@ -1513,6 +1519,7 @@ export const es = {
       },
     },
     action: {
+      save: 'Guardar',
       home: 'Biblioteca',
       settings: 'Ajustes',
       export: 'Exportar',
@@ -2916,6 +2923,7 @@ export const es = {
       tools: 'Opciones de herramienta',
     },
     app: {
+      save: 'Guardar en el maquetador',
       export: 'Exportar',
       newProject: 'Nuevo proyecto',
       openProject: 'Abrir proyecto',

@@ -88,6 +88,7 @@ import { pageNavControls } from './model/paging.js'
  * @property {(direction: 'next'|'prev') => void} stepReview
  * @property {(panel: 'pages'|'masks'|'tools') => void} togglePanel
  * @property {(kind: string) => void} openModal
+ * @property {() => void} saveChapter - Save: the open chapter to the typesetter, through the shared data folder
  * @property {() => void} goHome
  * @property {() => void} cancel
  */
@@ -944,6 +945,20 @@ export const SHORTCUTS = [
     chord: ['E'],
     scope: 'editor',
     run: (c) => c.openModal('export'),
+  },
+  {
+    // Save, the chord every desktop app has for it: the chapter exported and
+    // handed to the typesetter. A chord, so the bare `S` stays the shape key.
+    id: 'app.save',
+    group: 'app',
+    labelKey: 'shortcuts.app.save',
+    keys: ['s'],
+    accel: true,
+    shift: false,
+    chord: ['Cmd', 'S'],
+    chordFor: ({ apple }) => (apple ? ['⌘', 'S'] : ['Ctrl', 'S']),
+    scope: 'editor',
+    run: (c) => c.saveChapter(),
   },
   {
     // Home only: `N` in the editor is "next region needing review".

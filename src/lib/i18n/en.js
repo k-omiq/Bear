@@ -1741,6 +1741,12 @@ export const en = {
   /* editor - the chrome around the canvas                               */
   /* ================================================================== */
   editor: {
+    save: {
+      saving: 'Saving…',
+      noChapter: 'Open a chapter to save it.',
+      needsDataFolder: 'Save needs the shared data folder. Set it up in Settings.',
+      running: 'Wait for the run to finish, then save.',
+    },
     region: {
       identity: 'Project and chapter',
       windows: 'Panels',
@@ -1787,6 +1793,7 @@ export const en = {
       },
     },
     action: {
+      save: 'Save',
       home: 'Library',
       settings: 'Settings',
       export: 'Export',
@@ -3667,6 +3674,7 @@ export const en = {
       tools: 'Tool options',
     },
     app: {
+      save: 'Save to the typesetter',
       export: 'Export',
       newProject: 'New project',
       openProject: 'Open project',

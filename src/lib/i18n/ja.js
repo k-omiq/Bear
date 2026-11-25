@@ -1452,6 +1452,12 @@ export const ja = {
     },
   },
   editor: {
+    save: {
+      saving: '保存中…',
+      noChapter: '保存するにはチャプターを開いてください。',
+      needsDataFolder: '保存には共有データフォルダーが必要です。設定で設定してください。',
+      running: '実行が終わってから保存してください。',
+    },
     region: {
       identity: 'プロジェクトとチャプター',
       windows: 'パネル',
@@ -1489,6 +1495,7 @@ export const ja = {
       },
     },
     action: {
+      save: '保存',
       home: 'ライブラリ',
       settings: '設定',
       export: '書き出し',
@@ -2873,6 +2880,7 @@ export const ja = {
       tools: 'ツールオプション',
     },
     app: {
+      save: '写植アプリへ保存',
       export: '書き出し',
       newProject: '新規プロジェクト',
       openProject: 'プロジェクトを開く',

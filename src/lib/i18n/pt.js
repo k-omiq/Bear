@@ -1473,6 +1473,12 @@ export const pt = {
     },
   },
   editor: {
+    save: {
+      saving: 'Salvando…',
+      noChapter: 'Abra um capítulo para salvá-lo.',
+      needsDataFolder: 'Salvar precisa da pasta de dados compartilhada. Configure-a nas Configurações.',
+      running: 'Aguarde a execução terminar e salve.',
+    },
     region: {
       identity: 'Projeto e capítulo',
       windows: 'Painéis',
@@ -1513,6 +1519,7 @@ export const pt = {
       },
     },
     action: {
+      save: 'Salvar',
       home: 'Biblioteca',
       settings: 'Configurações',
       export: 'Exportar',
@@ -2916,6 +2923,7 @@ export const pt = {
       tools: 'Opções da ferramenta',
     },
     app: {
+      save: 'Salvar no diagramador',
       export: 'Exportar',
       newProject: 'Novo projeto',
       openProject: 'Abrir projeto',

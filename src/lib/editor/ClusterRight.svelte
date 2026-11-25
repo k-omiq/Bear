@@ -27,6 +27,9 @@
    * First in the row, while there are any, is Jobs: the runs and denoises
    * going on in the background, this chapter's and others'
    * (`shell/JobsIndicator.svelte`).
+   *
+   * Save sits beside Export: it exports every page too, into the shared data
+   * folder for the typesetter (`./save.svelte.js`).
    */
   import { pushModal } from '../state/app.svelte.js'
   import { editor } from '../state/editor.svelte.js'
@@ -38,6 +41,7 @@
   import { t } from '../i18n/index.js'
   import Pill from './Pill.svelte'
   import ViewControls from './ViewControls.svelte'
+  import { saveBlockedKey, saveChapter, saving } from './save.svelte.js'
 
   const allText = $derived(session.textPolicy === 'all_text')
 
@@ -46,6 +50,9 @@
     if (!chapter || editor.loading) return
     pushModal({ kind: 'workflowReview', props: { chapterId: chapter.id, pageIndex: editor.pageIndex, cloud: !allText } })
   }
+
+  // Save hands the chapter to the typesetter; off, its tooltip says why.
+  const saveBlocked = $derived(saveBlockedKey())
 </script>
 
 <div class="cluster" role="group" aria-label={t('editor.region.view')}>
@@ -73,6 +80,15 @@
       label={t('editor.action.settings')}
       {...shortcutProps('app.settings')}
       onclick={() => pushModal({ kind: 'settings' })}
+    />
+    <IconButton
+      icon="download"
+      label={t(saving.active ? 'editor.save.saving' : 'editor.action.save')}
+      {...shortcutProps('app.save')}
+      {...(saveBlocked ? { title: t(saveBlocked) } : {})}
+      disabled={!!saveBlocked || saving.active}
+      aria-busy={saving.active}
+      onclick={() => void saveChapter()}
     />
     <IconButton
       icon="export"

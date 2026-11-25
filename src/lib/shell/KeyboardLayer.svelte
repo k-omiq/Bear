@@ -36,6 +36,7 @@
   import { screenColorPicker } from '../api/screencolor.js'
   import { capabilities } from '../state/capabilities.svelte.js'
   import { hasKey } from '../i18n/index.js'
+  import { saveChapter } from '../editor/save.svelte.js'
 
   /** @type {import('../shortcuts.js').ShortcutCommands} */
   const commands = {
@@ -82,6 +83,7 @@
     stepReview: (direction) => editorState.stepReview(direction),
     togglePanel: (panel) => togglePanel(panel),
     openModal: (kind) => pushModal({ kind }),
+    saveChapter: () => void saveChapter(),
     goHome: () => goLibrary(),
     cancel,
   }

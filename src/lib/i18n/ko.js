@@ -1449,6 +1449,12 @@ export const ko = {
     },
   },
   editor: {
+    save: {
+      saving: '저장 중…',
+      noChapter: '저장하려면 챕터를 여세요.',
+      needsDataFolder: '저장하려면 공유 데이터 폴더가 필요합니다. 설정에서 설정하세요.',
+      running: '실행이 끝난 뒤 저장하세요.',
+    },
     region: {
       identity: '프로젝트와 챕터',
       windows: '패널',
@@ -1486,6 +1492,7 @@ export const ko = {
       },
     },
     action: {
+      save: '저장',
       home: '라이브러리',
       settings: '설정',
       export: '내보내기',
@@ -2870,6 +2877,7 @@ export const ko = {
       tools: '도구 옵션',
     },
     app: {
+      save: '식자 앱으로 저장',
       export: '내보내기',
       newProject: '새 프로젝트',
       openProject: '프로젝트 열기',

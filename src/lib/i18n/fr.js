@@ -1473,6 +1473,12 @@ export const fr = {
     },
   },
   editor: {
+    save: {
+      saving: 'Enregistrement…',
+      noChapter: 'Ouvrez un chapitre pour l\'enregistrer.',
+      needsDataFolder: 'Enregistrer nécessite le dossier de données partagé. Configurez-le dans les Réglages.',
+      running: 'Attendez la fin du traitement, puis enregistrez.',
+    },
     region: {
       identity: 'Projet et chapitre',
       windows: 'Panneaux',
@@ -1513,6 +1519,7 @@ export const fr = {
       },
     },
     action: {
+      save: 'Enregistrer',
       home: 'Bibliothèque',
       settings: 'Réglages',
       export: 'Exporter',
@@ -2916,6 +2923,7 @@ export const fr = {
       tools: 'Options de l’outil',
     },
     app: {
+      save: 'Enregistrer vers le logiciel de lettrage',
       export: 'Exporter',
       newProject: 'Nouveau projet',
       openProject: 'Ouvrir un projet',
