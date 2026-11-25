@@ -943,7 +943,15 @@ fn absolutize_origins(library: &Path) -> Result<(), String> {
                 continue;
             }
             let _lock = crate::run::lock_job(&path).map_err(|e| e.to_string())?;
-            let mut job = cleaner_core::project::Job::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            // A manifest that does not open cannot be cleaned or exported
+            // anyway; it must not hold every other chapter's move hostage.
+            let mut job = match cleaner_core::project::Job::open(&path) {
+                Ok(job) => job,
+                Err(error) => {
+                    eprintln!("manga-cleaner: {}: left as it is before the move: {error}", path.display());
+                    continue;
+                }
+            };
             if absolutize_sources(&mut job.project, &path.parent().unwrap_or(library).to_path_buf()) {
                 job.flush().map_err(|e| format!("{}: {e}", path.display()))?;
             }
@@ -1020,7 +1028,9 @@ pub async fn data_folder_setup(app: tauri::AppHandle, target: String, confirmed_
         if own.exists() && has_content(&own) {
             return Err(format!("{} already has a cleaner library.", own.display()));
         }
-        ready_to_move(&[target.as_path()], confirmed_closed.unwrap_or(false))?;
+        // Only this app's own library moves, into a subfolder nothing else
+        // writes, so the typesetter may stay open.
+        ready_to_move(&[], confirmed_closed.unwrap_or(false))?;
         let folder_id = ensure_marker(&target)?;
         let pointer = Pointer { path: target.clone(), folder_id };
         if has_content(&resolved.legacy) {
