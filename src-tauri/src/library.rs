@@ -1622,13 +1622,20 @@ impl Library {
         Library { root: root.into() }
     }
 
+    /// The library this app uses now: `<app data>/library` in legacy mode,
+    /// `<data folder>/Cleaner` once the shared data folder is set up
+    /// (`docs/shared-data-folder.md`). Refused while the data folder is
+    /// unavailable, so no call can create an empty library in its place.
     pub fn for_app(app: &tauri::AppHandle) -> Result<Library, LibraryError> {
-        use tauri::Manager;
-        let dir = app.path().app_data_dir().map_err(|e| LibraryError::Index {
+        let dir = crate::data_folder::library_root(app).map_err(|detail| LibraryError::Index {
             path: PathBuf::from(LIBRARY_DIR),
-            detail: e.to_string(),
+            detail,
         })?;
-        Ok(Library::at(dir.join(LIBRARY_DIR)))
+        Ok(Library::at(dir))
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     pub fn index_path(&self) -> PathBuf {

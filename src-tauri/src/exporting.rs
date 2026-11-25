@@ -959,6 +959,287 @@ fn extension(format: Format) -> &'static str {
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* Save to the typesetter                                             */
+/* ------------------------------------------------------------------ */
+//
+// `docs/shared-data-folder.md` sections 8 and 9: Save exports every page and
+// leaves one message folder in `<data folder>/handoff/to-typesetter/`, which
+// Pear files with its own code. The cleaner never writes into Pear's library.
+
+/// What the message says about where the chapter comes from.
+#[derive(Debug, Clone)]
+pub(crate) struct HandoffMeta {
+    pub library_id: String,
+    pub project_id: String,
+    pub chapter_id: String,
+    pub project_name: String,
+    pub longstrip: bool,
+    pub rtl: bool,
+    pub title: String,
+    pub number: Option<u32>,
+    pub label: Option<String>,
+    pub app_version: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveResult {
+    /// "saved" or "refused".
+    pub status: &'static str,
+    pub pages: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The `_cleaned` folder, when the pages were also saved next to the raws.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_to_raws: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_key: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+impl SaveResult {
+    fn refused(reason_key: Option<&'static str>, detail: Option<String>) -> SaveResult {
+        SaveResult { status: "refused", pages: 0, key: None, next_to_raws: None, reason_key, detail }
+    }
+}
+
+pub(crate) fn handoff_key(meta: &HandoffMeta) -> String {
+    format!("cleaner-{}-{}-{}", meta.library_id, meta.project_id, meta.chapter_id)
+}
+
+fn random_suffix() -> String {
+    let mut b = [0u8; 6];
+    let _ = getrandom::fill(&mut b);
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// A hard link where the file system has one, else a copy: the raw is the
+/// cleaner's own page file inside the data folder, which nothing rewrites in
+/// place (the immutability rule), so sharing it is safe.
+fn link_or_copy(from: &Path, to: &Path) -> Result<(), String> {
+    if std::fs::hard_link(from, to).is_ok() {
+        return Ok(());
+    }
+    std::fs::copy(from, to).map(|_| ()).map_err(|e| format!("{}: {e}", from.display()))
+}
+
+/// Write the message for `job` into `<root>/handoff/to-typesetter/`.
+/// `next_to_raws` also saves the cleaned pages into the chapter's
+/// `<raws>_cleaned/` folder, and the message then holds copies of those
+/// (`std::fs::copy` clones on APFS and reflinks where Linux can), never hard
+/// links: the user opens those files in other tools.
+pub(crate) fn write_handoff(job: &Job, meta: &HandoffMeta, root: &Path, next_to_raws: bool) -> Result<SaveResult, String> {
+    let key = handoff_key(meta);
+    let base = root.join(crate::data_folder::HANDOFF_DIR).join(crate::data_folder::TO_TYPESETTER);
+    std::fs::create_dir_all(&base).map_err(|e| format!("{}: {e}", base.display()))?;
+    let staging = base.join(format!(".staging-{key}-{}", random_suffix()));
+    let outcome = stage_handoff(job, meta, &staging, next_to_raws);
+    let outcome = match outcome {
+        Ok(Ok((pages, next))) => publish_handoff(&base, &key, &staging).map(|()| SaveResult {
+            status: "saved",
+            pages,
+            key: Some(key.clone()),
+            next_to_raws: next,
+            reason_key: None,
+            detail: None,
+        }),
+        Ok(Err(refused)) => Ok(refused),
+        Err(error) => Err(error),
+    };
+    let _ = std::fs::remove_dir_all(&staging);
+    outcome
+}
+
+/// Everything into `staging`. `Ok(Err(_))` is an export refusal, said as is.
+fn stage_handoff(job: &Job, meta: &HandoffMeta, staging: &Path, next_to_raws: bool) -> Result<Result<(usize, Option<String>), SaveResult>, String> {
+    let (raws, cleaned) = (staging.join("raws"), staging.join("cleaned"));
+    for dir in [&raws, &cleaned] {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    let export_into = staging.join("export");
+    let destination = if next_to_raws { "new-folder".to_owned() } else { export_into.display().to_string() };
+    let choices = Choices {
+        format: "PNG",
+        destination: &destination,
+        masks: "flattened",
+        layout: "per-page",
+        pages: None,
+        tone: Tone::Source,
+        psd: Default::default(),
+    };
+    let exported = export_reviewed_job(job, &choices, None)?;
+    if exported.status != "exported" {
+        return Ok(Err(SaveResult::refused(exported.reason_key, exported.detail.or(exported.path))));
+    }
+    let out_dir = PathBuf::from(exported.path.clone().ok_or("the export named no folder")?);
+    let order = &job.project.strip.order;
+    let width = order.len().to_string().len().max(3);
+    let number = |position: usize| format!("{:0width$}", position + 1);
+
+    let mut cleaned_of = std::collections::HashMap::new();
+    for output in &exported.outputs {
+        if output.format != "PNG" {
+            return Err(format!("page {} could not be saved as PNG", output.page + 1));
+        }
+        let from = out_dir.join(&output.filename);
+        let name = format!("{}.png", number(output.page));
+        let to = cleaned.join(&name);
+        if next_to_raws {
+            std::fs::copy(&from, &to).map_err(|e| format!("{}: {e}", from.display()))?;
+        } else {
+            std::fs::rename(&from, &to).map_err(|e| format!("{}: {e}", from.display()))?;
+        }
+        cleaned_of.insert(output.page, format!("cleaned/{name}"));
+    }
+    let _ = std::fs::remove_dir_all(&export_into);
+
+    let mut pages = Vec::with_capacity(order.len());
+    for (position, &index) in order.iter().enumerate() {
+        let source = job.project.sources.get(index).ok_or_else(|| format!("page {}: missing source", position + 1))?;
+        let path = job.source_path(index).ok_or_else(|| format!("page {}: missing source", position + 1))?;
+        let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let orientation = cleaner_core::image::orientation::from_bytes(&bytes);
+        let kind = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            Some(("png", "png"))
+        } else if bytes.starts_with(&[0xff, 0xd8]) {
+            Some(("jpg", "jpeg"))
+        } else {
+            None
+        };
+        let (raw, raw_format, w, h) = match kind {
+            // Linked as it is: same pixels, same way up as the cleaned page.
+            Some((ext, format)) if orientation.0 <= 1 => {
+                let name = format!("raws/{}.{ext}", number(position));
+                link_or_copy(&path, &staging.join(&name))?;
+                (name, format, source.w, source.h)
+            }
+            // TIFF, or an EXIF rotation: written upright as PNG through the same
+            // export the cleaned page took, so both are the same way up.
+            _ => {
+                let name = format!("raws/{}.png", number(position));
+                write_file(&staging.join(&name), |file| {
+                    export_page_to(&bytes, &[], Target::Explicit(Format::Png), Tone::Source, file).map_err(|e| e.to_string())
+                })?;
+                let (w, h) = orientation.size(source.w, source.h);
+                (name, "png", w, h)
+            }
+        };
+        let cleaned_name = cleaned_of.get(&position).cloned();
+        if let Some(name) = &cleaned_name {
+            let header = png_header(&std::fs::read(staging.join(name)).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            if (header.width, header.height) != (w, h) {
+                return Err(format!(
+                    "page {}: the cleaned page is {}x{} but the raw is {w}x{h}",
+                    position + 1,
+                    header.width,
+                    header.height
+                ));
+            }
+        }
+        pages.push(serde_json::json!({
+            "sourceIdx": index,
+            "position": position + 1,
+            "raw": raw,
+            "rawFormat": raw_format,
+            "cleaned": cleaned_name,
+            "w": w,
+            "h": h,
+        }));
+    }
+    let count = pages.len();
+    let message = serde_json::json!({
+        "schema": 1,
+        "from": "manga-cleaner",
+        "appVersion": meta.app_version,
+        "sentAt": crate::data_folder::rfc3339_now(),
+        "cleaner": { "libraryId": meta.library_id, "projectId": meta.project_id, "chapterId": meta.chapter_id },
+        "project": {
+            "name": meta.project_name,
+            "layout": if meta.longstrip { "longstrip" } else { "pages" },
+            "readingDirection": if meta.rtl { "rtl" } else { "ltr" },
+        },
+        "chapter": { "title": meta.title, "number": meta.number, "label": meta.label },
+        "pages": pages,
+    });
+    let body = serde_json::to_vec_pretty(&message).map_err(|e| e.to_string())?;
+    crate::data_folder::write_atomic(&staging.join("handoff.json"), &body).map_err(|e| e.to_string())?;
+    Ok(Ok((count, next_to_raws.then(|| out_dir.display().to_string()))))
+}
+
+/// Rename the staged message in. A message Pear has not filed yet is renamed
+/// aside first and deleted after, so Pear only ever sees a whole message.
+fn publish_handoff(base: &Path, key: &str, staging: &Path) -> Result<(), String> {
+    let target = base.join(key);
+    let stale = base.join(format!(".stale-{key}-{}", random_suffix()));
+    let had_stale = match std::fs::rename(&target, &stale) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(format!("{}: {error}", target.display())),
+    };
+    if let Err(error) = std::fs::rename(staging, &target) {
+        if had_stale {
+            let _ = std::fs::rename(&stale, &target);
+        }
+        return Err(format!("{}: {error}", target.display()));
+    }
+    if had_stale {
+        let _ = std::fs::remove_dir_all(&stale);
+    }
+    Ok(())
+}
+
+/// Save: export and send the chapter to the typesetter.
+#[tauri::command]
+pub async fn save_to_typesetter(app: tauri::AppHandle, chapter_id: String) -> Result<SaveResult, String> {
+    let result = library::blocking(move || {
+        let Some(root) = crate::data_folder::shared_root(&app) else {
+            return Ok(SaveResult::refused(Some("notice.save.needsDataFolder"), None));
+        };
+        let lib = library::Library::for_app(&app).map_err(|e| e.to_string())?;
+        let index = lib.index().map_err(|e| e.to_string())?;
+        let (project, chapter) = index
+            .projects
+            .iter()
+            .find_map(|p| p.chapters.iter().find(|c| c.id == chapter_id).map(|c| (p, c)))
+            .ok_or_else(|| format!("no chapter {chapter_id}"))?;
+        let library_id = crate::data_folder::library_id(lib.root()).ok_or("the library cannot be written")?;
+        let job_path = lib.job_path(&project.id, &chapter.id);
+        let _lock = crate::run::lock_chapter(&job_path)?;
+        let job = Job::open(&job_path).map_err(|e| e.to_string())?;
+        let settings = crate::settings::read(&app).unwrap_or(serde_json::Value::Null);
+        let next_to_raws = settings.get("saveCleanedTo").and_then(|v| v.as_str()) == Some("next-to-raws");
+        let meta = HandoffMeta {
+            library_id,
+            project_id: project.id.clone(),
+            chapter_id: chapter.id.clone(),
+            project_name: project.name.clone(),
+            longstrip: project.mode == StripMode::Longstrip,
+            rtl: project.reading_direction == library::ReadingDirection::Rtl,
+            title: chapter.name.clone(),
+            number: Some(chapter.number),
+            label: chapter.label.clone(),
+            app_version: app.package_info().version.to_string(),
+        };
+        write_handoff(&job, &meta, &root, next_to_raws)
+    })
+    .await?;
+    match result.status {
+        "saved" => crate::events::notice(
+            if result.next_to_raws.is_some() { "notice.save.sentAndSaved" } else { "notice.save.sent" },
+            serde_json::json!({ "count": result.pages, "path": result.next_to_raws }),
+            "info",
+        ),
+        _ => crate::events::notice(
+            result.reason_key.unwrap_or("notice.save.failed"),
+            serde_json::json!({ "detail": result.detail, "path": result.detail }),
+            "warn",
+        ),
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2674,5 +2955,192 @@ mod tests {
     fn source_raster(job: &Job, index: usize) -> cleaner_core::image::Raster {
         cleaner_core::image::decode(&std::fs::read(job.source_path(index).unwrap()).unwrap())
             .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod handoff_tests {
+    use super::*;
+    use cleaner_core::image::fixtures;
+    use cleaner_core::project::Project;
+
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new(name: &str) -> Scratch {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static NEXT: AtomicU32 = AtomicU32::new(0);
+            let dir = std::env::temp_dir()
+                .join("cleaner-tauri-handoff")
+                .join(format!("{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Scratch(dir)
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// The golden fixture's chapter: a PNG page, a JPEG page, and a JPEG with
+    /// an EXIF rotation, imported into the library the way ingest does.
+    fn golden_job(s: &Scratch) -> Job {
+        use image::ImageEncoder;
+        let page = fixtures::by_name("rgb8").raster;
+        let png = cleaner_core::image::encode(&page, Format::Png).unwrap();
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95)
+            .write_image(&page.data, page.width, page.height, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let rotated = include_bytes!("../../crates/cleaner-core/tests/fixtures/color-reference/orientation-6.jpg").to_vec();
+        let pages = s.0.join("Cleaner/p1/c2.mtclean.d/pages");
+        std::fs::create_dir_all(&pages).unwrap();
+        let sources: Vec<_> = [("001.png", &png), ("002.jpg", &jpeg), ("003.jpg", &rotated)]
+            .iter()
+            .map(|(name, bytes)| {
+                let path = pages.join(name);
+                std::fs::write(&path, bytes).unwrap();
+                cleaner_core::ingest::source_ref(&path, bytes).unwrap()
+            })
+            .collect();
+        let manifest = s.0.join("Cleaner/p1/c2.mtclean");
+        Job::create(&manifest, Project::new(manifest.parent().unwrap(), "test", StripMode::Single, &sources)).unwrap()
+    }
+
+    fn meta() -> HandoffMeta {
+        HandoffMeta {
+            library_id: "11111111-2222-4333-8444-555555555555".into(),
+            project_id: "p1".into(),
+            chapter_id: "c2".into(),
+            project_name: "Golden Series".into(),
+            longstrip: false,
+            rtl: true,
+            title: "Chapter 3".into(),
+            number: Some(3),
+            label: None,
+            app_version: "test".into(),
+        }
+    }
+
+    fn message_dir(root: &Path) -> PathBuf {
+        root.join("handoff/to-typesetter").join(handoff_key(&meta()))
+    }
+
+    fn read(path: &Path) -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    #[cfg(unix)]
+    fn inode(path: &Path) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path).unwrap().ino()
+    }
+
+    #[test]
+    fn a_save_leaves_one_whole_message_with_linked_raws() {
+        let s = Scratch::new("message");
+        let job = golden_job(&s);
+        let result = write_handoff(&job, &meta(), &s.0, false).unwrap();
+        assert_eq!((result.status, result.pages), ("saved", 3));
+        let dir = message_dir(&s.0);
+        let message = read(&dir.join("handoff.json"));
+        assert_eq!(message["schema"], 1);
+        assert_eq!(message["cleaner"]["libraryId"], meta().library_id);
+        assert_eq!(message["project"]["layout"], "pages");
+        assert_eq!(message["chapter"]["number"], 3);
+        let pages = message["pages"].as_array().unwrap();
+        assert_eq!(pages.iter().map(|p| p["raw"].as_str().unwrap()).collect::<Vec<_>>(), ["raws/001.png", "raws/002.jpg", "raws/003.png"]);
+        assert_eq!(pages.iter().map(|p| p["rawFormat"].as_str().unwrap()).collect::<Vec<_>>(), ["png", "jpeg", "png"]);
+        assert_eq!(pages.iter().map(|p| p["sourceIdx"].as_u64().unwrap()).collect::<Vec<_>>(), [0, 1, 2]);
+        for page in pages {
+            let cleaned = dir.join(page["cleaned"].as_str().unwrap());
+            let header = png_header(&std::fs::read(&cleaned).unwrap()).unwrap();
+            assert_eq!((u64::from(header.width), u64::from(header.height)), (page["w"].as_u64().unwrap(), page["h"].as_u64().unwrap()));
+        }
+        // The rotated page is written upright, so its size is turned.
+        let rotated = &job.project.sources[2];
+        assert_eq!((pages[2]["w"].as_u64().unwrap(), pages[2]["h"].as_u64().unwrap()), (u64::from(rotated.h), u64::from(rotated.w)));
+        #[cfg(unix)]
+        {
+            assert_eq!(inode(&dir.join("raws/001.png")), inode(&job.source_path(0).unwrap()), "linked, not copied");
+            assert_eq!(inode(&dir.join("raws/002.jpg")), inode(&job.source_path(1).unwrap()));
+            assert_ne!(inode(&dir.join("raws/003.png")), inode(&job.source_path(2).unwrap()));
+        }
+        let names: Vec<_> = std::fs::read_dir(s.0.join("handoff/to-typesetter")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names.len(), 1, "no staging or stale folder is left: {names:?}");
+    }
+
+    #[test]
+    fn a_second_save_replaces_a_message_not_filed_yet() {
+        let s = Scratch::new("again");
+        let job = golden_job(&s);
+        write_handoff(&job, &meta(), &s.0, false).unwrap();
+        let first = read(&message_dir(&s.0).join("handoff.json"))["sentAt"].clone();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        write_handoff(&job, &meta(), &s.0, false).unwrap();
+        let second = read(&message_dir(&s.0).join("handoff.json"))["sentAt"].clone();
+        assert_ne!(first, second);
+        let names: Vec<_> = std::fs::read_dir(s.0.join("handoff/to-typesetter")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+    }
+
+    #[test]
+    fn next_to_raws_saves_a_cleaned_folder_and_copies_rather_than_links() {
+        let s = Scratch::new("next-to-raws");
+        // A chapter whose origin is a scan folder outside the library.
+        let raws = s.0.join("scans/ch3");
+        std::fs::create_dir_all(&raws).unwrap();
+        let png = cleaner_core::image::encode(&fixtures::by_name("rgb8").raster, Format::Png).unwrap();
+        std::fs::write(raws.join("001.png"), &png).unwrap();
+        let mut source = cleaner_core::ingest::source_ref(&raws.join("001.png"), &png).unwrap();
+        let pages = s.0.join("Cleaner/p1/c2.mtclean.d/pages");
+        std::fs::create_dir_all(&pages).unwrap();
+        std::fs::write(pages.join("001.png"), &png).unwrap();
+        source.converted_from = Some(raws.join("001.png"));
+        source.path = pages.join("001.png");
+        let manifest = s.0.join("Cleaner/p1/c2.mtclean");
+        let job = Job::create(&manifest, Project::new(manifest.parent().unwrap(), "test", StripMode::Single, &[source])).unwrap();
+        let result = write_handoff(&job, &meta(), &s.0, true).unwrap();
+        assert_eq!(result.status, "saved", "{result:?}");
+        let cleaned_dir = s.0.join("scans/ch3_cleaned");
+        let said = PathBuf::from(result.next_to_raws.clone().unwrap());
+        assert_eq!(said.canonicalize().unwrap(), cleaned_dir.canonicalize().unwrap());
+        assert!(cleaned_dir.join("001.png").exists());
+        assert!(!raws.join("001_cleaned.png").exists(), "the raws folder itself is never written");
+        #[cfg(unix)]
+        assert_ne!(inode(&cleaned_dir.join("001.png")), inode(&message_dir(&s.0).join("cleaned/001.png")));
+    }
+
+    /// The fixture Pear's filer tests read. Regenerate with
+    /// `MC_WRITE_GOLDEN=1 cargo test golden_handoff`, then copy it to Pear.
+    #[test]
+    fn golden_handoff_matches_the_checked_in_fixture() {
+        let s = Scratch::new("golden");
+        let job = golden_job(&s);
+        write_handoff(&job, &meta(), &s.0, false).unwrap();
+        let dir = message_dir(&s.0);
+        let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/handoff/golden").join(handoff_key(&meta()));
+        let mut message = read(&dir.join("handoff.json"));
+        message["sentAt"] = "2026-11-25T10:00:00.000Z".into();
+        let body = serde_json::to_vec_pretty(&message).unwrap();
+        if std::env::var_os("MC_WRITE_GOLDEN").is_some() {
+            let _ = std::fs::remove_dir_all(&golden);
+            for sub in ["raws", "cleaned"] {
+                std::fs::create_dir_all(golden.join(sub)).unwrap();
+                for entry in std::fs::read_dir(dir.join(sub)).unwrap() {
+                    let entry = entry.unwrap();
+                    std::fs::copy(entry.path(), golden.join(sub).join(entry.file_name())).unwrap();
+                }
+            }
+            std::fs::write(golden.join("handoff.json"), &body).unwrap();
+        }
+        assert_eq!(read(&golden.join("handoff.json")), message, "the message format changed: update both apps and the fixture");
+        for page in message["pages"].as_array().unwrap() {
+            for key in ["raw", "cleaned"] {
+                let name = page[key].as_str().unwrap();
+                assert_eq!(std::fs::read(golden.join(name)).unwrap(), std::fs::read(dir.join(name)).unwrap(), "{name}");
+            }
+        }
     }
 }
