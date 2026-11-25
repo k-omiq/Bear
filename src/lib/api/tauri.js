@@ -22,6 +22,7 @@
  */
 
 import { createEventStream } from './tauri-events.js'
+import { reportBackendError } from './backenderrors.js'
 
 /**
  * The Tauri commands this adapter uses, by seam method name.
@@ -197,6 +198,12 @@ const IMPLEMENTED = Object.freeze({
   listJobs: 'list_jobs',
   confirmQuit: 'confirm_quit',
   hideToTray: 'hide_to_tray',
+  dataFolderStatus: 'data_folder_status',
+  dataFolderSetup: 'data_folder_setup',
+  dataFolderMove: 'data_folder_move',
+  dataFolderUseExisting: 'data_folder_use_existing',
+  dataFolderDeleteOldCopy: 'data_folder_delete_old_copy',
+  saveToTypesetter: 'save_to_typesetter',
 })
 
 /** Every method the seam contract fixes, so the adapter can be checked against it. */
@@ -362,6 +369,12 @@ export const SEAM_METHODS = Object.freeze([
   'confirmQuit',
   'hideToTray',
   'onQuitRequested',
+  'dataFolderStatus',
+  'dataFolderSetup',
+  'dataFolderMove',
+  'dataFolderUseExisting',
+  'dataFolderDeleteOldCopy',
+  'saveToTypesetter',
 ])
 
 /**
@@ -441,7 +454,19 @@ export function createTauriBackend({ fallback, invoke, listen }) {
   // `async` so that being constructed outside Tauri surfaces as a rejected
   // promise like any other backend failure, rather than as a synchronous throw
   // from a method the seam declares async.
-  const call = invoke ?? (async (command, args) => globalInvoke()(command, args))
+  const send = invoke ?? (async (command, args) => globalInvoke()(command, args))
+  // Every rejection is also reported (`backenderrors.js`): a refusal about the
+  // whole library, an unplugged data folder or one being moved, can meet any
+  // command.
+  /** @param {[string, Object?]} args */
+  const call = async (...args) => {
+    try {
+      return await send(...args)
+    } catch (error) {
+      reportBackendError(error)
+      throw error
+    }
+  }
   const on = listen ?? globalListen
   let nextAnalysisRequest = 0
   const requestIdFor = (requestId) => requestId ?? `analysis-${Date.now()}-${++nextAnalysisRequest}`
@@ -931,6 +956,20 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     listJobs: () => call(IMPLEMENTED.listJobs),
     confirmQuit: () => call(IMPLEMENTED.confirmQuit),
     hideToTray: () => call(IMPLEMENTED.hideToTray),
+
+    // The shared data folder (`src-tauri/src/data_folder.rs`) and Save, which
+    // hands a chapter to the typesetter through it. Arguments are named so
+    // nothing else the interface carries reaches a command that moves the
+    // library.
+    dataFolderStatus: () => call(IMPLEMENTED.dataFolderStatus),
+    dataFolderSetup: ({ target, confirmedClosed = false }) =>
+      call(IMPLEMENTED.dataFolderSetup, { target, confirmedClosed }),
+    dataFolderMove: ({ target, confirmedClosed = false }) =>
+      call(IMPLEMENTED.dataFolderMove, { target, confirmedClosed }),
+    dataFolderUseExisting: ({ target, confirmedClosed = false }) =>
+      call(IMPLEMENTED.dataFolderUseExisting, { target, confirmedClosed }),
+    dataFolderDeleteOldCopy: ({ path }) => call(IMPLEMENTED.dataFolderDeleteOldCopy, { path }),
+    saveToTypesetter: ({ chapterId }) => call(IMPLEMENTED.saveToTypesetter, { chapterId }),
   }
 
   const backend = {}

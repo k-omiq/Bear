@@ -18,6 +18,9 @@
   import LibraryView from './LibraryView.svelte'
   import ChaptersView from './ChaptersView.svelte'
   import { onJobSettled } from '../state/jobs.svelte.js'
+  import DataFolderCard from './DataFolderCard.svelte'
+  import { dataFolder } from '../state/datafolder.svelte.js'
+  import { untrack } from 'svelte'
 
   // Mount-time load. Home remounts whenever the editor is left, so the numbers
   // are refetched after a cleaning run without watching anything.
@@ -26,6 +29,16 @@
   })
 
   $effect(subscribeHomeNotices)
+
+  // The library changed place (a setup, a move or another folder, from here
+  // or from Settings, or a move the other app ran): list it again.
+  let seenGeneration = dataFolder.generation
+  $effect(() => {
+    const generation = dataFolder.generation
+    if (generation === seenGeneration) return
+    seenGeneration = generation
+    untrack(() => loadLibrary())
+  })
 
   // A job that ends while Home is up changed what its chapter row says: the
   // pages a run cleaned, the files a denoise wrote.
@@ -38,6 +51,7 @@
 <div class="home">
   <div class="inner">
     <HomeHeader />
+    <DataFolderCard />
 
     <div class="content">
       {#if inChapters}

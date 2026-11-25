@@ -193,6 +193,8 @@
   import PostProcessingSettings from './PostProcessingSettings.svelte'
   import BetaSettings from './BetaSettings.svelte'
   import DevLogSection from './DevLogSection.svelte'
+  import DataFolderSettings from './DataFolderSettings.svelte'
+  import { dataFolder } from '../state/datafolder.svelte.js'
   import { PAGE_DENOISE_FEATURE } from '../model/denoise.js'
   import { offerFirstLaunch } from './firstlaunch.svelte.js'
 
@@ -2050,6 +2052,17 @@
   // too. The folder setting is an optional override, not a setup requirement.
   const fluxReady = $derived(capabilities.sidecar)
 
+  /* ---------- closing ---------- */
+
+  /** A data folder move is copying the library: the screen stays until it ends. */
+  const moving = $derived(dataFolder.busy !== null)
+
+  /** @param {string|null} result */
+  function leave(result) {
+    if (moving) return
+    closeModal(result)
+  }
+
   /* ---------- the tab list ---------- */
 
   /**
@@ -2063,6 +2076,7 @@
     postprocessing: { labelKey: 'settings.section.postprocessing', icon: 'sparkle' },
     denoise: { labelKey: 'settings.section.denoise', icon: 'wand' },
     export: { labelKey: 'settings.section.export', icon: 'export' },
+    dataFolder: { labelKey: 'settings.section.dataFolder', icon: 'folder' },
     performance: { labelKey: 'settings.section.performance', icon: 'cpu' },
     shortcuts: { labelKey: 'settings.section.shortcuts', icon: 'keyboard' },
     beta: { labelKey: 'settings.section.beta', icon: 'flask' },
@@ -2760,7 +2774,7 @@
   </section>
 {/snippet}
 
-<Screen label={t(spec.titleKey)} onclose={() => closeModal(null)}>
+<Screen label={t(spec.titleKey)} onclose={() => leave(null)}>
   <div class="settings">
     <nav class="side" aria-labelledby="{uid}-title">
       <div class="side-head">
@@ -2769,7 +2783,8 @@
           class="back"
           aria-label={t('shell.action.done')}
           title={t('shell.action.done')}
-          onclick={() => closeModal('done')}
+          disabled={moving}
+          onclick={() => leave('done')}
         ><Icon name="chevron-left" size={16} /></button>
         <h1 id="{uid}-title">{t(spec.titleKey)}</h1>
       </div>
@@ -3494,6 +3509,21 @@
       <div class="column">
         <h2>{t('settings.section.beta')}</h2>
         <BetaSettings />
+      </div>
+    </div>
+
+    <!-- Data folder: where the library is kept, shared with the typesetter,
+         and where Save puts the cleaned pages. It ends in the Save choice. -->
+    <div
+      class="panel"
+      role="tabpanel"
+      id={panelId('dataFolder')}
+      aria-labelledby={tabId('dataFolder')}
+      hidden={active !== 'dataFolder'}
+    >
+      <div class="column">
+        <h2>{t('settings.section.dataFolder')}</h2>
+        <DataFolderSettings />
       </div>
     </div>
 

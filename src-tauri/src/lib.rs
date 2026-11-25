@@ -8,6 +8,7 @@
 
 mod about;
 mod cloud_code_digest;
+mod data_folder;
 mod denoise_history;
 mod devlog;
 mod diagnostics;
@@ -89,6 +90,9 @@ pub fn run() {
             if let Ok(dir) = tauri::Manager::path(app).resource_dir() {
                 cleaner_core::sidecar::set_resource_dir(dir);
             }
+            // Before anything reads the library: finish or undo a move a crash
+            // interrupted, then settle where the library is.
+            data_folder::on_start(app.handle());
             measurement::restore(app.handle());
             // Regions whose cloud work needs a look (a committed result gone
             // missing, one never applied), read from the attempt journal at
@@ -264,6 +268,12 @@ pub fn run() {
             provision::provision_probe,
             provision::cancel_cloud_provisioner,
             library::list_projects,
+            data_folder::data_folder_status,
+            data_folder::data_folder_setup,
+            data_folder::data_folder_move,
+            data_folder::data_folder_use_existing,
+            data_folder::data_folder_delete_old_copy,
+            exporting::save_to_typesetter,
             library::create_project,
             library::create_chapter,
             library::open_chapter,

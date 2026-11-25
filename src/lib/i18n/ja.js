@@ -115,6 +115,16 @@ export const ja = {
     },
   },
   shell: {
+    dataFolder: {
+      moving: 'データフォルダーを移動しています。数分かかることがあります。終わるとアプリに戻ります。',
+      title: 'データフォルダーが見つかりません',
+      reasonUnknown: 'データフォルダーが見つかりません。',
+      body: 'ドライブを接続し直してから、もう一度お試しください。または別のデータフォルダーを選んでください。',
+      retry: '再試行',
+      choose: '別のフォルダーを選択',
+      pathLabel: 'データフォルダー',
+      pathDescription: 'このアプリか写植アプリで設定済みのフォルダー。',
+    },
     action: {
       cancel: 'キャンセル',
       close: '閉じる',
@@ -158,6 +168,61 @@ export const ja = {
     },
   },
   settings: {
+    dataFolder: {
+      intro: 'Manga Cleaner と写植アプリが両方のライブラリを置く 1 つのフォルダーです。保存するとチャプターがそこへ送られ、写植アプリが受け取ります。',
+      recovered: '前回の起動時: {detail}',
+      where: '場所',
+      mode: {
+        legacy: '未設定です。このライブラリはアプリ専用のフォルダーにあります。',
+        pending: '写植アプリが {path} に共有データフォルダーを設定しました。このライブラリはまだそこにありません。',
+        shared: '写植アプリと共有しています。',
+        unavailable: 'データフォルダーを使用できません。{reason}',
+      },
+      libraryAt: 'ライブラリ: {path}',
+      synced: 'このフォルダーはクラウド同期フォルダーの中にあります。同期によりファイルのローカルコピーが削除され、ライブラリが壊れることがあります。同期されないフォルダーのほうが安全です。',
+      typesetterOpen: '先に写植アプリを閉じてください。データフォルダーを使用中です。',
+      blocked: {
+        chapterOpen: '先にチャプターを閉じてください。チャプターを開いている間はライブラリを移動できません。',
+        jobsRunning: '実行中のジョブが終わるまでお待ちください。',
+      },
+      busy: 'ライブラリを移動しています。数分かかることがあります。アプリを開いたままにしてください。',
+      deleting: '古いコピーを削除しています。',
+      confirmClosed: {
+        body: 'このドライブでは写植アプリが開いているか判断できません。閉じてから確認してください。',
+        action: '写植アプリは閉じています',
+      },
+      failed: '完了しませんでした: {detail}',
+      newLabel: '新しいデータフォルダー',
+      newDescription: '空のフォルダー、またはまだ存在しないフォルダー。フォルダーを選ぶと、その中に Manga Library が作られます。',
+      setup: '共有フォルダーを設定',
+      pendingBody: 'ライブラリを共有フォルダーへ移動します。写植アプリのデータはそのままです。',
+      moveInto: 'ライブラリを {path} へ移動',
+      move: 'データフォルダーを移動…',
+      useExisting: '別の既存のデータフォルダーを使う…',
+      moveLabel: '移動先',
+      moveDescription: '空のフォルダー、またはまだ存在しないフォルダー。写植アプリのデータも一緒に移動します。',
+      moveConfirm: '移動',
+      existingLabel: '既存のデータフォルダー',
+      existingDescription: 'このアプリか写植アプリで設定済みのフォルダー。何も移動しません。',
+      useConfirm: 'このフォルダーを使う',
+      chooserNew: 'データフォルダーを置く場所を選択',
+      chooserExisting: 'データフォルダーを選択',
+      oldCopies: {
+        title: '古いコピー',
+        body: '別のドライブへ移動すると、古いフォルダーは削除するまで残ります。',
+        size: '{bytes:memory}、{date} に移動',
+        delete: '削除',
+        confirm: 'このフォルダーを削除しますか？元に戻せません。',
+        confirmAction: '完全に削除',
+      },
+      save: {
+        label: 'クリーニング済みページの保存先',
+        description: '保存すると、ページは必ず写植アプリへ送られます。「元画像の横にも」を選ぶと、スキャンと同じ名前の末尾に _cleaned を付けた、スキャンの隣のフォルダーにも書き出します。スキャンのフォルダー自体には書き込みません。',
+        dataFolder: 'データフォルダーのみ',
+        nextToRaws: '元画像の横にも',
+        failed: '設定を保存できませんでした。もう一度お試しください。',
+      },
+    },
     general: {
       appearance: '外観',
       reading: '読み方',
@@ -1018,6 +1083,7 @@ export const ja = {
       },
     },
     section: {
+      dataFolder: 'データフォルダー',
       general: '一般',
       models: 'モデル',
       cloud: 'クラウド',
@@ -1161,6 +1227,12 @@ export const ja = {
     },
   },
   home: {
+    dataFolder: {
+      title: '共有データフォルダー',
+      body: '写植アプリが {path} に共有データフォルダーを設定しました。クリーナーのライブラリをそこへ移動しますか？',
+      move: '移動',
+      later: 'あとで',
+    },
     section: {
       projects: 'プロジェクト',
       chapters: 'チャプター',
@@ -1381,6 +1453,12 @@ export const ja = {
     },
   },
   editor: {
+    save: {
+      saving: '保存中…',
+      noChapter: '保存するにはチャプターを開いてください。',
+      needsDataFolder: '保存には共有データフォルダーが必要です。設定で設定してください。',
+      running: '実行が終わってから保存してください。',
+    },
     region: {
       identity: 'プロジェクトとチャプター',
       windows: 'パネル',
@@ -1418,6 +1496,7 @@ export const ja = {
       },
     },
     action: {
+      save: '保存',
       home: 'ライブラリ',
       settings: '設定',
       export: '書き出し',
@@ -2802,6 +2881,7 @@ export const ja = {
       tools: 'ツールオプション',
     },
     app: {
+      save: '写植アプリへ保存',
       export: '書き出し',
       newProject: '新規プロジェクト',
       openProject: 'プロジェクトを開く',
@@ -2828,6 +2908,16 @@ export const ja = {
     },
   },
   notice: {
+    save: {
+      sent: {
+        other: '{count} ページを写植アプリへ送りました。',
+      },
+      sentAndSaved: {
+        other: '{count} ページを写植アプリへ送り、{path} に保存しました。',
+      },
+      needsDataFolder: '保存には共有データフォルダーが必要です。設定の「データフォルダー」で設定してください。',
+      failed: 'チャプターを写植アプリへ送れませんでした: {detail}',
+    },
     pages: {
       pinned: '{page}ページには作業があり位置を保つため、何も変更していません。',
       longstrip: 'この縦読みには作業があります。ページは最後にしか追加できません。',

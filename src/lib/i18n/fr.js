@@ -115,6 +115,16 @@ export const fr = {
     },
   },
   shell: {
+    dataFolder: {
+      moving: 'Le dossier de données est en cours de déplacement. Cela peut prendre quelques minutes. L\'app revient à la fin.',
+      title: 'Dossier de données introuvable',
+      reasonUnknown: 'Le dossier de données est introuvable.',
+      body: 'Rebranchez le disque, puis réessayez. Ou choisissez un autre dossier de données.',
+      retry: 'Réessayer',
+      choose: 'Choisir un autre dossier',
+      pathLabel: 'Dossier de données',
+      pathDescription: 'Un dossier que cette app ou le logiciel de lettrage a déjà configuré.',
+    },
     action: {
       cancel: 'Annuler',
       close: 'Fermer',
@@ -159,6 +169,61 @@ export const fr = {
     },
   },
   settings: {
+    dataFolder: {
+      intro: 'Un dossier où Manga Cleaner et le logiciel de lettrage gardent tous deux leur bibliothèque. Enregistrer y envoie un chapitre, que le logiciel de lettrage récupère.',
+      recovered: 'Au dernier démarrage : {detail}',
+      where: 'Emplacement',
+      mode: {
+        legacy: 'Non configuré. Cette bibliothèque est dans le dossier propre à l\'app.',
+        pending: 'Le logiciel de lettrage a configuré un dossier de données partagé dans {path}. Cette bibliothèque n\'y est pas encore.',
+        shared: 'Partagé avec le logiciel de lettrage.',
+        unavailable: 'Le dossier de données est inutilisable. {reason}',
+      },
+      libraryAt: 'Bibliothèque : {path}',
+      synced: 'Ce dossier se trouve dans un dossier synchronisé avec le cloud. La synchronisation peut retirer les copies locales et casser la bibliothèque. Un dossier non synchronisé est plus sûr.',
+      typesetterOpen: 'Fermez d\'abord le logiciel de lettrage. Il utilise le dossier de données.',
+      blocked: {
+        chapterOpen: 'Fermez d\'abord le chapitre. La bibliothèque ne peut pas être déplacée pendant qu\'un chapitre est ouvert.',
+        jobsRunning: 'Attendez la fin des tâches en cours.',
+      },
+      busy: 'Déplacement de la bibliothèque. Cela peut prendre quelques minutes. Laissez l\'app ouverte.',
+      deleting: 'Suppression de l\'ancienne copie.',
+      confirmClosed: {
+        body: 'Ce disque ne peut pas dire si le logiciel de lettrage est ouvert. Fermez-le, puis confirmez.',
+        action: 'Le logiciel de lettrage est fermé',
+      },
+      failed: 'Non effectué : {detail}',
+      newLabel: 'Nouveau dossier de données',
+      newDescription: 'Un dossier vide, ou qui n\'existe pas encore. Choisir un dossier y place Manga Library.',
+      setup: 'Configurer le dossier partagé',
+      pendingBody: 'Votre bibliothèque est déplacée dans le dossier partagé. Les données du logiciel de lettrage restent telles quelles.',
+      moveInto: 'Déplacer ma bibliothèque dans {path}',
+      move: 'Déplacer le dossier de données…',
+      useExisting: 'Utiliser un autre dossier de données existant…',
+      moveLabel: 'Déplacer vers',
+      moveDescription: 'Un dossier vide, ou qui n\'existe pas encore. Les données du logiciel de lettrage sont déplacées aussi.',
+      moveConfirm: 'Déplacer',
+      existingLabel: 'Dossier de données existant',
+      existingDescription: 'Un dossier que cette app ou le logiciel de lettrage a déjà configuré. Rien n\'est déplacé.',
+      useConfirm: 'Utiliser ce dossier',
+      chooserNew: 'Choisissez où placer le dossier de données',
+      chooserExisting: 'Choisissez un dossier de données',
+      oldCopies: {
+        title: 'Anciennes copies',
+        body: 'Un déplacement vers un autre disque garde l\'ancien dossier jusqu\'à ce que vous le supprimiez.',
+        size: '{bytes:memory}, déplacé le {date}',
+        delete: 'Supprimer',
+        confirm: 'Supprimer ce dossier ? Impossible d\'annuler.',
+        confirmAction: 'Supprimer définitivement',
+      },
+      save: {
+        label: 'Enregistrer les pages nettoyées',
+        description: 'Enregistrer envoie toujours les pages au logiciel de lettrage. Aussi à côté des originaux les écrit en plus dans un dossier à côté de vos scans, du même nom suivi de _cleaned. Votre dossier de scans n\'est jamais modifié.',
+        dataFolder: 'Dossier de données seulement',
+        nextToRaws: 'Aussi à côté des originaux',
+        failed: 'Le réglage n\'a pas pu être enregistré. Réessayez.',
+      },
+    },
     general: {
       appearance: 'Apparence',
       reading: 'Lecture',
@@ -1023,6 +1088,7 @@ export const fr = {
       },
     },
     section: {
+      dataFolder: 'Dossier de données',
       general: 'Général',
       models: 'Modèles',
       cloud: 'Cloud',
@@ -1169,6 +1235,12 @@ export const fr = {
     },
   },
   home: {
+    dataFolder: {
+      title: 'Dossier de données partagé',
+      body: 'Le logiciel de lettrage a configuré un dossier de données partagé dans {path}. Y déplacer votre bibliothèque de nettoyage ?',
+      move: 'Déplacer',
+      later: 'Plus tard',
+    },
     section: {
       projects: 'Projets',
       chapters: 'Chapitres',
@@ -1402,6 +1474,12 @@ export const fr = {
     },
   },
   editor: {
+    save: {
+      saving: 'Enregistrement…',
+      noChapter: 'Ouvrez un chapitre pour l\'enregistrer.',
+      needsDataFolder: 'Enregistrer nécessite le dossier de données partagé. Configurez-le dans les Réglages.',
+      running: 'Attendez la fin du traitement, puis enregistrez.',
+    },
     region: {
       identity: 'Projet et chapitre',
       windows: 'Panneaux',
@@ -1442,6 +1520,7 @@ export const fr = {
       },
     },
     action: {
+      save: 'Enregistrer',
       home: 'Bibliothèque',
       settings: 'Réglages',
       export: 'Exporter',
@@ -2845,6 +2924,7 @@ export const fr = {
       tools: 'Options de l’outil',
     },
     app: {
+      save: 'Enregistrer vers le logiciel de lettrage',
       export: 'Exporter',
       newProject: 'Nouveau projet',
       openProject: 'Ouvrir un projet',
@@ -2874,6 +2954,18 @@ export const fr = {
     },
   },
   notice: {
+    save: {
+      sent: {
+        one: '1 page envoyée au logiciel de lettrage.',
+        other: '{count} pages envoyées au logiciel de lettrage.',
+      },
+      sentAndSaved: {
+        one: '1 page envoyée au logiciel de lettrage et enregistrée dans {path}.',
+        other: '{count} pages envoyées au logiciel de lettrage et enregistrées dans {path}.',
+      },
+      needsDataFolder: 'Enregistrer nécessite le dossier de données partagé. Configurez-le dans Réglages, Dossier de données.',
+      failed: 'Impossible d\'envoyer le chapitre au logiciel de lettrage : {detail}',
+    },
     pages: {
       pinned: 'La page {page} porte du travail et garde sa place, rien n’a donc été changé.',
       longstrip: 'Ce strip vertical porte du travail. On ne peut ajouter des pages qu’à la fin.',

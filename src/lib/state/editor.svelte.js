@@ -15,6 +15,7 @@
  */
 
 import { getBackend } from '../api/backend.js'
+import { noteLibraryError } from './datafolder.svelte.js'
 import { presentNotice } from '../model/cloudnotices.js'
 import {
   adopt as adoptHistory,
@@ -1124,6 +1125,8 @@ export async function openEditorChapter(projectId, chapterId, options = {}) {
     result = await getBackend().openChapter({ projectId, chapterId, convert })
   } catch (error) {
     editor.loading = false
+    // The data folder gone or being moved: the shell says so.
+    noteLibraryError(error)
     // Another process holding the library for longer than a command waits.
     if (reportJobConflict(error)) return false
     throw error

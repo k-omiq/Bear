@@ -803,6 +803,28 @@ never written as though it were general.
 
 ## What has not been measured
 
+**Shared data folder with Pear (2026-11-25): what is still open.** The contract is
+`docs/shared-data-folder.md`.
+
+- **No real move was run on the 9.2 GB library.** The move, copy and recovery paths are tested
+  on small scratch trees only, on one volume (the cross-volume path is forced in the tests). No
+  external drive, exFAT drive, network share or Windows machine has run a move.
+- **Hard links are not kept by a Windows copy.** `MetadataExt::file_index` is unstable, so a
+  cross-volume move on Windows copies a linked raw twice. It costs space, never data.
+- **Cloud attempt journals are not tagged with the library id.** They stay keyed by chapter id in
+  the app data folder. Pointing the app at another computer's data folder ("use existing") while
+  cloud work is unfinished could attach a result to the wrong chapter. Not seen; not guarded.
+- **The cloud-only check is not tested on a real iCloud or OneDrive file.** It reads macOS
+  `SF_DATALESS` and the Windows recall attributes; the tests have no evicted file.
+- **Pear leaves clutter after a kill mid-filing.** A kill before `chapter.json` is written
+  leaves an orphan chapter folder holding extra hard links to the raws, or an orphan
+  `cleaned/<n>-2.png` on an update. No duplicate chapter appears and the message files cleanly
+  on the next pass; nothing sweeps the orphans.
+- **Pear on Windows** skips the free-space check (free space reads as unknown there) and copies
+  hard-linked files twice on a cross-volume move.
+- **Not built in version 1:** Pear back to the cleaner, live update of a chapter Pear has open, a
+  shared project catalog, and dedupe of raws imported by hand into both apps.
+
 **Runtime moved to NuGet and the GCE install test (2026-11-21): what is still open.**
 
 - **The six GCE VMs were not rerun on the fixed build.** The release workflow's launch checks
