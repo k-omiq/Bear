@@ -116,6 +116,7 @@ export const pt = {
   },
   shell: {
     dataFolder: {
+      moving: 'A pasta de dados está sendo movida. Isso pode levar alguns minutos. O app volta quando terminar.',
       title: 'Pasta de dados não encontrada',
       reasonUnknown: 'A pasta de dados não foi encontrada.',
       body: 'Reconecte a unidade e tente de novo. Ou escolha outra pasta de dados.',

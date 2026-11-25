@@ -116,6 +116,7 @@ export const fr = {
   },
   shell: {
     dataFolder: {
+      moving: 'Le dossier de données est en cours de déplacement. Cela peut prendre quelques minutes. L\'app revient à la fin.',
       title: 'Dossier de données introuvable',
       reasonUnknown: 'Le dossier de données est introuvable.',
       body: 'Rebranchez le disque, puis réessayez. Ou choisissez un autre dossier de données.',

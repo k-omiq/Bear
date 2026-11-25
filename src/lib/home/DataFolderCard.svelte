@@ -5,8 +5,9 @@
    * hides the card for this session, and Settings > Data folder still offers
    * the move.
    *
-   * Moving reloads the library afterwards, because its projects are then read
-   * from the new place.
+   * While the move runs the shell holds the window under its busy cover, so
+   * nothing opens a chapter or starts a run meanwhile; Home lists the library
+   * again when it ends (`dataFolder.generation`).
    *
    * @type {{ backend?: import('../api/backend.js').Backend, onmoved?: () => void }}
    */

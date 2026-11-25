@@ -22,6 +22,7 @@
  */
 
 import { createEventStream } from './tauri-events.js'
+import { reportBackendError } from './backenderrors.js'
 
 /**
  * The Tauri commands this adapter uses, by seam method name.
@@ -453,7 +454,19 @@ export function createTauriBackend({ fallback, invoke, listen }) {
   // `async` so that being constructed outside Tauri surfaces as a rejected
   // promise like any other backend failure, rather than as a synchronous throw
   // from a method the seam declares async.
-  const call = invoke ?? (async (command, args) => globalInvoke()(command, args))
+  const send = invoke ?? (async (command, args) => globalInvoke()(command, args))
+  // Every rejection is also reported (`backenderrors.js`): a refusal about the
+  // whole library, an unplugged data folder or one being moved, can meet any
+  // command.
+  /** @param {[string, Object?]} args */
+  const call = async (...args) => {
+    try {
+      return await send(...args)
+    } catch (error) {
+      reportBackendError(error)
+      throw error
+    }
+  }
   const on = listen ?? globalListen
   let nextAnalysisRequest = 0
   const requestIdFor = (requestId) => requestId ?? `analysis-${Date.now()}-${++nextAnalysisRequest}`

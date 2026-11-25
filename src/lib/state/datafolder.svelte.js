@@ -11,17 +11,33 @@
  * under it. A change the drive cannot vouch for, because it cannot tell whether
  * the typesetter is open (`typesetter_unknown:`), is held in `confirm` until the
  * user says the typesetter is closed, then sent again with `confirmedClosed`.
+ *
+ * Two refusals any library call can meet are about the folder, not the call
+ * (`api/backenderrors.js` reports them all): `data_folder_unavailable:` reads
+ * the status again, which brings up the shell's blocking screen, and
+ * `data_folder_moving:` (the other app is moving the folder) holds the window
+ * under the busy cover and polls until the library answers again. The
+ * backend's text puts other words first (`library: data_folder_...`), so both
+ * are matched anywhere in the message.
+ *
+ * `generation` counts the times the library may have changed place: Home
+ * reads it to list its projects again.
  */
 
 import { getBackend } from '../api/backend.js'
+import { onBackendError } from '../api/backenderrors.js'
 
 /** @typedef {import('../api/backend.js').DataFolderStatus} DataFolderStatus */
 /** @typedef {'setup'|'move'|'useExisting'} ChangeKind */
 
 /** The error prefix the backend uses when it cannot tell whether the typesetter is open. */
 export const TYPESETTER_UNKNOWN = 'typesetter_unknown:'
-/** The error prefix every library call answers with while the folder is unavailable. */
+/** The code every library call's error carries while the folder is unavailable. */
 export const DATA_FOLDER_UNAVAILABLE = 'data_folder_unavailable:'
+/** The code every library call's error carries while a move holds the folder. */
+export const DATA_FOLDER_MOVING = 'data_folder_moving:'
+/** How often a held window asks whether the move has ended. */
+export const MOVING_POLL_MS = 2000
 
 export const dataFolder = $state({
   /** @type {DataFolderStatus|null} */
@@ -38,6 +54,10 @@ export const dataFolder = $state({
   recoveredSeen: false,
   /** Home's Pending card was put off this session. */
   pendingLater: false,
+  /** Another process is moving the folder: library calls are refused until it ends. */
+  moving: false,
+  /** Bumped after every change of place, so Home lists its projects again. */
+  generation: 0,
 })
 
 /** @param {unknown} error */
@@ -45,7 +65,17 @@ const message = (error) => (error instanceof Error ? error.message : String(erro
 
 /** @param {unknown} error */
 export function isUnavailableError(error) {
-  return message(error).startsWith(DATA_FOLDER_UNAVAILABLE)
+  return message(error).includes(DATA_FOLDER_UNAVAILABLE)
+}
+
+/** @param {unknown} error */
+export function isMovingError(error) {
+  return message(error).includes(DATA_FOLDER_MOVING)
+}
+
+/** Whether the window is held under the busy cover: a change of place in flight here, or a move elsewhere. */
+export function dataFolderHeld() {
+  return dataFolder.moving || (dataFolder.busy !== null && dataFolder.busy !== 'delete')
 }
 
 /** The mode, or null before the first answer and on a backend that has none. */
@@ -59,7 +89,18 @@ export function dataFolderMode() {
  *
  * @param {import('../api/backend.js').Backend} [backend]
  */
-export async function loadDataFolder(backend = getBackend()) {
+let reading = /** @type {Promise<DataFolderStatus|null>|null} */ (null)
+
+export function loadDataFolder(backend = getBackend()) {
+  // One read at a time: a burst of refused calls asks once.
+  reading ??= readStatus(backend).finally(() => {
+    reading = null
+  })
+  return reading
+}
+
+/** @param {import('../api/backend.js').Backend} backend */
+async function readStatus(backend) {
   try {
     if (typeof backend.dataFolderStatus === 'function') dataFolder.status = await backend.dataFolderStatus()
   } catch (error) {
@@ -92,13 +133,16 @@ export async function changeDataFolder(kind, target, { confirmedClosed = false, 
   dataFolder.confirm = null
   try {
     dataFolder.status = await backend[COMMANDS[kind]]({ target, confirmedClosed })
+    dataFolder.generation += 1
     return true
   } catch (error) {
-    const said = message(error)
-    if (said.startsWith(TYPESETTER_UNKNOWN) && !confirmedClosed) dataFolder.confirm = { kind, target }
-    else dataFolder.error = said
     // A move that failed half way may still have switched the pointer.
     await loadDataFolder(backend)
+    // Asked only once the change is over, so the answer can send it again.
+    dataFolder.busy = null
+    const said = message(error)
+    if (said.includes(TYPESETTER_UNKNOWN) && !confirmedClosed) dataFolder.confirm = { kind, target }
+    else dataFolder.error = said
     return false
   } finally {
     dataFolder.busy = null
@@ -138,8 +182,63 @@ export async function deleteOldCopy(path, backend = getBackend()) {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Refusals about the whole folder                                     */
+/* ------------------------------------------------------------------ */
+
+/** @type {ReturnType<typeof setTimeout>|null} */
+let poll = null
+
+/**
+ * What a refused library call says about the folder, if anything. A change of
+ * place in flight here explains its own refusals, and its end reads the
+ * status anyway.
+ *
+ * @param {unknown} error
+ * @param {import('../api/backend.js').Backend} [backend]
+ */
+export function noteLibraryError(error, backend) {
+  if (dataFolder.busy !== null && dataFolder.busy !== 'delete') return
+  if (isMovingError(error)) startMoving(backend)
+  else if (isUnavailableError(error)) void loadDataFolder(backend)
+}
+
+/** @param {import('../api/backend.js').Backend} [backend] */
+function startMoving(backend) {
+  dataFolder.moving = true
+  if (poll === null) poll = setTimeout(() => void checkMoving(backend), MOVING_POLL_MS)
+}
+
+/**
+ * Ask the library whether the move has ended: still refused as moving, wait
+ * again; anything else, the move is over and the status is read again.
+ *
+ * @param {import('../api/backend.js').Backend} [backend]
+ */
+async function checkMoving(backend = getBackend()) {
+  poll = null
+  try {
+    await backend.listProjects()
+  } catch (error) {
+    if (isMovingError(error)) {
+      poll = setTimeout(() => void checkMoving(backend), MOVING_POLL_MS)
+      return
+    }
+  }
+  dataFolder.moving = false
+  await loadDataFolder(backend)
+  dataFolder.generation += 1
+}
+
+onBackendError((error) => noteLibraryError(error))
+
 /** For tests. */
 export function resetDataFolder() {
+  if (poll !== null) clearTimeout(poll)
+  poll = null
+  reading = null
+  dataFolder.moving = false
+  dataFolder.generation = 0
   dataFolder.status = null
   dataFolder.checked = false
   dataFolder.busy = null

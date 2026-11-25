@@ -49,7 +49,8 @@
   import { startNanoBananaCrops } from './lib/editor/nanobananacrop.svelte.js'
   import QuitJobsDialog from './lib/dialogs/QuitJobsDialog.svelte'
   import DataFolderUnavailable from './lib/shell/DataFolderUnavailable.svelte'
-  import { dataFolder, loadDataFolder } from './lib/state/datafolder.svelte.js'
+  import DataFolderBusy from './lib/shell/DataFolderBusy.svelte'
+  import { dataFolder, dataFolderHeld, loadDataFolder } from './lib/state/datafolder.svelte.js'
   import { openSettings } from './lib/dialogs/settingslinks.js'
   import { untrack } from 'svelte'
 
@@ -114,14 +115,18 @@
   // boot, and again when the window comes back to the front: the typesetter
   // may have set one up meanwhile (Pending), or its drive may be back.
   $effect(() => untrack(() => void loadDataFolder()))
+  // In the editor too: an unplugged drive must not wait for a refused call.
   $effect(() => {
     const refresh = () => {
-      if (dataFolder.busy === null && app.route.name !== 'editor') void loadDataFolder()
+      if (!dataFolderHeld()) void loadDataFolder()
     }
     window.addEventListener('focus', refresh)
     return () => window.removeEventListener('focus', refresh)
   })
-  const unavailable = $derived(dataFolder.status?.mode === 'unavailable')
+  // A move elsewhere can leave the status Unavailable meanwhile; the cover
+  // says what is going on, and the status is read again when it ends.
+  const held = $derived(dataFolderHeld())
+  const unavailable = $derived(dataFolder.status?.mode === 'unavailable' && !held)
 
   // Background jobs: runs and denoises outlive the dialog or the editor that
   // started them, so the one subscription that follows them is here, with the
@@ -345,64 +350,76 @@
   // while individual notices remain dismissible.
 </script>
 
+<!-- The data folder decides what the window can show. Unavailable: its
+     screen, and nothing else. A change of place in flight: the busy cover over
+     everything. Either way the rest is inert and the shortcuts are gone, so
+     nothing behind can open a chapter or start a run. -->
 {#if unavailable}
   <DataFolderUnavailable />
-{:else}
+{:else if held}
+  <DataFolderBusy />
+{/if}
+
+{#if !unavailable && !held}
   <KeyboardLayer />
+{/if}
 
-  <div class="shell">
-    {#if app.route.name === 'editor'}
-      <EditorScreen />
-    {:else if dataFolder.checked}
-      <HomeScreen />
-    {/if}
+<div class="layer" inert={unavailable || held}>
+  {#if !unavailable}
+    <div class="shell">
+      {#if app.route.name === 'editor'}
+        <EditorScreen />
+      {:else if dataFolder.checked}
+        <HomeScreen />
+      {/if}
+    </div>
+  {/if}
+
+  <!-- The bottom-left corner, floor first: the loaded-models panel sits on the
+       14px anchor and the notice stack rises above it. Both are `z-index: 10`,
+       below the floating windows at `20 + rank`. -->
+  <div class="corner" bind:clientHeight={panelHeight}>
+    <CloudJobStatus />
+    <LoadedModels
+      models={[...loaded, ...cloudRows]}
+      title={panelTitle}
+      hint={loaded.length > 0 && loadedModels.totalBytes !== null ? t('models.value.total', { bytes: loadedModels.totalBytes }) : ''}
+      icon={loaded.length === 0 && cloudRows.length > 0 ? 'cloud' : 'cpu'}
+      unloadingLabel={t('models.value.unloading')}
+      onunload={(id) => {
+        const row = cloudRows.find((row) => row.id === id)
+        return row ? stopCloudGpu(row.role, undefined, row.target) : unloadModel(id)
+      }}
+    />
   </div>
-{/if}
 
-<!-- The bottom-left corner, floor first: the loaded-models panel sits on the
-     14px anchor and the notice stack rises above it. Both are `z-index: 10`,
-     below the floating windows at `20 + rank`. -->
-<div class="corner" bind:clientHeight={panelHeight}>
-  <CloudJobStatus />
-  <LoadedModels
-    models={[...loaded, ...cloudRows]}
-    title={panelTitle}
-    hint={loaded.length > 0 && loadedModels.totalBytes !== null ? t('models.value.total', { bytes: loadedModels.totalBytes }) : ''}
-    icon={loaded.length === 0 && cloudRows.length > 0 ? 'cloud' : 'cpu'}
-    unloadingLabel={t('models.value.unloading')}
-    onunload={(id) => {
-      const row = cloudRows.find((row) => row.id === id)
-      return row ? stopCloudGpu(row.role, undefined, row.target) : unloadModel(id)
-    }}
+  <Notices
+    {notices}
+    onclose={dismissNotice}
+    dismissLabel={t('shell.action.dismissNotice')}
+    bottom={14 + (panelHeight > 0 ? panelHeight + GAP : 0)}
   />
+
+  {#if !unavailable}
+    <ModalHost />
+  {/if}
+
+  <!-- The offer waits for an empty modal stack rather than joining it. `Modal`
+       captures focus and answers Escape on `window`, so two mounted dialogs
+       fight over both - and this one is not on the stack because it belongs to
+       the launch rather than to a screen, where a route change would dismiss it
+       (`state/app.svelte.js#setRoute`). Nothing the user can reach pushes a
+       dialog while it is up: the backdrop takes every click, and the shortcut
+       table is told about a dialog it cannot see (`setDialogOutsideStack`), so
+       `,` and `?` no longer answer from underneath. The guard is what is left -
+       a net for a push from somewhere else - and it now costs nothing, because
+       the run and everything drawn from it are in the store rather than in the
+       component: the offer comes back as it was when the stack empties, with the
+       transfer it started still running. -->
+  {#if firstLaunch.open && app.modals.length === 0 && !unavailable}
+    <FirstLaunchDialog />
+  {/if}
 </div>
-
-<Notices
-  {notices}
-  onclose={dismissNotice}
-  dismissLabel={t('shell.action.dismissNotice')}
-  bottom={14 + (panelHeight > 0 ? panelHeight + GAP : 0)}
-/>
-
-{#if !unavailable}
-  <ModalHost />
-{/if}
-
-<!-- The offer waits for an empty modal stack rather than joining it. `Modal`
-     captures focus and answers Escape on `window`, so two mounted dialogs
-     fight over both - and this one is not on the stack because it belongs to
-     the launch rather than to a screen, where a route change would dismiss it
-     (`state/app.svelte.js#setRoute`). Nothing the user can reach pushes a
-     dialog while it is up: the backdrop takes every click, and the shortcut
-     table is told about a dialog it cannot see (`setDialogOutsideStack`), so
-     `,` and `?` no longer answer from underneath. The guard is what is left -
-     a net for a push from somewhere else - and it now costs nothing, because
-     the run and everything drawn from it are in the store rather than in the
-     component: the offer comes back as it was when the stack empties, with the
-     transfer it started still running. -->
-{#if firstLaunch.open && app.modals.length === 0 && !unavailable}
-  <FirstLaunchDialog />
-{/if}
 
 <!-- The quit guard's question goes over whatever is up, the stack or the
      offer, and last in the document so its backdrop is the top one. It is not
@@ -413,6 +430,8 @@
 {/if}
 
 <style>
+  .layer { height: 100% }
+
   .shell {
     height: 100%;
     overflow: hidden;

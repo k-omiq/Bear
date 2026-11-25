@@ -59,7 +59,8 @@ describe('the data folder in the mock', () => {
 
   it('lists no projects while the folder is unavailable, and uses another one', async () => {
     const backend = createMockBackend({ timing: TIMING, dataFolder: 'unavailable' })
-    await expect(settle(backend.listProjects())).rejects.toThrow(/^data_folder_unavailable:/)
+    // The backend's text, subject first: matched anywhere, never as a prefix.
+    await expect(settle(backend.listProjects())).rejects.toThrow(/^library: data_folder_unavailable: /)
     const used = await settle(backend.dataFolderUseExisting({ target: '/Users/reader/Manga Library' }))
     expect(used.mode).toBe('shared')
     expect((await settle(backend.listProjects())).length).toBeGreaterThan(0)

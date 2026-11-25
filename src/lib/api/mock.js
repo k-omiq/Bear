@@ -3776,7 +3776,8 @@ export function createMockBackend(options = {}) {
       throw new Error('typesetter_unknown: This drive cannot tell whether the typesetter is open. Close it, then confirm.')
     }
   }
-  const unavailableError = () => new Error(`data_folder_unavailable: ${dataFolderStatus().reason ?? ''}`)
+  // As `library.rs#LibraryError`'s text: the subject first, then the code.
+  const unavailableError = () => new Error(`library: data_folder_unavailable: ${dataFolderStatus().reason ?? ''}`)
 
   /* ---------- the adapter ---------- */
 
@@ -4024,6 +4025,7 @@ export function createMockBackend(options = {}) {
 
     async openChapter({ projectId, chapterId, convert }) {
       await delay(timing.openChapter)
+      if (dataFolder.mode === 'unavailable') throw unavailableError()
       const found = findChapter(chapterId) ?? { project: findProject(projectId), chapter: null }
       if (!found.project || !found.chapter) return null
       const { project, chapter } = found

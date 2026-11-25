@@ -149,6 +149,7 @@ export const en = {
   /* ================================================================== */
   shell: {
     dataFolder: {
+      moving: 'The data folder is moving. This can take a few minutes. The app is back when it ends.',
       title: 'Data folder not found',
       reasonUnknown: 'The data folder cannot be found.',
       body: 'Reconnect the drive, then try again. Or choose another data folder.',

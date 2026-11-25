@@ -116,6 +116,7 @@ export const es = {
   },
   shell: {
     dataFolder: {
+      moving: 'La carpeta de datos se está moviendo. Puede tardar unos minutos. La app vuelve cuando termine.',
       title: 'No se encuentra la carpeta de datos',
       reasonUnknown: 'No se encuentra la carpeta de datos.',
       body: 'Vuelve a conectar la unidad e inténtalo de nuevo. O elige otra carpeta de datos.',
