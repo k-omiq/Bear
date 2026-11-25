@@ -90,6 +90,24 @@ pub(crate) fn write_atomic(path: &Path, body: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Flushes a file just copied. Windows flushes only through a handle that can
+/// write, so a read-only open is refused there ("Access is denied"); a file
+/// that is itself read-only gives no such handle and is left to the system.
+fn flush_copied(path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        match std::fs::OpenOptions::new().write(true).open(path) {
+            Ok(f) => f.sync_all(),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        File::open(path)?.sync_all()
+    }
+}
+
 #[cfg(unix)]
 fn sync_dir(dir: &Path) {
     if let Ok(dir) = File::open(dir) {
@@ -874,7 +892,7 @@ fn copy_tree(from: &Path, to: &Path, linked: &mut std::collections::HashMap<(u64
                 linked.insert(id, target.clone());
             }
             std::fs::copy(&source, &target).map_err(|e| format!("{}: {e}", source.display()))?;
-            File::open(&target).and_then(|f| f.sync_all()).map_err(|e| format!("{}: {e}", target.display()))?;
+            flush_copied(&target).map_err(|e| format!("{}: {e}", target.display()))?;
         }
     }
     sync_dir(to);
