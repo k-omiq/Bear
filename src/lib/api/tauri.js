@@ -197,6 +197,12 @@ const IMPLEMENTED = Object.freeze({
   listJobs: 'list_jobs',
   confirmQuit: 'confirm_quit',
   hideToTray: 'hide_to_tray',
+  dataFolderStatus: 'data_folder_status',
+  dataFolderSetup: 'data_folder_setup',
+  dataFolderMove: 'data_folder_move',
+  dataFolderUseExisting: 'data_folder_use_existing',
+  dataFolderDeleteOldCopy: 'data_folder_delete_old_copy',
+  saveToTypesetter: 'save_to_typesetter',
 })
 
 /** Every method the seam contract fixes, so the adapter can be checked against it. */
@@ -362,6 +368,12 @@ export const SEAM_METHODS = Object.freeze([
   'confirmQuit',
   'hideToTray',
   'onQuitRequested',
+  'dataFolderStatus',
+  'dataFolderSetup',
+  'dataFolderMove',
+  'dataFolderUseExisting',
+  'dataFolderDeleteOldCopy',
+  'saveToTypesetter',
 ])
 
 /**
@@ -931,6 +943,20 @@ export function createTauriBackend({ fallback, invoke, listen }) {
     listJobs: () => call(IMPLEMENTED.listJobs),
     confirmQuit: () => call(IMPLEMENTED.confirmQuit),
     hideToTray: () => call(IMPLEMENTED.hideToTray),
+
+    // The shared data folder (`src-tauri/src/data_folder.rs`) and Save, which
+    // hands a chapter to the typesetter through it. Arguments are named so
+    // nothing else the interface carries reaches a command that moves the
+    // library.
+    dataFolderStatus: () => call(IMPLEMENTED.dataFolderStatus),
+    dataFolderSetup: ({ target, confirmedClosed = false }) =>
+      call(IMPLEMENTED.dataFolderSetup, { target, confirmedClosed }),
+    dataFolderMove: ({ target, confirmedClosed = false }) =>
+      call(IMPLEMENTED.dataFolderMove, { target, confirmedClosed }),
+    dataFolderUseExisting: ({ target, confirmedClosed = false }) =>
+      call(IMPLEMENTED.dataFolderUseExisting, { target, confirmedClosed }),
+    dataFolderDeleteOldCopy: ({ path }) => call(IMPLEMENTED.dataFolderDeleteOldCopy, { path }),
+    saveToTypesetter: ({ chapterId }) => call(IMPLEMENTED.saveToTypesetter, { chapterId }),
   }
 
   const backend = {}

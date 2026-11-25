@@ -3724,6 +3724,60 @@ export function createMockBackend(options = {}) {
     return report
   }
 
+  /* ---------- the shared data folder ---------- */
+
+  // FIXTURE KNOB: `?dataFolder=pending|shared|unavailable` (or
+  // `options.dataFolder`) starts the mock in that mode; it starts in Legacy,
+  // as a machine that never set one up does. `?typesetter=yes|unknown` (or
+  // `options.typesetterRunning`) says the typesetter is open, or that the
+  // drive cannot tell. A target under `/Volumes/` is another drive: the move
+  // copies and leaves an old copy behind, as `data_folder.rs#run_move` does.
+  const search = new URLSearchParams(globalThis.location?.search ?? '')
+  const DATA_FOLDER_MODES = ['legacy', 'pending', 'shared', 'unavailable']
+  const askedMode = options.dataFolder ?? search.get('dataFolder') ?? 'legacy'
+  const startMode = DATA_FOLDER_MODES.includes(askedMode) ? askedMode : 'legacy'
+  const MOCK_HOME = '/Users/reader'
+  const MOCK_LEGACY = `${MOCK_HOME}/Library/Application Support/com.mangacleaner.studio/library`
+  const dataFolder = {
+    /** @type {'legacy'|'pending'|'shared'|'unavailable'} */
+    mode: /** @type {any} */ (startMode),
+    /** @type {string|null} */
+    root: startMode === 'legacy' ? null : startMode === 'unavailable' ? '/Volumes/Manga/Manga Library' : `${MOCK_HOME}/Manga Library`,
+    /** @type {'no'|'yes'|'unknown'} */
+    typesetterRunning: /** @type {any} */ (options.typesetterRunning ?? search.get('typesetter') ?? 'no'),
+    /** @type {Array<{path: string, bytes: number, movedAt: string}>} */
+    oldCopies: [],
+    /** @type {string|null} */
+    recovered: null,
+  }
+  const SYNCED = /mobile documents|library\/cloudstorage|onedrive|dropbox|google drive|icloud/i
+  const dataFolderStatus = () => ({
+    mode: dataFolder.mode,
+    root: dataFolder.root,
+    library: dataFolder.mode === 'shared' ? `${dataFolder.root}/Cleaner` : dataFolder.mode === 'unavailable' ? null : MOCK_LEGACY,
+    reason: dataFolder.mode === 'unavailable' ? `Data folder not found at ${dataFolder.root}. Reconnect the drive, or choose another folder.` : null,
+    defaultRoot: `${MOCK_HOME}/Manga Library`,
+    typesetterRunning: dataFolder.root ? dataFolder.typesetterRunning : 'no',
+    synced: SYNCED.test(dataFolder.root ?? '') || (dataFolder.root ?? '').startsWith(`${MOCK_HOME}/Documents`),
+    oldCopies: structuredClone(dataFolder.oldCopies),
+    recovered: dataFolder.recovered,
+  })
+  /** As `data_folder.rs#checked_target`. @param {unknown} target */
+  const checkedTarget = (target) => {
+    if (typeof target !== 'string' || !target.startsWith('/')) throw new Error('Pick a full folder path.')
+    return target.replace(/\/+$/, '') || '/'
+  }
+  /** As `data_folder.rs#ready_to_move`. @param {boolean} [confirmedClosed] @param {boolean} [typesetterMatters] */
+  const readyToMove = (confirmedClosed, typesetterMatters = true) => {
+    if (runner.list().length > 0) throw new Error('Wait for the running jobs to finish first.')
+    if (!typesetterMatters || !dataFolder.root) return
+    if (dataFolder.typesetterRunning === 'yes') throw new Error('Close the typesetter first. It is using the data folder.')
+    if (dataFolder.typesetterRunning === 'unknown' && !confirmedClosed) {
+      throw new Error('typesetter_unknown: This drive cannot tell whether the typesetter is open. Close it, then confirm.')
+    }
+  }
+  const unavailableError = () => new Error(`data_folder_unavailable: ${dataFolderStatus().reason ?? ''}`)
+
   /* ---------- the adapter ---------- */
 
   return {
@@ -3761,6 +3815,96 @@ export function createMockBackend(options = {}) {
 
     onSamInstallProgress(handler) {
       return listenOn(samInstallListeners, handler)
+    },
+
+    /* ---------- the shared data folder ---------- */
+
+    async dataFolderStatus() {
+      await delay(timing.method)
+      return dataFolderStatus()
+    },
+
+    /** Legacy: make `target` the data folder. Pending: move into the typesetter's. */
+    async dataFolderSetup({ target, confirmedClosed = false } = {}) {
+      await delay(timing.method)
+      const to = checkedTarget(target)
+      if (dataFolder.mode === 'shared') throw new Error('The data folder is already set up.')
+      if (dataFolder.mode === 'unavailable') throw unavailableError()
+      if (dataFolder.mode === 'pending' && to !== dataFolder.root) {
+        throw new Error('The typesetter already set up a data folder. Move this library into that one.')
+      }
+      // Only this library moves, into a subfolder nothing else writes.
+      readyToMove(confirmedClosed, false)
+      await delay(timing.export * 2)
+      dataFolder.mode = 'shared'
+      dataFolder.root = to
+      return dataFolderStatus()
+    },
+
+    /** Shared: the whole folder moves. */
+    async dataFolderMove({ target, confirmedClosed = false } = {}) {
+      await delay(timing.method)
+      if (dataFolder.mode !== 'shared' || !dataFolder.root) throw new Error('Set up the data folder first.')
+      const to = checkedTarget(target)
+      if (to === dataFolder.root) throw new Error('That is where the data folder already is.')
+      if (to.startsWith(`${dataFolder.root}/`)) throw new Error('The new place is inside the old one.')
+      readyToMove(confirmedClosed)
+      await delay(timing.export * 3)
+      const from = dataFolder.root
+      const otherDrive = to.startsWith('/Volumes/') !== from.startsWith('/Volumes/')
+      if (otherDrive) {
+        const movedAt = new Date(timers.now()).toISOString()
+        dataFolder.oldCopies.push({ path: `${from}.moved-${movedAt.slice(0, 10)}`, bytes: 9_878_000_000, movedAt })
+      }
+      dataFolder.root = to
+      return dataFolderStatus()
+    },
+
+    /** Point at a folder that is already a data folder. Any absolute path is one here. */
+    async dataFolderUseExisting({ target, confirmedClosed = false } = {}) {
+      await delay(timing.method)
+      const to = checkedTarget(target)
+      if (dataFolder.mode === 'legacy' && state.projects.length > 0) {
+        throw new Error('This computer still has its own cleaner library. Set up the shared folder with it first, or use "Set up" with that folder.')
+      }
+      readyToMove(confirmedClosed)
+      dataFolder.mode = 'shared'
+      dataFolder.root = to
+      return dataFolderStatus()
+    },
+
+    async dataFolderDeleteOldCopy({ path } = {}) {
+      await delay(timing.method)
+      const at = dataFolder.oldCopies.findIndex((copy) => copy.path === path)
+      if (at < 0) throw new Error('That folder is not an old copy this app made.')
+      dataFolder.oldCopies.splice(at, 1)
+      return dataFolderStatus()
+    },
+
+    /**
+     * Save: every page exported and handed to the typesetter. The notice is
+     * the backend's, as `exporting.rs#save_to_typesetter` raises it.
+     */
+    async saveToTypesetter({ chapterId } = {}) {
+      await delay(timing.method)
+      if (dataFolder.mode !== 'shared') {
+        notify('notice.save.needsDataFolder', {}, 'warn')
+        return { status: 'refused', pages: 0, reasonKey: 'notice.save.needsDataFolder' }
+      }
+      const found = findChapter(chapterId)
+      if (!found) throw new Error(`no chapter ${chapterId}`)
+      // `lock_chapter` refuses while a run holds the chapter.
+      if (runner.runFor(found.chapter.id)) throw new Error('A run is going on this chapter. Wait for it to finish.')
+      await delay(timing.export)
+      const pages = found.chapter.pages.length
+      const key = `cleaner-mock-library-${found.project.id}-${found.chapter.id}`
+      if (state.settings.saveCleanedTo === 'next-to-raws') {
+        const nextToRaws = `${found.chapter.sourcePath ?? `${found.project.sourcePath ?? '~/scans'}/${found.chapter.name}`}_cleaned`
+        notify('notice.save.sentAndSaved', { count: pages, path: nextToRaws })
+        return { status: 'saved', pages, key, nextToRaws }
+      }
+      notify('notice.save.sent', { count: pages })
+      return { status: 'saved', pages, key }
     },
 
     /**
@@ -3806,6 +3950,8 @@ export function createMockBackend(options = {}) {
 
     async listProjects() {
       await delay(timing.method)
+      // As `data_folder.rs#library_root`: no library while the folder is gone.
+      if (dataFolder.mode === 'unavailable') throw unavailableError()
       // Headers only: Home draws page counts, status marks and a review total,
       // and every one of those is answered without a single region (§1b).
       return snapshot(state.projects.map(projectHeaders))

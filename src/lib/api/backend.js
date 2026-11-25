@@ -667,6 +667,39 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {() => Promise<void>} confirmQuit - the answer to a held quit: stop every job, then quit
  * @property {() => Promise<boolean>} hideToTray - the other answer: hide the window and let the jobs go on. Only while a tray exists
  * @property {(handler: (request: QuitRequest) => void) => Promise<() => void>} onQuitRequested - `app://quit-requested`: a quit was held because jobs are running
+ * @property {() => Promise<DataFolderStatus>} dataFolderStatus - where the library is kept, and whether it is the folder shared with the typesetter (`docs/shared-data-folder.md` section 5). Re-reads the pointer
+ * @property {(spec: {target: string, confirmedClosed?: boolean}) => Promise<DataFolderStatus>} dataFolderSetup - Legacy: make `target` the data folder and move this library in. Pending: `target` is the folder the typesetter set up. Rejects with `typesetter_unknown: ...` when the drive cannot tell whether the typesetter is open: ask, then retry with `confirmedClosed`
+ * @property {(spec: {target: string, confirmedClosed?: boolean}) => Promise<DataFolderStatus>} dataFolderMove - Shared: move the whole data folder, both apps' data with it, to `target`
+ * @property {(spec: {target: string, confirmedClosed?: boolean}) => Promise<DataFolderStatus>} dataFolderUseExisting - point at a folder that is already a data folder and move nothing
+ * @property {(spec: {path: string}) => Promise<DataFolderStatus>} dataFolderDeleteOldCopy - delete an old tree a move to another drive set aside. Only paths on `oldCopies`
+ * @property {(spec: {chapterId: string}) => Promise<SaveResult>} saveToTypesetter - export every page and hand the chapter to the typesetter through the data folder. The notice comes from the backend (`notice.save.*`, or an export refusal under `notice.export.*`)
+ */
+
+/**
+ * Where the library is kept (`data_folder_status`).
+ *
+ * @typedef {Object} DataFolderStatus
+ * @property {'legacy'|'pending'|'shared'|'unavailable'} mode
+ * @property {string|null} root - the data folder, when there is a pointer
+ * @property {string|null} library - the folder this library is read from
+ * @property {string|null} reason - why the folder cannot be used, in Unavailable mode
+ * @property {string|null} defaultRoot - where Set up proposes to put it
+ * @property {'no'|'yes'|'unknown'} typesetterRunning
+ * @property {boolean} synced - the folder is inside one a cloud service syncs
+ * @property {Array<{path: string, bytes: number, movedAt: string}>} oldCopies - trees a move to another drive kept, until the user deletes them
+ * @property {string|null} recovered - what the last start's move recovery did
+ */
+
+/**
+ * What `save_to_typesetter` did.
+ *
+ * @typedef {Object} SaveResult
+ * @property {'saved'|'refused'} status
+ * @property {number} pages
+ * @property {string} [key]
+ * @property {string} [nextToRaws] - the `_cleaned` folder, when the pages were also saved beside the raws
+ * @property {string} [reasonKey]
+ * @property {string} [detail]
  */
 
 /**
