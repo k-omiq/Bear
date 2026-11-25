@@ -850,9 +850,10 @@ never written as though it were general.
   now takes the CUDA 12 wheel and the CUDA 13 NuGet package, unpacked by the app's rules, and
   passed on Windows and Linux on 2026-11-22 (run 44972039456). Its runners have no GPU, so cuDNN
   never opens its sub libraries there, and the `LD_LIBRARY_PATH` failure above does not show.
-- **The Fedora 40 AppImage launch check hung once.** On the v1.0.0-beta.21 release run the window
-  stayed blank and the page never reported in 17 minutes; a rerun of that one job passed and the
-  other four Linux checks passed the first time. Why it hung is not known.
+- **The Fedora 40 AppImage launch check hangs now and then.** On the v1.0.0-beta.21 and
+  v1.0.0-beta.23 release runs the window stayed blank and the page never reported in 17 minutes;
+  both times a rerun of that one job passed and the other four Linux checks passed the first
+  time. Why it hangs is not known.
 - **The bigger first download was not timed.** macOS and Linux now fetch 139 MB for the stock
   runtime where they fetched 9 to 32 MB.
 - **Windows window close was not checked.** The install test ran from an S4U task, which has no
