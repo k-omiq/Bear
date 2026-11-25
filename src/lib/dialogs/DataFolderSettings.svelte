@@ -202,7 +202,9 @@
 {#if status?.synced}
   <p class="warn" role="note">{t('settings.dataFolder.synced')}</p>
 {/if}
-{#if typesetterOpen}
+<!-- Only the whole folder's moves need the typesetter closed; moving this
+     library into the shared folder (Pending) does not. -->
+{#if typesetterOpen && mode === 'shared'}
   <p class="warn" role="note">{t('settings.dataFolder.typesetterOpen')}</p>
 {/if}
 {#if blocked && !busy}

@@ -11,9 +11,12 @@
    * every folder field in the app can: outside the desktop window there is no
    * chooser to open.
    *
+   * Everything behind it is inert while it is up (`App.svelte`), and focus
+   * starts on Try again.
+   *
    * @type {{ backend?: import('../api/backend.js').Backend }}
    */
-  import { untrack } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import { Button } from '../ui/index.js'
   import { getBackend } from '../api/backend.js'
   import SourceFolderField from '../home/dialogs/SourceFolderField.svelte'
@@ -34,6 +37,14 @@
   let target = $state('')
   const busy = $derived(checking || dataFolder.busy !== null)
 
+  /** @type {HTMLElement|undefined} */
+  let root = $state()
+
+  // The screen is the window now: focus starts on its first way out.
+  onMount(() => {
+    root?.querySelector('button')?.focus()
+  })
+
   async function retry() {
     if (busy) return
     checking = true
@@ -52,7 +63,7 @@
   }
 </script>
 
-<div class="blocked" role="alertdialog" aria-modal="true" aria-labelledby="data-folder-title" aria-describedby="data-folder-reason">
+<div bind:this={root} class="blocked" role="alertdialog" aria-modal="true" aria-labelledby="data-folder-title" aria-describedby="data-folder-reason">
   <div class="card">
     <h1 id="data-folder-title">{t('shell.dataFolder.title')}</h1>
     <p id="data-folder-reason" class="reason">{dataFolder.status?.reason || t('shell.dataFolder.reasonUnknown')}</p>

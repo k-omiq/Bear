@@ -62,3 +62,39 @@ it('shows a refusal and stays', async () => {
   await waitFor(() => expect(screen.getByText(t('settings.dataFolder.failed', { detail: '/tmp is not a data folder (it has no manga-library.json).' }))).toBeTruthy())
   expect(dataFolder.status?.mode).toBe('unavailable')
 })
+
+it('takes focus on Try again when it comes up', () => {
+  render(DataFolderUnavailable, { props: { backend: /** @type {any} */ ({}) } })
+  expect(document.activeElement).toBe(button(t('shell.dataFolder.retry')))
+})
+
+it('says why an unfinished move holds the folder, and Try again asks again', async () => {
+  const reason = 'Close the typesetter to finish the move.'
+  dataFolder.status = /** @type {any} */ ({ ...UNAVAILABLE, reason })
+  const backend = { dataFolderStatus: vi.fn().mockResolvedValueOnce({ ...UNAVAILABLE, reason }).mockResolvedValueOnce(SHARED) }
+  render(DataFolderUnavailable, { props: { backend: /** @type {any} */ (backend) } })
+  expect(screen.getByText(reason)).toBeTruthy()
+  await fireEvent.click(button(t('shell.dataFolder.retry')))
+  await waitFor(() => expect(backend.dataFolderStatus).toHaveBeenCalledTimes(1))
+  expect(dataFolder.status?.mode).toBe('unavailable')
+  await waitFor(() => expect(button(t('shell.dataFolder.retry')).disabled).toBe(false))
+  await fireEvent.click(button(t('shell.dataFolder.retry')))
+  await waitFor(() => expect(dataFolder.status?.mode).toBe('shared'))
+})
+
+it('asks for the typesetter to be closed when the drive cannot tell, then uses the folder', async () => {
+  const backend = {
+    dataFolderUseExisting: vi.fn()
+      .mockRejectedValueOnce(new Error('typesetter_unknown: This drive cannot tell whether the typesetter is open.'))
+      .mockImplementationOnce(async ({ target }) => ({ ...SHARED, root: target })),
+    dataFolderStatus: vi.fn(async () => UNAVAILABLE),
+  }
+  render(DataFolderUnavailable, { props: { backend: /** @type {any} */ (backend) } })
+  await fireEvent.click(button(t('shell.dataFolder.choose')))
+  await fireEvent.input(screen.getByLabelText(t('shell.dataFolder.pathLabel')), { target: { value: '/Volumes/Other/Manga Library' } })
+  await fireEvent.click(button(t('settings.dataFolder.useConfirm')))
+  await waitFor(() => expect(screen.getByText(t('settings.dataFolder.confirmClosed.body'))).toBeTruthy())
+  await fireEvent.click(button(t('settings.dataFolder.confirmClosed.action')))
+  await waitFor(() => expect(backend.dataFolderUseExisting).toHaveBeenLastCalledWith({ target: '/Volumes/Other/Manga Library', confirmedClosed: true }))
+  expect(dataFolder.status?.mode).toBe('shared')
+})

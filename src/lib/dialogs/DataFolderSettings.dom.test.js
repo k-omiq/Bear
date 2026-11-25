@@ -9,6 +9,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/sv
 import { t } from '../i18n/index.js'
 import { app } from '../state/app.svelte.js'
 import { dataFolder, resetDataFolder } from '../state/datafolder.svelte.js'
+import { jobs, resetJobs } from '../state/jobs.svelte.js'
 import DataFolderSettings from './DataFolderSettings.svelte'
 
 /** @param {Partial<import('../api/backend.js').DataFolderStatus>} [over] */
@@ -56,6 +57,7 @@ afterEach(() => {
   cleanup()
   app.route = route
   resetDataFolder()
+  resetJobs()
 })
 
 describe('Settings > Data folder', () => {
@@ -113,6 +115,21 @@ describe('Settings > Data folder', () => {
     await mount(stub({ ...SHARED, synced: true, typesetterRunning: 'yes' }))
     expect(screen.getByText(t('settings.dataFolder.synced'))).toBeTruthy()
     expect(screen.getByText(t('settings.dataFolder.typesetterOpen'))).toBeTruthy()
+    expect(button(t('settings.dataFolder.move')).disabled).toBe(true)
+    expect(button(t('settings.dataFolder.useExisting')).disabled).toBe(true)
+  })
+
+  it('in Pending, moves with the typesetter open and does not ask to close it', async () => {
+    const root = '/Users/reader/Manga Library'
+    await mount(stub(status({ mode: 'pending', root, typesetterRunning: 'yes' })))
+    expect(screen.queryByText(t('settings.dataFolder.typesetterOpen'))).toBeNull()
+    expect(button(t('settings.dataFolder.moveInto', { path: root })).disabled).toBe(false)
+  })
+
+  it('holds every change while jobs run, and says why', async () => {
+    jobs.list.push(/** @type {any} */ ({ runId: 'run-1', kind: 'clean', chapterId: 'c1', status: 'running', done: 0, total: 3 }))
+    await mount(stub(SHARED))
+    expect(screen.getByText(t('settings.dataFolder.blocked.jobsRunning'))).toBeTruthy()
     expect(button(t('settings.dataFolder.move')).disabled).toBe(true)
     expect(button(t('settings.dataFolder.useExisting')).disabled).toBe(true)
   })
