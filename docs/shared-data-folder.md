@@ -353,7 +353,21 @@ page and writes the message. Setting `saveCleanedTo`:
   unlinked project left alone; autosave during apply blocked.
 - Immutability: no code path writes over an existing raw or cleaned file.
 
-## 11. Later, not in version 1
+## 11. Details each app settled while building
+
+- Pear's library file is `Typesetter/library.json` (`{"schema":1,"app":"pear"}`);
+  the cleaner's is `Cleaner/index.json` plus `Cleaner/library-id.json`.
+- A message whose `sentAt` equals the last applied one is stale.
+- "Cannot tell whether the other app runs" errors start with `typesetter_unknown:` in
+  the cleaner and `CANNOT_TELL:` in Pear; both UIs then ask the user and retry
+  with a confirmation.
+- Each app lists the old `.moved-<date>` trees it made itself (cleaner:
+  `old-copies.json` in the state dir; Pear: localStorage `mt.oldDataCopies`).
+- When a re-cleaned page brings a new raw, Pear keeps the old raw on disk.
+- Every file move in `handoff/` is done by Rust on both sides (dot names are
+  outside Pear's JS file scope).
+
+## 12. Later, not in version 1
 
 - Pear to cleaner ("send back for more cleaning"): `handoff/to-cleaner/`,
   the same rules mirrored.
