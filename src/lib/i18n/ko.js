@@ -115,6 +115,15 @@ export const ko = {
     },
   },
   shell: {
+    dataFolder: {
+      title: '데이터 폴더를 찾을 수 없습니다',
+      reasonUnknown: '데이터 폴더를 찾을 수 없습니다.',
+      body: '드라이브를 다시 연결한 뒤 다시 시도하세요. 또는 다른 데이터 폴더를 고르세요.',
+      retry: '다시 시도',
+      choose: '다른 폴더 선택',
+      pathLabel: '데이터 폴더',
+      pathDescription: '이 앱이나 식자 앱이 이미 설정한 폴더.',
+    },
     action: {
       cancel: '취소',
       close: '닫기',
@@ -158,6 +167,61 @@ export const ko = {
     },
   },
   settings: {
+    dataFolder: {
+      intro: 'Manga Cleaner와 식자 앱이 함께 라이브러리를 두는 폴더 하나입니다. 저장하면 챕터가 그곳으로 보내지고 식자 앱이 가져갑니다.',
+      recovered: '지난 시작 시: {detail}',
+      where: '위치',
+      mode: {
+        legacy: '설정되지 않았습니다. 이 라이브러리는 앱 전용 폴더에 있습니다.',
+        pending: '식자 앱이 {path}에 공유 데이터 폴더를 설정했습니다. 이 라이브러리는 아직 그곳에 없습니다.',
+        shared: '식자 앱과 공유 중입니다.',
+        unavailable: '데이터 폴더를 사용할 수 없습니다. {reason}',
+      },
+      libraryAt: '라이브러리: {path}',
+      synced: '이 폴더는 클라우드 동기화 폴더 안에 있습니다. 동기화로 파일의 로컬 사본이 지워져 라이브러리가 손상될 수 있습니다. 동기화하지 않는 폴더가 더 안전합니다.',
+      typesetterOpen: '먼저 식자 앱을 닫으세요. 데이터 폴더를 사용 중입니다.',
+      blocked: {
+        chapterOpen: '먼저 챕터를 닫으세요. 챕터가 열려 있는 동안에는 라이브러리를 옮길 수 없습니다.',
+        jobsRunning: '실행 중인 작업이 끝날 때까지 기다리세요.',
+      },
+      busy: '라이브러리를 옮기는 중입니다. 몇 분 걸릴 수 있습니다. 앱을 열어 두세요.',
+      deleting: '이전 사본을 삭제하는 중입니다.',
+      confirmClosed: {
+        body: '이 드라이브에서는 식자 앱이 열려 있는지 알 수 없습니다. 앱을 닫은 뒤 확인하세요.',
+        action: '식자 앱을 닫았습니다',
+      },
+      failed: '완료되지 않았습니다: {detail}',
+      newLabel: '새 데이터 폴더',
+      newDescription: '비어 있거나 아직 없는 폴더. 폴더를 고르면 그 안에 Manga Library가 만들어집니다.',
+      setup: '공유 폴더 설정',
+      pendingBody: '라이브러리를 공유 폴더로 옮깁니다. 식자 앱의 데이터는 그대로입니다.',
+      moveInto: '내 라이브러리를 {path}(으)로 옮기기',
+      move: '데이터 폴더 옮기기…',
+      useExisting: '다른 기존 데이터 폴더 사용…',
+      moveLabel: '옮길 위치',
+      moveDescription: '비어 있거나 아직 없는 폴더. 식자 앱의 데이터도 함께 옮겨집니다.',
+      moveConfirm: '옮기기',
+      existingLabel: '기존 데이터 폴더',
+      existingDescription: '이 앱이나 식자 앱이 이미 설정한 폴더. 아무것도 옮기지 않습니다.',
+      useConfirm: '이 폴더 사용',
+      chooserNew: '데이터 폴더를 둘 위치 선택',
+      chooserExisting: '데이터 폴더 선택',
+      oldCopies: {
+        title: '이전 사본',
+        body: '다른 드라이브로 옮기면 이전 폴더는 삭제할 때까지 남아 있습니다.',
+        size: '{bytes:memory}, {date}에 옮김',
+        delete: '삭제',
+        confirm: '이 폴더를 삭제할까요? 되돌릴 수 없습니다.',
+        confirmAction: '영구 삭제',
+      },
+      save: {
+        label: '정리된 페이지 저장',
+        description: '저장하면 페이지는 항상 식자 앱으로 보내집니다. 원본 옆에도를 고르면 스캔 폴더 옆에, 같은 이름 끝에 _cleaned를 붙인 폴더에도 씁니다. 스캔 폴더 자체에는 쓰지 않습니다.',
+        dataFolder: '데이터 폴더만',
+        nextToRaws: '원본 옆에도',
+        failed: '설정을 저장하지 못했습니다. 다시 시도하세요.',
+      },
+    },
     general: {
       appearance: '모양',
       reading: '읽기',
@@ -1015,6 +1079,7 @@ export const ko = {
       },
     },
     section: {
+      dataFolder: '데이터 폴더',
       general: '일반',
       models: '모델',
       cloud: '클라우드',
@@ -1158,6 +1223,12 @@ export const ko = {
     },
   },
   home: {
+    dataFolder: {
+      title: '공유 데이터 폴더',
+      body: '식자 앱이 {path}에 공유 데이터 폴더를 설정했습니다. 클리너 라이브러리를 그곳으로 옮길까요?',
+      move: '옮기기',
+      later: '나중에',
+    },
     section: {
       projects: '프로젝트',
       chapters: '챕터',
@@ -2825,6 +2896,16 @@ export const ko = {
     },
   },
   notice: {
+    save: {
+      sent: {
+        other: '식자 앱으로 {count}페이지를 보냈습니다.',
+      },
+      sentAndSaved: {
+        other: '식자 앱으로 {count}페이지를 보내고 {path}에 저장했습니다.',
+      },
+      needsDataFolder: '저장하려면 공유 데이터 폴더가 필요합니다. 설정의 데이터 폴더에서 설정하세요.',
+      failed: '챕터를 식자 앱으로 보내지 못했습니다: {detail}',
+    },
     pages: {
       pinned: '{page}페이지에는 작업이 있어 자리를 지키므로 아무것도 바꾸지 않았습니다.',
       longstrip: '이 세로 스크롤에는 작업이 있습니다. 페이지는 맨 끝에만 추가할 수 있습니다.',

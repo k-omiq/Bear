@@ -32,6 +32,7 @@ import { DEFAULT_POINTER_MODIFIER, isApplePlatform, modifierCap } from '../short
 import { session, setCloneSourceModifier, setTheme } from '../state/session.svelte.js'
 import { closeModal } from '../state/app.svelte.js'
 import SettingsDialog from './SettingsDialog.svelte'
+import { dataFolder } from '../state/datafolder.svelte.js'
 
 vi.mock('../state/app.svelte.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -58,6 +59,7 @@ const LABELS = {
   postprocessing: 'settings.section.postprocessing',
   denoise: 'settings.section.denoise',
   export: 'settings.section.export',
+  dataFolder: 'settings.section.dataFolder',
   performance: 'settings.section.performance',
   shortcuts: 'settings.section.shortcuts',
   beta: 'settings.section.beta',
@@ -320,6 +322,18 @@ describe('the tab list', () => {
     open()
     await fireEvent.keyDown(window, { key: 'Escape' })
     expect(closeModal).toHaveBeenCalledWith(null)
+  })
+
+  it('stays open while a data folder move runs', async () => {
+    dataFolder.busy = 'move'
+    try {
+      const { rendered } = open()
+      await fireEvent.keyDown(window, { key: 'Escape' })
+      await fireEvent.click(rendered.getByRole('button', { name: t('shell.action.done') }))
+      expect(closeModal).not.toHaveBeenCalled()
+    } finally {
+      dataFolder.busy = null
+    }
   })
 
   it('has no cloud pointer in General: Cloud is a section of its own', () => {

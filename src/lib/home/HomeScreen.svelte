@@ -18,6 +18,7 @@
   import LibraryView from './LibraryView.svelte'
   import ChaptersView from './ChaptersView.svelte'
   import { onJobSettled } from '../state/jobs.svelte.js'
+  import DataFolderCard from './DataFolderCard.svelte'
 
   // Mount-time load. Home remounts whenever the editor is left, so the numbers
   // are refetched after a cleaning run without watching anything.
@@ -38,6 +39,7 @@
 <div class="home">
   <div class="inner">
     <HomeHeader />
+    <DataFolderCard onmoved={() => loadLibrary()} />
 
     <div class="content">
       {#if inChapters}

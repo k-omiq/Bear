@@ -115,6 +115,15 @@ export const pt = {
     },
   },
   shell: {
+    dataFolder: {
+      title: 'Pasta de dados não encontrada',
+      reasonUnknown: 'A pasta de dados não foi encontrada.',
+      body: 'Reconecte a unidade e tente de novo. Ou escolha outra pasta de dados.',
+      retry: 'Tentar de novo',
+      choose: 'Escolher outra pasta',
+      pathLabel: 'Pasta de dados',
+      pathDescription: 'Uma pasta que este app ou o diagramador já configurou.',
+    },
     action: {
       cancel: 'Cancelar',
       close: 'Fechar',
@@ -159,6 +168,61 @@ export const pt = {
     },
   },
   settings: {
+    dataFolder: {
+      intro: 'Uma pasta onde o Manga Cleaner e o diagramador guardam as suas bibliotecas. Salvar envia um capítulo para lá, e o diagramador o recebe.',
+      recovered: 'No último início: {detail}',
+      where: 'Local',
+      mode: {
+        legacy: 'Não configurada. Esta biblioteca fica na pasta própria do app.',
+        pending: 'O diagramador configurou uma pasta de dados compartilhada em {path}. Esta biblioteca ainda não está nela.',
+        shared: 'Compartilhada com o diagramador.',
+        unavailable: 'Não é possível usar a pasta de dados. {reason}',
+      },
+      libraryAt: 'Biblioteca: {path}',
+      synced: 'Esta pasta está dentro de uma pasta sincronizada com a nuvem. A sincronização pode remover as cópias locais e quebrar a biblioteca. Uma pasta não sincronizada é mais segura.',
+      typesetterOpen: 'Feche o diagramador primeiro. Ele está usando a pasta de dados.',
+      blocked: {
+        chapterOpen: 'Feche o capítulo primeiro. A biblioteca não pode ser movida com um capítulo aberto.',
+        jobsRunning: 'Aguarde os trabalhos em andamento terminarem.',
+      },
+      busy: 'Movendo a biblioteca. Isso pode levar alguns minutos. Mantenha o app aberto.',
+      deleting: 'Excluindo a cópia antiga.',
+      confirmClosed: {
+        body: 'Esta unidade não consegue saber se o diagramador está aberto. Feche-o e confirme.',
+        action: 'O diagramador está fechado',
+      },
+      failed: 'Não concluído: {detail}',
+      newLabel: 'Nova pasta de dados',
+      newDescription: 'Uma pasta vazia, ou que ainda não existe. Ao escolher uma pasta, Manga Library é criada dentro dela.',
+      setup: 'Configurar pasta compartilhada',
+      pendingBody: 'Sua biblioteca é movida para a pasta compartilhada. Os dados do diagramador continuam como estão.',
+      moveInto: 'Mover minha biblioteca para {path}',
+      move: 'Mover a pasta de dados…',
+      useExisting: 'Usar outra pasta de dados existente…',
+      moveLabel: 'Mover para',
+      moveDescription: 'Uma pasta vazia, ou que ainda não existe. Os dados do diagramador também são movidos.',
+      moveConfirm: 'Mover',
+      existingLabel: 'Pasta de dados existente',
+      existingDescription: 'Uma pasta que este app ou o diagramador já configurou. Nada é movido.',
+      useConfirm: 'Usar esta pasta',
+      chooserNew: 'Escolha onde colocar a pasta de dados',
+      chooserExisting: 'Escolha uma pasta de dados',
+      oldCopies: {
+        title: 'Cópias antigas',
+        body: 'Uma mudança para outra unidade mantém a pasta antiga até você excluí-la.',
+        size: '{bytes:memory}, movida em {date}',
+        delete: 'Excluir',
+        confirm: 'Excluir esta pasta? Não é possível desfazer.',
+        confirmAction: 'Excluir definitivamente',
+      },
+      save: {
+        label: 'Salvar páginas limpas',
+        description: 'Salvar sempre envia as páginas ao diagramador. Também ao lado dos originais as grava ainda numa pasta ao lado dos seus scans, com o mesmo nome e _cleaned no final. A sua pasta de scans nunca é alterada.',
+        dataFolder: 'Só a pasta de dados',
+        nextToRaws: 'Também ao lado dos originais',
+        failed: 'Não foi possível salvar a configuração. Tente de novo.',
+      },
+    },
     general: {
       appearance: 'Aparência',
       reading: 'Leitura',
@@ -1023,6 +1087,7 @@ export const pt = {
       },
     },
     section: {
+      dataFolder: 'Pasta de dados',
       general: 'Geral',
       models: 'Modelos',
       cloud: 'Nuvem',
@@ -1169,6 +1234,12 @@ export const pt = {
     },
   },
   home: {
+    dataFolder: {
+      title: 'Pasta de dados compartilhada',
+      body: 'O diagramador configurou uma pasta de dados compartilhada em {path}. Mover para lá a sua biblioteca de limpeza?',
+      move: 'Mover',
+      later: 'Depois',
+    },
     section: {
       projects: 'Projetos',
       chapters: 'Capítulos',
@@ -2874,6 +2945,18 @@ export const pt = {
     },
   },
   notice: {
+    save: {
+      sent: {
+        one: '1 página enviada ao diagramador.',
+        other: '{count} páginas enviadas ao diagramador.',
+      },
+      sentAndSaved: {
+        one: '1 página enviada ao diagramador e salva em {path}.',
+        other: '{count} páginas enviadas ao diagramador e salvas em {path}.',
+      },
+      needsDataFolder: 'Salvar precisa da pasta de dados compartilhada. Configure-a em Configurações, Pasta de dados.',
+      failed: 'Não foi possível enviar o capítulo ao diagramador: {detail}',
+    },
     pages: {
       pinned: 'A página {page} tem trabalho e mantém o seu lugar, então nada mudou.',
       longstrip: 'Esta tira longa tem trabalho. Só dá para adicionar páginas no fim.',

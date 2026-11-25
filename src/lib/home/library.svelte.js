@@ -23,6 +23,7 @@ import {
   openProject,
 } from '../state/app.svelte.js'
 import { requestResume } from '../state/editor.svelte.js'
+import { isUnavailableError, loadDataFolder } from '../state/datafolder.svelte.js'
 
 /**
  * @typedef {import('../api/backend.js').ApiProject} ApiProject
@@ -64,8 +65,11 @@ export async function loadLibrary() {
     library.projects = await getBackend().listProjects()
     everLoaded = true
     library.status = 'ready'
-  } catch {
+  } catch (error) {
     library.status = 'failed'
+    // The data folder went away (an unplugged drive): the shell shows its
+    // blocking screen once the status says so.
+    if (isUnavailableError(error)) void loadDataFolder()
   } finally {
     inFlight = false
   }

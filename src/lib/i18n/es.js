@@ -115,6 +115,15 @@ export const es = {
     },
   },
   shell: {
+    dataFolder: {
+      title: 'No se encuentra la carpeta de datos',
+      reasonUnknown: 'No se encuentra la carpeta de datos.',
+      body: 'Vuelve a conectar la unidad e inténtalo de nuevo. O elige otra carpeta de datos.',
+      retry: 'Reintentar',
+      choose: 'Elegir otra carpeta',
+      pathLabel: 'Carpeta de datos',
+      pathDescription: 'Una carpeta que esta app o el maquetador ya configuró.',
+    },
     action: {
       cancel: 'Cancelar',
       close: 'Cerrar',
@@ -159,6 +168,61 @@ export const es = {
     },
   },
   settings: {
+    dataFolder: {
+      intro: 'Una carpeta donde Manga Cleaner y el maquetador guardan sus bibliotecas. Guardar envía un capítulo allí y el maquetador lo recoge.',
+      recovered: 'En el último inicio: {detail}',
+      where: 'Ubicación',
+      mode: {
+        legacy: 'Sin configurar. Esta biblioteca está en la carpeta propia de la app.',
+        pending: 'El maquetador configuró una carpeta de datos compartida en {path}. Esta biblioteca aún no está en ella.',
+        shared: 'Compartida con el maquetador.',
+        unavailable: 'No se puede usar la carpeta de datos. {reason}',
+      },
+      libraryAt: 'Biblioteca: {path}',
+      synced: 'Esta carpeta está dentro de una carpeta sincronizada con la nube. La sincronización puede quitar las copias locales y romper la biblioteca. Es más seguro usar una carpeta sin sincronizar.',
+      typesetterOpen: 'Cierra primero el maquetador. Está usando la carpeta de datos.',
+      blocked: {
+        chapterOpen: 'Cierra primero el capítulo. La biblioteca no se puede mover con un capítulo abierto.',
+        jobsRunning: 'Espera a que terminen los trabajos en curso.',
+      },
+      busy: 'Moviendo la biblioteca. Puede tardar unos minutos. Deja la app abierta.',
+      deleting: 'Eliminando la copia antigua.',
+      confirmClosed: {
+        body: 'Esta unidad no puede saber si el maquetador está abierto. Ciérralo y confirma.',
+        action: 'El maquetador está cerrado',
+      },
+      failed: 'No se hizo: {detail}',
+      newLabel: 'Nueva carpeta de datos',
+      newDescription: 'Una carpeta vacía o que aún no existe. Al elegir una carpeta, se crea Manga Library dentro.',
+      setup: 'Configurar carpeta compartida',
+      pendingBody: 'Tu biblioteca se mueve a la carpeta compartida. Los datos del maquetador no cambian.',
+      moveInto: 'Mover mi biblioteca a {path}',
+      move: 'Mover la carpeta de datos…',
+      useExisting: 'Usar otra carpeta de datos existente…',
+      moveLabel: 'Mover a',
+      moveDescription: 'Una carpeta vacía o que aún no existe. Los datos del maquetador también se mueven.',
+      moveConfirm: 'Mover',
+      existingLabel: 'Carpeta de datos existente',
+      existingDescription: 'Una carpeta que esta app o el maquetador ya configuró. No se mueve nada.',
+      useConfirm: 'Usar esta carpeta',
+      chooserNew: 'Elige dónde poner la carpeta de datos',
+      chooserExisting: 'Elige una carpeta de datos',
+      oldCopies: {
+        title: 'Copias antiguas',
+        body: 'Al mover a otra unidad, la carpeta antigua se conserva hasta que la eliminas.',
+        size: '{bytes:memory}, movida el {date}',
+        delete: 'Eliminar',
+        confirm: '¿Eliminar esta carpeta? No se puede deshacer.',
+        confirmAction: 'Eliminar definitivamente',
+      },
+      save: {
+        label: 'Guardar páginas limpias',
+        description: 'Guardar siempre envía las páginas al maquetador. También junto a los originales las escribe en una carpeta junto a tus escaneos, con el mismo nombre y _cleaned al final. Tu carpeta de escaneos nunca se modifica.',
+        dataFolder: 'Solo la carpeta de datos',
+        nextToRaws: 'También junto a los originales',
+        failed: 'No se pudo guardar el ajuste. Inténtalo de nuevo.',
+      },
+    },
     general: {
       appearance: 'Apariencia',
       reading: 'Lectura',
@@ -1023,6 +1087,7 @@ export const es = {
       },
     },
     section: {
+      dataFolder: 'Carpeta de datos',
       general: 'General',
       models: 'Modelos',
       cloud: 'Nube',
@@ -1169,6 +1234,12 @@ export const es = {
     },
   },
   home: {
+    dataFolder: {
+      title: 'Carpeta de datos compartida',
+      body: 'El maquetador configuró una carpeta de datos compartida en {path}. ¿Mover allí tu biblioteca de limpieza?',
+      move: 'Mover',
+      later: 'Más tarde',
+    },
     section: {
       projects: 'Proyectos',
       chapters: 'Capítulos',
@@ -2874,6 +2945,18 @@ export const es = {
     },
   },
   notice: {
+    save: {
+      sent: {
+        one: 'Se envió 1 página al maquetador.',
+        other: 'Se enviaron {count} páginas al maquetador.',
+      },
+      sentAndSaved: {
+        one: 'Se envió 1 página al maquetador y se guardó en {path}.',
+        other: 'Se enviaron {count} páginas al maquetador y se guardaron en {path}.',
+      },
+      needsDataFolder: 'Guardar necesita la carpeta de datos compartida. Configúrala en Ajustes, en Carpeta de datos.',
+      failed: 'No se pudo enviar el capítulo al maquetador: {detail}',
+    },
     pages: {
       pinned: 'La página {page} tiene trabajo y conserva su lugar, así que no se cambió nada.',
       longstrip: 'Esta tira larga tiene trabajo. Solo se pueden añadir páginas al final.',

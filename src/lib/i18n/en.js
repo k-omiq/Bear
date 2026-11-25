@@ -148,6 +148,15 @@ export const en = {
   /* shell - dialog and notice furniture that belongs to no one screen   */
   /* ================================================================== */
   shell: {
+    dataFolder: {
+      title: 'Data folder not found',
+      reasonUnknown: 'The data folder cannot be found.',
+      body: 'Reconnect the drive, then try again. Or choose another data folder.',
+      retry: 'Try again',
+      choose: 'Choose another folder',
+      pathLabel: 'Data folder',
+      pathDescription: 'A folder this app or the typesetter already set up.',
+    },
     action: {
       cancel: 'Cancel',
       close: 'Close',
@@ -211,6 +220,61 @@ export const en = {
   /* settings - the Settings dialog's own rows                           */
   /* ================================================================== */
   settings: {
+    dataFolder: {
+      intro: 'One folder that Manga Cleaner and the typesetter both keep their libraries in. Save sends a chapter there, and the typesetter picks it up.',
+      recovered: 'At the last start: {detail}',
+      where: 'Location',
+      mode: {
+        legacy: 'Not set up. This library is kept in the app\'s own folder.',
+        pending: 'The typesetter set up a shared data folder at {path}. This library is not in it yet.',
+        shared: 'Shared with the typesetter.',
+        unavailable: 'The data folder cannot be used. {reason}',
+      },
+      libraryAt: 'Library: {path}',
+      synced: 'This folder is inside a cloud-synced folder. Syncing can remove local copies of files and break the library. A folder that is not synced is safer.',
+      typesetterOpen: 'Close the typesetter first. It is using the data folder.',
+      blocked: {
+        chapterOpen: 'Close the chapter first. The library cannot move while a chapter is open.',
+        jobsRunning: 'Wait for the running jobs to finish.',
+      },
+      busy: 'Moving the library. This can take a few minutes. Keep the app open.',
+      deleting: 'Deleting the old copy.',
+      confirmClosed: {
+        body: 'This drive cannot tell whether the typesetter is open. Close it, then confirm.',
+        action: 'The typesetter is closed',
+      },
+      failed: 'Not done: {detail}',
+      newLabel: 'New data folder',
+      newDescription: 'An empty folder, or one that does not exist yet. Choosing a folder puts Manga Library inside it.',
+      setup: 'Set up shared folder',
+      pendingBody: 'Your library moves into the shared folder. The typesetter\'s data stays as it is.',
+      moveInto: 'Move my library into {path}',
+      move: 'Move data folder…',
+      useExisting: 'Use another existing data folder…',
+      moveLabel: 'Move to',
+      moveDescription: 'An empty folder, or one that does not exist yet. The typesetter\'s data moves too.',
+      moveConfirm: 'Move',
+      existingLabel: 'Existing data folder',
+      existingDescription: 'A folder this app or the typesetter already set up. Nothing is moved.',
+      useConfirm: 'Use this folder',
+      chooserNew: 'Choose where to put the data folder',
+      chooserExisting: 'Choose a data folder',
+      oldCopies: {
+        title: 'Old copies',
+        body: 'A move to another drive keeps the old folder until you delete it.',
+        size: '{bytes:memory}, moved {date}',
+        delete: 'Delete',
+        confirm: 'Delete this folder? This cannot be undone.',
+        confirmAction: 'Delete for good',
+      },
+      save: {
+        label: 'Save cleaned pages',
+        description: 'Save always sends the pages to the typesetter. Also next to the raws writes them to a folder beside your scans, named like it with _cleaned at the end. Your scans folder is never written to.',
+        dataFolder: 'Data folder only',
+        nextToRaws: 'Also next to the raws',
+        failed: 'The setting could not be saved. Try again.',
+      },
+    },
     // General's three groups.
     general: {
       appearance: 'Appearance',
@@ -1228,6 +1292,7 @@ export const en = {
       },
     },
     section: {
+      dataFolder: 'Data folder',
       general: 'General',
       models: 'Models',
       cloud: 'Cloud',
@@ -1411,6 +1476,12 @@ export const en = {
   /* home - library, chapters, and Home's four dialogs                   */
   /* ================================================================== */
   home: {
+    dataFolder: {
+      title: 'Shared data folder',
+      body: 'The typesetter set up a shared data folder at {path}. Move your cleaner library there?',
+      move: 'Move',
+      later: 'Later',
+    },
     section: {
       projects: 'Projects',
       chapters: 'Chapters',
@@ -3634,6 +3705,18 @@ export const en = {
   /* something that already happened.                                    */
   /* ================================================================== */
   notice: {
+    save: {
+      sent: {
+        one: 'Sent 1 page to the typesetter.',
+        other: 'Sent {count} pages to the typesetter.',
+      },
+      sentAndSaved: {
+        one: 'Sent 1 page to the typesetter and saved it to {path}.',
+        other: 'Sent {count} pages to the typesetter and saved them to {path}.',
+      },
+      needsDataFolder: 'Save needs the shared data folder. Set it up in Settings under Data folder.',
+      failed: 'Could not send the chapter to the typesetter: {detail}',
+    },
     pages: {
       pinned: 'Page {page} has work on it and keeps its place, so nothing was changed.',
       longstrip: 'This longstrip has work on it. Pages can only be added at its end.',

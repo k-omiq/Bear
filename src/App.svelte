@@ -14,6 +14,9 @@
    *  6. The first-launch download offer - the one thing that has to be decided
    *     at launch rather than on a screen.
    *  7. The background jobs' subscription and the quit guard's question.
+   *  8. The data folder: Unavailable is a blocking screen in place of every
+   *     route, and Home waits for the first status so it never lists a
+   *     library that is not there.
    */
   import { app, dismissNotice } from './lib/state/app.svelte.js'
   import { writeSettingsSerialized } from './lib/state/settingswrite.js'
@@ -45,6 +48,9 @@
   import { jobs, startJobs } from './lib/state/jobs.svelte.js'
   import { startNanoBananaCrops } from './lib/editor/nanobananacrop.svelte.js'
   import QuitJobsDialog from './lib/dialogs/QuitJobsDialog.svelte'
+  import DataFolderUnavailable from './lib/shell/DataFolderUnavailable.svelte'
+  import { dataFolder, loadDataFolder } from './lib/state/datafolder.svelte.js'
+  import { openSettings } from './lib/dialogs/settingslinks.js'
   import { untrack } from 'svelte'
 
   // Follow `prefers-color-scheme` for the life of the app, not just at load.
@@ -103,6 +109,19 @@
     const covered = downloadFailureShown(event, { firstLaunch, topModal: app.modals.at(-1)?.kind ?? null })
     reportModelDownloadFailure(event, { covered })
   }))
+
+  // The data folder's mode decides what the window can show at all. Read at
+  // boot, and again when the window comes back to the front: the typesetter
+  // may have set one up meanwhile (Pending), or its drive may be back.
+  $effect(() => untrack(() => void loadDataFolder()))
+  $effect(() => {
+    const refresh = () => {
+      if (dataFolder.busy === null && app.route.name !== 'editor') void loadDataFolder()
+    }
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  })
+  const unavailable = $derived(dataFolder.status?.mode === 'unavailable')
 
   // Background jobs: runs and denoises outlive the dialog or the editor that
   // started them, so the one subscription that follows them is here, with the
@@ -166,6 +185,11 @@
     'notice.run.modelsMissing': {
       labelKey: 'tools.target.chooseModels',
       open: (notice) => openModelSettings(typeof notice.params?.model === 'string' ? notice.params.model : null),
+    },
+    // Save outside Shared mode: the section that sets the folder up.
+    'notice.save.needsDataFolder': {
+      labelKey: 'settings.section.dataFolder',
+      open: () => openSettings('dataFolder'),
     },
     'notice.run.engineFault': {
       labelKey: 'settings.section.performance',
@@ -321,15 +345,19 @@
   // while individual notices remain dismissible.
 </script>
 
-<KeyboardLayer />
+{#if unavailable}
+  <DataFolderUnavailable />
+{:else}
+  <KeyboardLayer />
 
-<div class="shell">
-  {#if app.route.name === 'editor'}
-    <EditorScreen />
-  {:else}
-    <HomeScreen />
-  {/if}
-</div>
+  <div class="shell">
+    {#if app.route.name === 'editor'}
+      <EditorScreen />
+    {:else if dataFolder.checked}
+      <HomeScreen />
+    {/if}
+  </div>
+{/if}
 
 <!-- The bottom-left corner, floor first: the loaded-models panel sits on the
      14px anchor and the notice stack rises above it. Both are `z-index: 10`,
@@ -356,7 +384,9 @@
   bottom={14 + (panelHeight > 0 ? panelHeight + GAP : 0)}
 />
 
-<ModalHost />
+{#if !unavailable}
+  <ModalHost />
+{/if}
 
 <!-- The offer waits for an empty modal stack rather than joining it. `Modal`
      captures focus and answers Escape on `window`, so two mounted dialogs
@@ -370,7 +400,7 @@
      the run and everything drawn from it are in the store rather than in the
      component: the offer comes back as it was when the stack empties, with the
      transfer it started still running. -->
-{#if firstLaunch.open && app.modals.length === 0}
+{#if firstLaunch.open && app.modals.length === 0 && !unavailable}
   <FirstLaunchDialog />
 {/if}
 
