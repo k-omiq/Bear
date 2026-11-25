@@ -218,10 +218,19 @@ pub fn library_id(root: &Path) -> Option<String> {
     if !root.is_dir() {
         return None;
     }
+    // Written whole under a name of its own, then linked to the real name,
+    // which fails if another writer got there first: two first Saves at once
+    // must not mint two ids.
     let id = new_uuid();
     let body = serde_json::to_vec_pretty(&serde_json::json!({ "schema": 1, "libraryId": id })).ok()?;
-    write_atomic(&path, &body).ok()?;
-    Some(id)
+    let tmp = root.join(format!(".{LIBRARY_ID_FILE}.{id}.tmp"));
+    std::fs::write(&tmp, &body).ok()?;
+    let linked = std::fs::hard_link(&tmp, &path);
+    let _ = std::fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => Some(id),
+        Err(_) => read_json(&path).and_then(|v| v.get("libraryId")?.as_str().map(str::to_owned)),
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -293,7 +302,7 @@ pub fn resolve(pointer: PointerRead, legacy: &Path) -> Resolved {
 
 static RESOLVED: RwLock<Option<Resolved>> = RwLock::new(None);
 /// `locks/cleaner.lock`, held while this process runs with a shared folder.
-static HELD: Mutex<Option<File>> = Mutex::new(None);
+static HELD: Mutex<Option<(PathBuf, File)>> = Mutex::new(None);
 
 /// The directory that holds the pointer, the move lock and the journal.
 pub fn state_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -333,7 +342,14 @@ fn current(app: &tauri::AppHandle) -> Result<Resolved, String> {
 /// there to move) creates it: the marker has just proved the folder is the
 /// right one, so this is not the implicit creation the contract forbids.
 pub fn refresh(app: &tauri::AppHandle) -> Result<Resolved, String> {
-    let resolved = resolve(read_pointer(&pointer_file(app)?), &legacy_dir(app)?);
+    let blocked = settle_journal(&state_root(app)?);
+    let mut resolved = resolve(read_pointer(&pointer_file(app)?), &legacy_dir(app)?);
+    if let Some(reason) = blocked {
+        // While a journal exists no library opens at either end of the move.
+        resolved.mode = Mode::Unavailable;
+        resolved.library = None;
+        resolved.reason = Some(reason);
+    }
     if resolved.mode == Mode::Shared {
         if let Some(own) = &resolved.library {
             let _ = std::fs::create_dir(own);
@@ -344,8 +360,35 @@ pub fn refresh(app: &tauri::AppHandle) -> Result<Resolved, String> {
     Ok(resolved)
 }
 
+/// A journal left by either app: finish it now if that can be done, else say
+/// why not. Not while this process is the one moving.
+fn settle_journal(state: &Path) -> Option<String> {
+    if !journal_exists(state) {
+        return None;
+    }
+    if MOVING.load(std::sync::atomic::Ordering::SeqCst) {
+        return Some("data_folder_moving: The data folder is being moved.".into());
+    }
+    match recover(state) {
+        Ok(said) => {
+            if said.is_some() {
+                *RECOVERED.lock().unwrap_or_else(|p| p.into_inner()) = said;
+            }
+            journal_exists(state).then(|| "A move of the data folder is not finished.".into())
+        }
+        Err(reason) => Some(reason),
+    }
+}
+
 fn hold_lock(root: Option<&Path>) {
     let mut held = HELD.lock().unwrap_or_else(|p| p.into_inner());
+    // Kept, not let go and taken again: in that gap the typesetter would see
+    // this app as closed.
+    if let (Some(root), Some((at, _))) = (root, held.as_ref()) {
+        if at == root {
+            return;
+        }
+    }
     *held = None;
     let Some(root) = root else { return };
     let dir = root.join(LOCKS_DIR);
@@ -353,7 +396,7 @@ fn hold_lock(root: Option<&Path>) {
         return;
     }
     match cleaner_core::project::lock::try_exclusive(&dir.join(OWN_LOCK)) {
-        Ok(Some(file)) => *held = Some(file),
+        Ok(Some(file)) => *held = Some((root.to_path_buf(), file)),
         Ok(None) => eprintln!("manga-cleaner: another Manga Cleaner holds {}", dir.join(OWN_LOCK).display()),
         Err(error) => eprintln!("manga-cleaner: {}: cannot lock: {error}", dir.join(OWN_LOCK).display()),
     }
@@ -367,7 +410,16 @@ fn release_lock() {
 /// so an Unavailable folder refuses every library call instead of letting one
 /// create an empty library where the drive used to be.
 pub fn library_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let resolved = current(app)?;
+    if MOVING.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("data_folder_moving: The data folder is being moved. Wait until it is done.".into());
+    }
+    let mut resolved = current(app)?;
+    // The folder can go while the app runs (a drive unplugged, a share
+    // unmounted). One look at the marker per call catches it before anything
+    // below creates a folder where the library used to be.
+    if resolved.mode == Mode::Shared && !resolved.root().is_some_and(|root| root.join(MARKER).is_file()) {
+        resolved = refresh(app)?;
+    }
     resolved.library.ok_or_else(|| format!("data_folder_unavailable: {}", resolved.reason.unwrap_or_default()))
 }
 
@@ -409,7 +461,7 @@ pub fn take_move_lock(state: &Path) -> Result<MoveLock, String> {
     std::fs::create_dir_all(state).map_err(|e| format!("{}: {e}", state.display()))?;
     match cleaner_core::project::lock::try_exclusive(&state.join(MOVE_LOCK)) {
         Ok(Some(file)) => Ok(MoveLock(file)),
-        Ok(None) => Err("The typesetter is moving the data folder right now. Try again when it is done.".into()),
+        Ok(None) => Err("The data folder is being moved right now. Try again when that is done.".into()),
         Err(error) => Err(format!("{}: {error}", state.join(MOVE_LOCK).display())),
     }
 }
@@ -422,22 +474,44 @@ pub enum Phase {
     Switched,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    /// One app's own library into `<root>/<App>/`: a first setup or an adopt.
+    Setup,
+    /// The whole data folder.
+    Move,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Method {
+    Rename,
+    Copy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalPointer {
+    pub path: PathBuf,
+    pub folder_id: String,
+}
+
+/// `move-journal.json`, the one schema both apps write and read (contract
+/// section 7), so either app can finish a move the other started.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Journal {
     pub schema: u32,
     pub app: String,
+    pub kind: Kind,
+    pub method: Method,
     pub from: PathBuf,
     pub to: PathBuf,
-    /// The pointer file, and what it says once the move is done.
     pub pointer_file: PathBuf,
-    pub pointer_path: PathBuf,
-    pub folder_id: String,
+    pub pointer: JournalPointer,
     pub started_at: String,
     pub phase: Phase,
-    /// The move went by copy, so the old tree is to be set aside.
-    #[serde(default)]
-    pub copied: bool,
 }
 
 fn write_journal(state: &Path, journal: &Journal) -> Result<(), String> {
@@ -445,8 +519,22 @@ fn write_journal(state: &Path, journal: &Journal) -> Result<(), String> {
     write_atomic(&state.join(JOURNAL), &body).map_err(|e| format!("{}: {e}", state.display()))
 }
 
-fn read_journal(state: &Path) -> Option<Journal> {
-    serde_json::from_slice(&std::fs::read(state.join(JOURNAL)).ok()?).ok()
+/// `Ok(None)`: no journal. `Err`: a journal this build cannot act on, which
+/// is left exactly where it is.
+fn read_journal(state: &Path) -> Result<Option<Journal>, String> {
+    let bytes = match std::fs::read(state.join(JOURNAL)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{}: {error}", state.join(JOURNAL).display())),
+        Ok(bytes) => bytes,
+    };
+    match serde_json::from_slice::<Journal>(&bytes) {
+        Ok(journal) if journal.schema == 1 => Ok(Some(journal)),
+        _ => Err("An unfinished move of the data folder needs a newer version of this app to finish.".into()),
+    }
+}
+
+pub fn journal_exists(state: &Path) -> bool {
+    state.join(JOURNAL).exists()
 }
 
 fn partial_of(to: &Path) -> PathBuf {
@@ -489,20 +577,44 @@ fn set_aside(state: &Path, from: &Path) -> Result<(), String> {
     save_old_copies(state, &list)
 }
 
-/// Finish or undo whatever move a crash interrupted. Run at start, before
-/// anything reads the library. Idempotent.
+/// Finish or undo whatever move a crash interrupted, the contract's section 7
+/// recovery, whichever app wrote the journal. Idempotent. `Ok(Some)` says
+/// what was done; `Err` is why it cannot be done yet, and the app stays
+/// Unavailable until it can (no library opens at `from` or `to` while a
+/// journal exists).
 pub fn recover(state: &Path) -> Result<Option<String>, String> {
-    let Some(mut journal) = read_journal(state) else { return Ok(None) };
+    let Some(mut journal) = read_journal(state)? else { return Ok(None) };
     let _lock = take_move_lock(state)?;
-    let pointer = Pointer { path: journal.pointer_path.clone(), folder_id: journal.folder_id.clone() };
+    // Read again under the lock: the other app may have just finished it.
+    let Some(again) = read_journal(state)? else { return Ok(None) };
+    journal = again;
+    if journal.kind == Kind::Move {
+        for root in [&journal.from, &journal.to] {
+            if typesetter_running(root) == Running::Yes {
+                return Err("Close the typesetter so the data folder move can finish.".into());
+            }
+        }
+    }
+    let pointer = Pointer { path: journal.pointer.path.clone(), folder_id: journal.pointer.folder_id.clone() };
     if journal.phase == Phase::Copying {
-        if journal.to.exists() && !journal.from.exists() {
-            // The one-rename move happened; only the pointer was missing.
-            journal.phase = Phase::Copied;
-        } else {
-            let _ = std::fs::remove_dir_all(partial_of(&journal.to));
-            let _ = std::fs::remove_file(state.join(JOURNAL));
-            return Ok(Some(format!("A move of the data folder was stopped. Your data is still at {}.", journal.from.display())));
+        match journal.method {
+            Method::Rename if journal.to.exists() && !journal.from.exists() => journal.phase = Phase::Copied,
+            Method::Rename => {
+                let _ = std::fs::remove_file(state.join(JOURNAL));
+                return Ok(Some(format!("A move of the data folder was stopped. Your data is still at {}.", journal.from.display())));
+            }
+            // Only while `from` is whole: the copy started from an absent or
+            // empty `to`, so anything there is this move's own copy.
+            Method::Copy if journal.from.exists() => {
+                let _ = std::fs::remove_dir_all(partial_of(&journal.to));
+                if journal.to.exists() {
+                    std::fs::remove_dir_all(&journal.to).map_err(|e| format!("{}: {e}", journal.to.display()))?;
+                }
+                let _ = std::fs::remove_file(state.join(JOURNAL));
+                return Ok(Some(format!("A move of the data folder was stopped. Your data is still at {}.", journal.from.display())));
+            }
+            Method::Copy if journal.to.exists() => journal.phase = Phase::Copied,
+            Method::Copy => return Err(format!("Neither {} nor {} is there. Reconnect the drive.", journal.from.display(), journal.to.display())),
         }
     }
     if journal.phase == Phase::Copied {
@@ -510,7 +622,7 @@ pub fn recover(state: &Path) -> Result<Option<String>, String> {
         journal.phase = Phase::Switched;
         write_journal(state, &journal)?;
     }
-    if journal.copied {
+    if journal.method == Method::Copy {
         set_aside(state, &journal.from)?;
     }
     let _ = std::fs::remove_file(state.join(JOURNAL));
@@ -522,6 +634,7 @@ pub fn recover(state: &Path) -> Result<Option<String>, String> {
 pub struct MoveRequest<'a> {
     pub state: &'a Path,
     pub pointer_file: &'a Path,
+    pub kind: Kind,
     pub from: &'a Path,
     pub to: &'a Path,
     pub pointer: Pointer,
@@ -530,13 +643,30 @@ pub struct MoveRequest<'a> {
     pub verify_pages: bool,
 }
 
+/// Set while this process moves a tree: every library call is refused, so no
+/// chapter opens and no run starts mid-move.
+static MOVING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+struct Moving;
+impl Moving {
+    fn start() -> Moving {
+        MOVING.store(true, std::sync::atomic::Ordering::SeqCst);
+        Moving
+    }
+}
+impl Drop for Moving {
+    fn drop(&mut self) {
+        MOVING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Move `from` to `to`, journaled, ending with the pointer written. `to`
 /// must not exist or be empty. One rename on one volume; across volumes a
 /// copy into `<to>.partial` that keeps hard links and is fsynced and checked,
 /// then renamed into place, and the old tree is set aside rather than
 /// deleted. A failure before the pointer is written leaves `from` as it was.
 pub fn run_move(request: MoveRequest) -> Result<(), String> {
-    let MoveRequest { state, pointer_file, from, to, pointer, force_copy, verify_pages } = request;
+    let MoveRequest { state, pointer_file, kind, from, to, pointer, force_copy, verify_pages } = request;
     if !from.is_dir() {
         return Err(format!("{} is not a folder", from.display()));
     }
@@ -555,14 +685,14 @@ pub fn run_move(request: MoveRequest) -> Result<(), String> {
     let mut journal = Journal {
         schema: 1,
         app: "manga-cleaner".into(),
+        kind,
+        method: Method::Rename,
         from: from.to_path_buf(),
         to: to.to_path_buf(),
         pointer_file: pointer_file.to_path_buf(),
-        pointer_path: pointer.path.clone(),
-        folder_id: pointer.folder_id.clone(),
+        pointer: JournalPointer { path: pointer.path.clone(), folder_id: pointer.folder_id.clone() },
         started_at: rfc3339_now(),
         phase: Phase::Copying,
-        copied: false,
     };
     write_journal(state, &journal)?;
     let abandon = |error: String| {
@@ -583,6 +713,10 @@ pub fn run_move(request: MoveRequest) -> Result<(), String> {
         if let Err(error) = preflight_copy(from, to) {
             return abandon(error);
         }
+        // Said before the first byte is copied, so a recovery knows that
+        // anything at `to` is this move's own copy.
+        journal.method = Method::Copy;
+        write_journal(state, &journal)?;
         let partial = partial_of(to);
         let _ = std::fs::remove_dir_all(&partial);
         let copied = copy_tree(from, &partial, &mut Default::default())
@@ -590,16 +724,16 @@ pub fn run_move(request: MoveRequest) -> Result<(), String> {
             .and_then(|()| if verify_pages { verify_page_hashes(&partial) } else { Ok(()) })
             .and_then(|()| std::fs::rename(&partial, to).map_err(|e| format!("{}: {e}", to.display())));
         if let Err(error) = copied {
+            let _ = std::fs::remove_dir_all(to);
             return abandon(error);
         }
-        journal.copied = true;
     }
     journal.phase = Phase::Copied;
     write_journal(state, &journal)?;
     write_pointer(pointer_file, &pointer)?;
     journal.phase = Phase::Switched;
     write_journal(state, &journal)?;
-    if journal.copied {
+    if journal.method == Method::Copy {
         set_aside(state, from)?;
     }
     let _ = std::fs::remove_file(state.join(JOURNAL));
@@ -893,11 +1027,7 @@ pub fn in_synced_folder(path: &Path, home: Option<&Path>) -> bool {
 
 /// At start, before anything reads the library.
 pub fn on_start(app: &tauri::AppHandle) {
-    match state_root(app).and_then(|state| recover(&state)) {
-        Ok(Some(said)) => *RECOVERED.lock().unwrap_or_else(|p| p.into_inner()) = Some(said),
-        Ok(None) => {}
-        Err(error) => eprintln!("manga-cleaner: data folder recovery: {error}"),
-    }
+    // `refresh` runs the recovery of an interrupted move first.
     if let Err(error) = refresh(app) {
         eprintln!("manga-cleaner: data folder: {error}");
     }
@@ -933,7 +1063,9 @@ fn ready_to_move(roots: &[&Path], confirmed_closed: bool) -> Result<(), String> 
 /// Before the cleaner library moves: every origin path that leaves it becomes
 /// absolute, so the `..` chain from a manifest to the user's scan folder is
 /// not broken by the move. Paths inside the library stay relative.
-fn absolutize_origins(library: &Path) -> Result<(), String> {
+/// `boundary` is the tree about to move: a relative path that stays inside it
+/// keeps working after the move and is left alone.
+fn absolutize_origins(library: &Path, boundary: &Path) -> Result<(), String> {
     let lib = crate::library::Library::at(library);
     let index = lib.index().map_err(|e| e.to_string())?;
     for project in &index.projects {
@@ -952,7 +1084,7 @@ fn absolutize_origins(library: &Path) -> Result<(), String> {
                     continue;
                 }
             };
-            if absolutize_sources(&mut job.project, &path.parent().unwrap_or(library).to_path_buf()) {
+            if absolutize_sources(&mut job.project, path.parent().unwrap_or(library), boundary) {
                 job.flush().map_err(|e| format!("{}: {e}", path.display()))?;
             }
         }
@@ -961,12 +1093,16 @@ fn absolutize_origins(library: &Path) -> Result<(), String> {
 }
 
 /// The rewrite itself. `true` when anything changed.
-pub fn absolutize_sources(project: &mut cleaner_core::project::Project, manifest_dir: &Path) -> bool {
+pub fn absolutize_sources(project: &mut cleaner_core::project::Project, manifest_dir: &Path, boundary: &Path) -> bool {
     let mut changed = false;
+    let boundary = lexical_normalise(boundary);
     let mut fix = |path: &mut PathBuf| {
-        if path.is_relative() && path.components().next() == Some(std::path::Component::ParentDir) {
-            *path = lexical_normalise(&manifest_dir.join(&*path));
-            changed = true;
+        if path.is_relative() {
+            let resolved = lexical_normalise(&manifest_dir.join(&*path));
+            if !resolved.starts_with(&boundary) {
+                *path = resolved;
+                changed = true;
+            }
         }
     };
     for source in &mut project.sources {
@@ -978,10 +1114,16 @@ pub fn absolutize_sources(project: &mut cleaner_core::project::Project, manifest
             fix(&mut conversion.archived_original);
         }
     }
+    for row in &mut project.denoised {
+        fix(&mut row.path);
+        if let Some(source) = row.source.as_mut() {
+            fix(source);
+        }
+    }
     changed
 }
 
-fn lexical_normalise(path: &Path) -> PathBuf {
+pub(crate) fn lexical_normalise(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for part in path.components() {
         match part {
@@ -1034,10 +1176,12 @@ pub async fn data_folder_setup(app: tauri::AppHandle, target: String, confirmed_
         let folder_id = ensure_marker(&target)?;
         let pointer = Pointer { path: target.clone(), folder_id };
         if has_content(&resolved.legacy) {
-            absolutize_origins(&resolved.legacy)?;
+            let _moving = Moving::start();
+            absolutize_origins(&resolved.legacy, &resolved.legacy)?;
             run_move(MoveRequest {
                 state: &state,
                 pointer_file: &pointer_file(&app)?,
+                kind: Kind::Setup,
                 from: &resolved.legacy,
                 to: &own,
                 pointer,
@@ -1070,8 +1214,9 @@ pub async fn data_folder_move(app: tauri::AppHandle, target: String, confirmed_c
             return Err("That is where the data folder already is.".into());
         }
         ready_to_move(&[root.as_path()], confirmed_closed.unwrap_or(false))?;
+        let moving = Moving::start();
         if let Some(library) = &resolved.library {
-            absolutize_origins(library)?;
+            absolutize_origins(library, &root)?;
         }
         // Let go of the lock first: Windows will not rename a folder with an
         // open file inside it.
@@ -1079,12 +1224,14 @@ pub async fn data_folder_move(app: tauri::AppHandle, target: String, confirmed_c
         let moved = run_move(MoveRequest {
             state: &state,
             pointer_file: &pointer_file(&app)?,
+            kind: Kind::Move,
             from: &root,
             to: &target,
             pointer: Pointer { path: target.clone(), folder_id: pointer.folder_id },
             force_copy: false,
             verify_pages: true,
         });
+        drop(moving);
         let resolved = refresh(&app)?;
         moved?;
         Ok(status_of(&app, &resolved))
@@ -1103,6 +1250,12 @@ pub async fn data_folder_use_existing(app: tauri::AppHandle, target: String, con
         let Some((1, folder_id)) = read_marker(&target) else {
             return Err(format!("{} is not a data folder (it has no {MARKER}).", target.display()));
         };
+        if let PointerRead::Unknown(reason) = read_pointer(&pointer_file(&app)?) {
+            return Err(reason);
+        }
+        if journal_exists(&state) {
+            return Err("A move of the data folder is not finished yet.".into());
+        }
         if resolved.mode == Mode::Legacy && has_content(&resolved.legacy) {
             return Err("This computer still has its own cleaner library. Set up the shared folder with it first, or use \"Set up\" with that folder.".into());
         }
@@ -1127,6 +1280,14 @@ pub async fn data_folder_delete_old_copy(app: tauri::AppHandle, path: String) ->
         let Some(at) = list.iter().position(|c| c.path == Path::new(&path)) else {
             return Err("That folder is not an old copy this app made.".into());
         };
+        let resolved = refresh(&app)?;
+        let live: Vec<PathBuf> = [resolved.root().map(Path::to_path_buf), resolved.library.clone(), Some(resolved.legacy.clone())]
+            .into_iter()
+            .flatten()
+            .collect();
+        if let Some(reason) = old_copy_refusal(&list[at].path, &live, resolved.pointer.as_ref()) {
+            return Err(reason);
+        }
         let copy = list.remove(at);
         std::fs::remove_dir_all(&copy.path).map_err(|e| format!("{}: {e}", copy.path.display()))?;
         save_old_copies(&state, &list)?;
@@ -1134,6 +1295,25 @@ pub async fn data_folder_delete_old_copy(app: tauri::AppHandle, path: String) ->
         Ok(status_of(&app, &resolved))
     })
     .await
+}
+
+/// Why an old copy must not be deleted: it is, holds or sits inside a folder
+/// in use, or it is the data folder the pointer names (an old copy picked
+/// with "use existing" after an unplug becomes the live folder).
+fn old_copy_refusal(path: &Path, live: &[PathBuf], pointer: Option<&Pointer>) -> Option<String> {
+    let path = lexical_normalise(path);
+    for live in live {
+        let live = lexical_normalise(live);
+        if path.starts_with(&live) || live.starts_with(&path) {
+            return Some(format!("{} is in use. It was not deleted.", path.display()));
+        }
+    }
+    if let (Some(pointer), Some((_, id))) = (pointer, read_marker(&path)) {
+        if id == pointer.folder_id {
+            return Some(format!("{} is the data folder in use. It was not deleted.", path.display()));
+        }
+    }
+    None
 }
 
 /// Seconds since the epoch as RFC 3339 in UTC, with milliseconds.
@@ -1205,6 +1385,7 @@ mod tests {
         MoveRequest {
             state: &s.0,
             pointer_file,
+            kind: Kind::Move,
             from,
             to,
             pointer: Pointer { path: to.to_path_buf(), folder_id: "id".into() },
@@ -1281,7 +1462,7 @@ mod tests {
         assert!(!from.exists());
         assert_eq!(std::fs::read(to.join("p1/c2.mtclean.d/pages/001.png")).unwrap().len(), 5000);
         assert!(matches!(read_pointer(&pointer_file), PointerRead::Good(p) if p.path == to));
-        assert!(read_journal(&s.0).is_none());
+        assert!(read_journal(&s.0).unwrap().is_none());
         assert!(old_copies(&s.0).is_empty());
     }
 
@@ -1321,7 +1502,7 @@ mod tests {
         assert!(from.join("index.json").exists());
         assert!(!to.exists() && !s.0.join("new.partial").exists());
         assert_eq!(read_pointer(&pointer_file), PointerRead::None);
-        assert!(read_journal(&s.0).is_none());
+        assert!(read_journal(&s.0).unwrap().is_none());
     }
 
     #[test]
@@ -1339,42 +1520,131 @@ mod tests {
         assert!(from.join("index.json").exists());
     }
 
+    fn journal(from: &Path, to: &Path, pointer_file: &Path, method: Method, phase: Phase) -> Journal {
+        Journal {
+            schema: 1,
+            app: "pear".into(),
+            kind: Kind::Move,
+            method,
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+            pointer_file: pointer_file.to_path_buf(),
+            pointer: JournalPointer { path: to.to_path_buf(), folder_id: "id".into() },
+            started_at: rfc3339_now(),
+            phase,
+        }
+    }
+
     #[test]
-    fn recovery_undoes_an_unfinished_copy_and_finishes_a_finished_one() {
-        // Crashed while copying: the partial copy goes, the data stays.
-        let s = Scratch::new("recover");
+    fn recovery_undoes_an_unfinished_copy_including_a_finished_copy_not_yet_recorded() {
+        let s = Scratch::new("recover-copy");
         let from = s.0.join("old");
         tree(&from);
         let to = s.0.join("new");
+        // The copy was renamed into place, but the journal still says copying.
+        copy_tree(&from, &to, &mut Default::default()).unwrap();
         std::fs::create_dir_all(partial_of(&to)).unwrap();
         let pointer_file = s.0.join(POINTER_FILE);
-        let mut journal = Journal {
-            schema: 1, app: "manga-cleaner".into(), from: from.clone(), to: to.clone(),
-            pointer_file: pointer_file.clone(), pointer_path: to.clone(), folder_id: "id".into(), started_at: rfc3339_now(),
-            phase: Phase::Copying, copied: false,
-        };
-        write_journal(&s.0, &journal).unwrap();
+        write_journal(&s.0, &journal(&from, &to, &pointer_file, Method::Copy, Phase::Copying)).unwrap();
         assert!(recover(&s.0).unwrap().is_some());
-        assert!(!partial_of(&to).exists() && from.exists());
+        assert!(!partial_of(&to).exists() && !to.exists(), "no second folder claims to be the data folder");
+        assert!(from.join("index.json").exists());
         assert_eq!(read_pointer(&pointer_file), PointerRead::None);
-        // Crashed after the copy was renamed in, before the pointer.
+        assert!(read_journal(&s.0).unwrap().is_none());
+    }
+
+    #[test]
+    fn recovery_finishes_a_copied_move_and_a_rename_written_by_the_other_app() {
+        let s = Scratch::new("recover-copied");
+        let (from, to) = (s.0.join("old"), s.0.join("new"));
+        tree(&from);
         copy_tree(&from, &to, &mut Default::default()).unwrap();
-        journal.phase = Phase::Copied;
-        journal.copied = true;
-        write_journal(&s.0, &journal).unwrap();
+        let pointer_file = s.0.join(POINTER_FILE);
+        write_journal(&s.0, &journal(&from, &to, &pointer_file, Method::Copy, Phase::Copied)).unwrap();
         recover(&s.0).unwrap();
         assert!(matches!(read_pointer(&pointer_file), PointerRead::Good(p) if p.path == to));
         assert!(!from.exists(), "the old tree is set aside");
         assert_eq!(old_copies(&s.0).len(), 1);
-        assert!(read_journal(&s.0).is_none());
-        // Crashed right after a one-rename move.
+        assert!(read_journal(&s.0).unwrap().is_none());
+
         let s2 = Scratch::new("recover-rename");
         let (from2, to2) = (s2.0.join("old"), s2.0.join("new"));
         tree(&to2);
-        journal = Journal { from: from2, to: to2.clone(), pointer_file: s2.0.join(POINTER_FILE), pointer_path: to2.clone(), phase: Phase::Copying, copied: false, ..journal };
-        write_journal(&s2.0, &journal).unwrap();
+        let pointer2 = s2.0.join(POINTER_FILE);
+        write_journal(&s2.0, &journal(&from2, &to2, &pointer2, Method::Rename, Phase::Copying)).unwrap();
         recover(&s2.0).unwrap();
-        assert!(matches!(read_pointer(&s2.0.join(POINTER_FILE)), PointerRead::Good(p) if p.path == to2));
+        assert!(matches!(read_pointer(&pointer2), PointerRead::Good(p) if p.path == to2));
+        assert!(to2.exists());
+    }
+
+    #[test]
+    fn recovery_reads_the_contract_json_and_never_deletes_a_journal_it_cannot_read() {
+        let s = Scratch::new("recover-foreign");
+        // Exactly the contract's field names, as Pear writes them.
+        let from = s.0.join("old");
+        tree(&from);
+        let body = serde_json::json!({
+            "schema": 1, "app": "pear", "kind": "move", "method": "rename",
+            "from": from, "to": s.0.join("new"), "pointerFile": s.0.join(POINTER_FILE),
+            "pointer": { "path": s.0.join("new"), "folderId": "id" },
+            "startedAt": "2026-11-25T10:00:00.000Z", "phase": "copying"
+        });
+        std::fs::write(s.0.join(JOURNAL), serde_json::to_vec(&body).unwrap()).unwrap();
+        assert!(recover(&s.0).unwrap().is_some(), "nothing moved: the journal is dropped");
+        assert!(!s.0.join(JOURNAL).exists());
+        for strange in [&br#"{"schema":2}"#[..], br#"{"schema":1,"kind":"teleport"}"#, b"not json"] {
+            std::fs::write(s.0.join(JOURNAL), strange).unwrap();
+            assert!(recover(&s.0).is_err());
+            assert_eq!(std::fs::read(s.0.join(JOURNAL)).unwrap(), strange, "left exactly as it was");
+        }
+    }
+
+    #[test]
+    fn recovery_waits_while_the_typesetter_holds_its_lock_in_either_folder() {
+        let s = Scratch::new("recover-wait");
+        let (from, to) = (s.0.join("old"), s.0.join("new"));
+        tree(&from);
+        copy_tree(&from, &to, &mut Default::default()).unwrap();
+        std::fs::create_dir_all(from.join(LOCKS_DIR)).unwrap();
+        let held = cleaner_core::project::lock::try_exclusive(&from.join(LOCKS_DIR).join(TYPESETTER_LOCK)).unwrap();
+        let pointer_file = s.0.join(POINTER_FILE);
+        write_journal(&s.0, &journal(&from, &to, &pointer_file, Method::Copy, Phase::Copied)).unwrap();
+        assert!(recover(&s.0).is_err());
+        assert!(from.exists() && s.0.join(JOURNAL).exists(), "nothing set aside while the typesetter works there");
+        drop(held);
+        recover(&s.0).unwrap();
+        assert!(!s.0.join(JOURNAL).exists());
+    }
+
+    #[test]
+    fn an_old_copy_in_use_is_never_deleted() {
+        let s = Scratch::new("old-copy");
+        let live = s.0.join("Manga Library");
+        let pointer = good(&live);
+        let old = s.0.join("Manga Library.moved-x");
+        std::fs::create_dir_all(&old).unwrap();
+        assert!(old_copy_refusal(&old, &[live.clone()], Some(&pointer)).is_none());
+        assert!(old_copy_refusal(&live, &[live.clone()], Some(&pointer)).is_some());
+        assert!(old_copy_refusal(&s.0, &[live.clone()], Some(&pointer)).is_some(), "holds the live folder");
+        assert!(old_copy_refusal(&live.join("Cleaner"), &[live.clone()], Some(&pointer)).is_some());
+        // An old copy picked with "use existing" after an unplug has the live id.
+        std::fs::copy(live.join(MARKER), old.join(MARKER)).unwrap();
+        assert!(old_copy_refusal(&old, &[], Some(&pointer)).is_some());
+    }
+
+    #[test]
+    fn two_first_asks_for_the_library_id_agree() {
+        let s = Scratch::new("library-id");
+        let ids: Vec<_> = (0..8)
+            .map(|_| {
+                let root = s.0.clone();
+                std::thread::spawn(move || library_id(&root).unwrap())
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect();
+        assert!(ids.windows(2).all(|w| w[0] == w[1]), "{ids:?}");
     }
 
     #[test]
@@ -1414,12 +1684,22 @@ mod tests {
         let mut project = Project::new(&manifest_dir, "0.1.0", StripMode::Single, &[source]);
         project.sources[0].converted_from = Some(PathBuf::from("../../../scans/ch1/001.png"));
         assert!(project.sources[0].rel_path.starts_with(".."), "an old-style manifest reads the scan folder");
-        assert!(absolutize_sources(&mut project, &manifest_dir));
+        let library = s.0.join("appdata/library");
+        assert!(absolutize_sources(&mut project, &manifest_dir, &library));
         assert_eq!(project.sources[0].converted_from.as_deref(), Some(raws.join("001.png").as_path()));
         assert_eq!(project.sources[0].rel_path, raws.join("001.png"));
-        assert!(!absolutize_sources(&mut project, &manifest_dir), "idempotent");
+        assert!(!absolutize_sources(&mut project, &manifest_dir, &library), "idempotent");
         project.sources[0].rel_path = PathBuf::from("c1.mtclean.d/pages/001.png");
-        assert!(!absolutize_sources(&mut project, &manifest_dir), "inside the library stays relative");
+        assert!(!absolutize_sources(&mut project, &manifest_dir, &library), "inside the library stays relative");
+        // A whole-folder move: a path into a sibling of the library inside the
+        // folder stays relative, because it moves too.
+        project.sources[0].converted_from = Some(PathBuf::from("../../Typesetter/x/raws/001.png"));
+        assert!(!absolutize_sources(&mut project, &manifest_dir, &s.0.join("appdata")));
+        assert!(absolutize_sources(&mut project, &manifest_dir, &library), "but it leaves the library alone");
+        // Denoise rows too.
+        project.denoised.push(cleaner_core::project::DenoisedPage { source: Some(PathBuf::from("../../../scans/ch1/001.png")), ..Default::default() });
+        assert!(absolutize_sources(&mut project, &manifest_dir, &library));
+        assert_eq!(project.denoised[0].source.as_deref(), Some(raws.join("001.png").as_path()));
     }
 
     #[test]

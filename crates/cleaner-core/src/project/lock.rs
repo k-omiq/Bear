@@ -330,7 +330,7 @@ fn os_lock(job: &Path, wait: Option<&Wait>) -> Result<Option<File>, LockError> {
 
 /// An exclusive OS advisory lock on `path` itself, without waiting, for a
 /// lock that is held for as long as a process runs rather than per job (the
-/// shared data folder's `.locks/<app>.lock`). `Ok(Some(file))`: held until the
+/// shared data folder's `locks/<app>.lock`). `Ok(Some(file))`: held until the
 /// file is dropped. `Ok(None)`: another process holds it. The same `flock` and
 /// `LockFile` calls as the job locks, so the typesetter's `File::try_lock`
 /// (which is `flock` on unix and `LockFileEx` from byte 0 on Windows) contends

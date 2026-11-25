@@ -1034,8 +1034,9 @@ pub(crate) fn write_handoff(job: &Job, meta: &HandoffMeta, root: &Path, next_to_
     let key = handoff_key(meta);
     let base = root.join(crate::data_folder::HANDOFF_DIR).join(crate::data_folder::TO_TYPESETTER);
     std::fs::create_dir_all(&base).map_err(|e| format!("{}: {e}", base.display()))?;
+    sweep_leftovers(&base);
     let staging = base.join(format!(".staging-{key}-{}", random_suffix()));
-    let outcome = stage_handoff(job, meta, &staging, next_to_raws);
+    let outcome = stage_handoff(job, meta, root, &staging, next_to_raws);
     let outcome = match outcome {
         Ok(Ok((pages, next))) => publish_handoff(&base, &key, &staging).map(|()| SaveResult {
             status: "saved",
@@ -1052,8 +1053,25 @@ pub(crate) fn write_handoff(job: &Job, meta: &HandoffMeta, root: &Path, next_to_
     outcome
 }
 
+/// `.staging-*` and `.stale-*` folders a crash left behind, once they are an
+/// hour old (a younger one may be another Save of this process at work).
+fn sweep_leftovers(base: &Path) {
+    let Ok(entries) = std::fs::read_dir(base) else { return };
+    let hour = std::time::Duration::from_secs(3600);
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !(name.starts_with(".staging-") || name.starts_with(".stale-")) {
+            continue;
+        }
+        let old = entry.metadata().and_then(|m| m.modified()).ok().and_then(|m| m.elapsed().ok()).is_some_and(|age| age > hour);
+        if old {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 /// Everything into `staging`. `Ok(Err(_))` is an export refusal, said as is.
-fn stage_handoff(job: &Job, meta: &HandoffMeta, staging: &Path, next_to_raws: bool) -> Result<Result<(usize, Option<String>), SaveResult>, String> {
+fn stage_handoff(job: &Job, meta: &HandoffMeta, root: &Path, staging: &Path, next_to_raws: bool) -> Result<Result<(usize, Option<String>), SaveResult>, String> {
     let (raws, cleaned) = (staging.join("raws"), staging.join("cleaned"));
     for dir in [&raws, &cleaned] {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -1109,10 +1127,17 @@ fn stage_handoff(job: &Job, meta: &HandoffMeta, staging: &Path, next_to_raws: bo
             None
         };
         let (raw, raw_format, w, h) = match kind {
-            // Linked as it is: same pixels, same way up as the cleaned page.
+            // Kept as it is: same pixels, same way up as the cleaned page.
+            // Linked only when the file is the cleaner's own copy inside the
+            // data folder; a legacy chapter that still reads the user's scan
+            // file gets a copy, so an edit to that scan never reaches Pear.
             Some((ext, format)) if orientation.0 <= 1 => {
                 let name = format!("raws/{}.{ext}", number(position));
-                link_or_copy(&path, &staging.join(&name))?;
+                if crate::data_folder::lexical_normalise(&path).starts_with(crate::data_folder::lexical_normalise(root)) {
+                    link_or_copy(&path, &staging.join(&name))?;
+                } else {
+                    std::fs::copy(&path, staging.join(&name)).map_err(|e| format!("{}: {e}", path.display()))?;
+                }
                 (name, format, source.w, source.h)
             }
             // TIFF, or an EXIF rotation: written upright as PNG through the same
@@ -3110,6 +3135,44 @@ mod handoff_tests {
         assert!(!raws.join("001_cleaned.png").exists(), "the raws folder itself is never written");
         #[cfg(unix)]
         assert_ne!(inode(&cleaned_dir.join("001.png")), inode(&message_dir(&s.0).join("cleaned/001.png")));
+    }
+
+    #[test]
+    fn a_legacy_page_outside_the_data_folder_is_copied_not_linked() {
+        let s = Scratch::new("legacy-source");
+        // An old manifest still reads the user's scan file in place.
+        let scans = s.0.join("scans");
+        std::fs::create_dir_all(&scans).unwrap();
+        let png = cleaner_core::image::encode(&fixtures::by_name("rgb8").raster, Format::Png).unwrap();
+        std::fs::write(scans.join("001.png"), &png).unwrap();
+        let source = cleaner_core::ingest::source_ref(&scans.join("001.png"), &png).unwrap();
+        let root = s.0.join("Manga Library");
+        let manifest = root.join("Cleaner/p1/c2.mtclean");
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        let job = Job::create(&manifest, Project::new(manifest.parent().unwrap(), "test", StripMode::Single, &[source])).unwrap();
+        assert_eq!(write_handoff(&job, &meta(), &root, false).unwrap().status, "saved");
+        let raw = message_dir(&root).join("raws/001.png");
+        assert_eq!(std::fs::read(&raw).unwrap(), png);
+        #[cfg(unix)]
+        assert_ne!(inode(&raw), inode(&scans.join("001.png")), "the user's own file is never linked");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn leftovers_older_than_an_hour_are_swept_and_younger_ones_kept() {
+        let s = Scratch::new("sweep");
+        let base = s.0.join("handoff/to-typesetter");
+        for name in [".staging-old", ".stale-old", ".staging-young", "cleaner-x-p1-c1", ".claimed-x"] {
+            std::fs::create_dir_all(base.join(name)).unwrap();
+        }
+        let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        for name in [".staging-old", ".stale-old", "cleaner-x-p1-c1", ".claimed-x"] {
+            std::fs::File::open(base.join(name)).unwrap().set_modified(hour_ago).unwrap();
+        }
+        sweep_leftovers(&base);
+        let mut left: Vec<_> = std::fs::read_dir(&base).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        left.sort();
+        assert_eq!(left, [".claimed-x", ".staging-young", "cleaner-x-p1-c1"]);
     }
 
     /// The fixture Pear's filer tests read. Regenerate with
