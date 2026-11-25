@@ -806,11 +806,17 @@ never written as though it were general.
 **Shared data folder with Pear (2026-11-25): what is still open.** The contract is
 `docs/shared-data-folder.md`.
 
-- **No real move was run on the 9.2 GB library.** The move, copy and recovery paths are tested
-  on small scratch trees only, on one volume (the cross-volume path is forced in the tests). No
-  external drive, exFAT drive, network share or Windows machine has run a move.
-- **Hard links are not kept by a Windows copy.** `MetadataExt::file_index` is unstable, so a
-  cross-volume move on Windows copies a linked raw twice. It costs space, never data.
+- **Tested 2026-11-25** on clones of the real libraries on this Mac (14.4 GB cross-volume move to
+  an APFS image, 26 min 40 s) and on GCE VMs running the released builds (Ubuntu 24.04,
+  windows-2025, second disk for the move). Results:
+  `~/dev/manga-bench-sets/data-folder-2026-11-25/`. No external drive or network share has run a
+  move.
+- **A move onto exFAT fails in both apps.** Linked raws cannot be linked again there (no
+  fallback to a copy, and verify demands the same link groups), and macOS writes `._` files
+  that verify counts as extra. It fails safely, with raw OS text. The free-space check ignores
+  exFAT cluster slack.
+- **Windows hard links fixed after the VM run** (file id by `GetFileInformationByHandle`, in both
+  apps). CI's Windows tests pass; no real Windows machine has rerun the move.
 - **Cloud attempt journals are not tagged with the library id.** They stay keyed by chapter id in
   the app data folder. Pointing the app at another computer's data folder ("use existing") while
   cloud work is unfinished could attach a result to the wrong chapter. Not seen; not guarded.
@@ -820,8 +826,12 @@ never written as though it were general.
   leaves an orphan chapter folder holding extra hard links to the raws, or an orphan
   `cleaned/<n>-2.png` on an update. No duplicate chapter appears and the message files cleanly
   on the next pass; nothing sweeps the orphans.
-- **Pear on Windows** skips the free-space check (free space reads as unknown there) and copies
-  hard-linked files twice on a cross-volume move.
+- **Pear on Windows** skips the free-space check (free space reads as unknown there).
+- **Seen in the 2026-11-25 test, not fixed:** the first Save of a series Pear already holds makes
+  a second, linked project beside it (the contract's rule, but it looks like a duplicate); a
+  Windows Save notice shows the `\\?\` path prefix; Pear's Unavailable screen waits for Try
+  again after the cleaner's move is killed; the cleaner's Pending Move stays enabled while Pear
+  runs, which section 7 forbids.
 - **Not built in version 1:** Pear back to the cleaner, live update of a chapter Pear has open, a
   shared project catalog, and dedupe of raws imported by hand into both apps.
 
