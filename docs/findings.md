@@ -816,6 +816,12 @@ never written as though it were general.
   cloud work is unfinished could attach a result to the wrong chapter. Not seen; not guarded.
 - **The cloud-only check is not tested on a real iCloud or OneDrive file.** It reads macOS
   `SF_DATALESS` and the Windows recall attributes; the tests have no evicted file.
+- **Pear leaves clutter after a kill mid-filing.** A kill before `chapter.json` is written
+  leaves an orphan chapter folder holding extra hard links to the raws, or an orphan
+  `cleaned/<n>-2.png` on an update. No duplicate chapter appears and the message files cleanly
+  on the next pass; nothing sweeps the orphans.
+- **Pear on Windows** skips the free-space check (free space reads as unknown there) and copies
+  hard-linked files twice on a cross-volume move.
 - **Not built in version 1:** Pear back to the cleaner, live update of a chapter Pear has open, a
   shared project catalog, and dedupe of raws imported by hand into both apps.
 

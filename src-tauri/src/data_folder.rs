@@ -417,7 +417,10 @@ pub fn library_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     // The folder can go while the app runs (a drive unplugged, a share
     // unmounted). One look at the marker per call catches it before anything
     // below creates a folder where the library used to be.
-    if resolved.mode == Mode::Shared && !resolved.root().is_some_and(|root| root.join(MARKER).is_file()) {
+    // So can a journal appear: the typesetter starting a move on a drive that
+    // cannot lock, after its user said this app was closed.
+    let journal = state_root(app).is_ok_and(|state| journal_exists(&state));
+    if journal || (resolved.mode == Mode::Shared && !resolved.root().is_some_and(|root| root.join(MARKER).is_file())) {
         resolved = refresh(app)?;
     }
     resolved.library.ok_or_else(|| format!("data_folder_unavailable: {}", resolved.reason.unwrap_or_default()))
