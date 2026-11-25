@@ -1285,7 +1285,7 @@ pub async fn data_folder_delete_old_copy(app: tauri::AppHandle, path: String) ->
             .into_iter()
             .flatten()
             .collect();
-        if let Some(reason) = old_copy_refusal(&list[at].path, &live, resolved.pointer.as_ref()) {
+        if let Some(reason) = old_copy_refusal(&list[at].path, &live) {
             return Err(reason);
         }
         let copy = list.remove(at);
@@ -1298,19 +1298,15 @@ pub async fn data_folder_delete_old_copy(app: tauri::AppHandle, path: String) ->
 }
 
 /// Why an old copy must not be deleted: it is, holds or sits inside a folder
-/// in use, or it is the data folder the pointer names (an old copy picked
-/// with "use existing" after an unplug becomes the live folder).
-fn old_copy_refusal(path: &Path, live: &[PathBuf], pointer: Option<&Pointer>) -> Option<String> {
+/// in use. The pointer's folder is one of those, which covers an old copy
+/// picked with "use existing" after an unplug. Its marker is not a test: a
+/// moved copy keeps the folder's id by design.
+fn old_copy_refusal(path: &Path, live: &[PathBuf]) -> Option<String> {
     let path = lexical_normalise(path);
     for live in live {
         let live = lexical_normalise(live);
         if path.starts_with(&live) || live.starts_with(&path) {
             return Some(format!("{} is in use. It was not deleted.", path.display()));
-        }
-    }
-    if let (Some(pointer), Some((_, id))) = (pointer, read_marker(&path)) {
-        if id == pointer.folder_id {
-            return Some(format!("{} is the data folder in use. It was not deleted.", path.display()));
         }
     }
     None
@@ -1620,16 +1616,17 @@ mod tests {
     fn an_old_copy_in_use_is_never_deleted() {
         let s = Scratch::new("old-copy");
         let live = s.0.join("Manga Library");
-        let pointer = good(&live);
+        good(&live);
         let old = s.0.join("Manga Library.moved-x");
         std::fs::create_dir_all(&old).unwrap();
-        assert!(old_copy_refusal(&old, &[live.clone()], Some(&pointer)).is_none());
-        assert!(old_copy_refusal(&live, &[live.clone()], Some(&pointer)).is_some());
-        assert!(old_copy_refusal(&s.0, &[live.clone()], Some(&pointer)).is_some(), "holds the live folder");
-        assert!(old_copy_refusal(&live.join("Cleaner"), &[live.clone()], Some(&pointer)).is_some());
-        // An old copy picked with "use existing" after an unplug has the live id.
+        // A moved copy keeps the folder id; that alone must not block it.
         std::fs::copy(live.join(MARKER), old.join(MARKER)).unwrap();
-        assert!(old_copy_refusal(&old, &[], Some(&pointer)).is_some());
+        assert!(old_copy_refusal(&old, &[live.clone()]).is_none());
+        assert!(old_copy_refusal(&live, &[live.clone()]).is_some());
+        assert!(old_copy_refusal(&s.0, &[live.clone()]).is_some(), "holds the live folder");
+        assert!(old_copy_refusal(&live.join("Cleaner"), &[live.clone()]).is_some());
+        // After an unplug and "use existing" on the old copy, it is the live folder.
+        assert!(old_copy_refusal(&old, &[old.clone()]).is_some());
     }
 
     #[test]
