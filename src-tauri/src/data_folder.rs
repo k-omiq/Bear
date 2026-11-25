@@ -586,11 +586,12 @@ fn set_aside(state: &Path, from: &Path) -> Result<(), String> {
 /// Unavailable until it can (no library opens at `from` or `to` while a
 /// journal exists).
 pub fn recover(state: &Path) -> Result<Option<String>, String> {
-    let Some(mut journal) = read_journal(state)? else { return Ok(None) };
+    if read_journal(state)?.is_none() {
+        return Ok(None);
+    }
     let _lock = take_move_lock(state)?;
     // Read again under the lock: the other app may have just finished it.
-    let Some(again) = read_journal(state)? else { return Ok(None) };
-    journal = again;
+    let Some(mut journal) = read_journal(state)? else { return Ok(None) };
     if journal.kind == Kind::Move {
         for root in [&journal.from, &journal.to] {
             if typesetter_running(root) == Running::Yes {
@@ -1624,12 +1625,12 @@ mod tests {
         std::fs::create_dir_all(&old).unwrap();
         // A moved copy keeps the folder id; that alone must not block it.
         std::fs::copy(live.join(MARKER), old.join(MARKER)).unwrap();
-        assert!(old_copy_refusal(&old, &[live.clone()]).is_none());
-        assert!(old_copy_refusal(&live, &[live.clone()]).is_some());
-        assert!(old_copy_refusal(&s.0, &[live.clone()]).is_some(), "holds the live folder");
-        assert!(old_copy_refusal(&live.join("Cleaner"), &[live.clone()]).is_some());
+        assert!(old_copy_refusal(&old, std::slice::from_ref(&live)).is_none());
+        assert!(old_copy_refusal(&live, std::slice::from_ref(&live)).is_some());
+        assert!(old_copy_refusal(&s.0, std::slice::from_ref(&live)).is_some(), "holds the live folder");
+        assert!(old_copy_refusal(&live.join("Cleaner"), std::slice::from_ref(&live)).is_some());
         // After an unplug and "use existing" on the old copy, it is the live folder.
-        assert!(old_copy_refusal(&old, &[old.clone()]).is_some());
+        assert!(old_copy_refusal(&old, std::slice::from_ref(&old)).is_some());
     }
 
     #[test]
