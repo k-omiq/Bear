@@ -247,6 +247,15 @@ pub fn library_id(root: &Path) -> Option<String> {
     let _ = std::fs::remove_file(&tmp);
     match linked {
         Ok(()) => Some(id),
+        // No hard links here (exFAT, some shares): create-new is the next
+        // claim that only one writer can win.
+        Err(_) if !path.exists() => {
+            use std::io::Write as _;
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).ok()?;
+            file.write_all(&body).ok()?;
+            file.sync_all().ok()?;
+            Some(id)
+        }
         Err(_) => read_json(&path).and_then(|v| v.get("libraryId")?.as_str().map(str::to_owned)),
     }
 }
@@ -732,17 +741,21 @@ pub fn run_move(request: MoveRequest) -> Result<(), String> {
         }
     };
     if !renamed {
-        if let Err(error) = preflight_copy(from, to) {
-            return abandon(error);
-        }
         // Said before the first byte is copied, so a recovery knows that
         // anything at `to` is this move's own copy.
         journal.method = Method::Copy;
         write_journal(state, &journal)?;
         let partial = partial_of(to);
         let _ = std::fs::remove_dir_all(&partial);
-        let copied = copy_tree(from, &partial, &mut Default::default())
-            .and_then(|()| verify_copy(from, &partial))
+        if let Err(error) = std::fs::create_dir_all(&partial) {
+            return abandon(format!("{}: {error}", partial.display()));
+        }
+        let links = links_work(&partial);
+        if let Err(error) = preflight_copy(from, &partial, links) {
+            return abandon(error);
+        }
+        let copied = copy_tree(from, &partial, links, &mut Default::default())
+            .and_then(|()| verify_copy(from, &partial, links))
             .and_then(|()| if verify_pages { verify_page_hashes(&partial) } else { Ok(()) })
             .and_then(|()| std::fs::rename(&partial, to).map_err(|e| format!("{}: {e}", to.display())));
         if let Err(error) = copied {
@@ -769,7 +782,7 @@ fn cross_device(error: &std::io::Error) -> bool {
 }
 
 /// Nothing evicted to the cloud, and room for the copy.
-fn preflight_copy(from: &Path, to: &Path) -> Result<(), String> {
+fn preflight_copy(from: &Path, to: &Path, links: bool) -> Result<(), String> {
     let offline = cloud_only_files(from);
     if offline > 0 {
         return Err(format!(
@@ -777,7 +790,7 @@ fn preflight_copy(from: &Path, to: &Path) -> Result<(), String> {
             from.display()
         ));
     }
-    let need = tree_bytes(from);
+    let need = copy_bytes(from, links, cluster_size(to));
     if let Some(free) = crate::weights::free_space(to) {
         let need_with_margin = need + need / 20;
         if free < need_with_margin {
@@ -837,6 +850,66 @@ fn tree_bytes(root: &Path) -> u64 {
     total
 }
 
+/// What a copy of `root` takes at the new place: each file rounded up to the
+/// volume's cluster, a hard-linked file once where links work.
+fn copy_bytes(root: &Path, links: bool, cluster: u64) -> u64 {
+    let mut seen = std::collections::HashSet::new();
+    let mut total = 0;
+    walk(root, &mut |path, meta| {
+        if meta.is_file() && (!links || file_id(path, meta).is_none_or(|id| seen.insert(id))) {
+            total += meta.len().div_ceil(cluster) * cluster;
+        }
+    });
+    total
+}
+
+/// Whether `dir` can hold hard links. exFAT, FAT and some network shares
+/// cannot: there a linked file is copied once per name (contract R4: raws are
+/// then stored twice, never lost).
+fn links_work(dir: &Path) -> bool {
+    let (a, b) = (dir.join(".link-probe"), dir.join(".link-probe-2"));
+    let ok = std::fs::write(&a, b"").is_ok() && std::fs::hard_link(&a, &b).is_ok();
+    let _ = std::fs::remove_file(&b);
+    let _ = std::fs::remove_file(&a);
+    ok
+}
+
+/// The smallest unit the volume holding `path` gives a file, so the space
+/// check counts each file rounded up to it: exFAT clusters reach 128 KB, and a
+/// library of small files then needs far more than its byte total.
+#[cfg(unix)]
+fn cluster_size(path: &Path) -> u64 {
+    use std::os::unix::ffi::OsStrExt;
+    let mut p = path;
+    while !p.exists() {
+        match p.parent() {
+            Some(parent) => p = parent,
+            None => return 4096,
+        }
+    }
+    let Ok(c) = std::ffi::CString::new(p.as_os_str().as_bytes()) else { return 4096 };
+    // SAFETY: an all-zero statvfs is a valid out value, and `c` is a valid C
+    // string for the whole call.
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return 4096;
+    }
+    #[allow(clippy::unnecessary_cast)]
+    (st.f_frsize as u64).clamp(512, 1 << 20)
+}
+
+#[cfg(not(unix))]
+fn cluster_size(_path: &Path) -> u64 {
+    4096
+}
+
+/// macOS keeps extended attributes on exFAT and FAT as `._<name>` files
+/// beside each file it writes. They are not part of the library, so the
+/// copy check leaves them out on both sides.
+fn apple_double(path: &Path) -> bool {
+    path.file_name().is_some_and(|n| n.to_string_lossy().starts_with("._"))
+}
+
 fn walk(root: &Path, visit: &mut dyn FnMut(&Path, &std::fs::Metadata)) {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -884,9 +957,15 @@ fn cloud_only(_meta: &std::fs::Metadata) -> bool {
     false
 }
 
-/// Copy a tree: hard links kept (a file already copied under another name is
-/// linked to its copy), symlinks as symlinks, every file and folder fsynced.
-fn copy_tree(from: &Path, to: &Path, linked: &mut std::collections::HashMap<(u64, u64), PathBuf>) -> Result<(), String> {
+/// Copy a tree: hard links kept where `links` (a file already copied under
+/// another name is linked to its copy), symlinks as symlinks, every file and
+/// folder fsynced.
+fn copy_tree(
+    from: &Path,
+    to: &Path,
+    links: bool,
+    linked: &mut std::collections::HashMap<(u64, u64), PathBuf>,
+) -> Result<(), String> {
     std::fs::create_dir_all(to).map_err(|e| format!("{}: {e}", to.display()))?;
     for entry in std::fs::read_dir(from).map_err(|e| format!("{}: {e}", from.display()))? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -896,9 +975,9 @@ fn copy_tree(from: &Path, to: &Path, linked: &mut std::collections::HashMap<(u64
         if meta.file_type().is_symlink() {
             copy_symlink(&source, &target)?;
         } else if meta.is_dir() {
-            copy_tree(&source, &target, linked)?;
+            copy_tree(&source, &target, links, linked)?;
         } else {
-            if let Some(id) = file_id(&source, &meta) {
+            if let Some(id) = file_id(&source, &meta).filter(|_| links) {
                 if let Some(first) = linked.get(&id) {
                     std::fs::hard_link(first, &target).map_err(|e| format!("{}: {e}", target.display()))?;
                     continue;
@@ -924,8 +1003,9 @@ fn copy_symlink(source: &Path, target: &Path) -> Result<(), String> {
     std::fs::copy(source, target).map(|_| ()).map_err(|e| format!("{}: {e}", source.display()))
 }
 
-/// Same relative paths and sizes, and the same files linked together.
-fn verify_copy(from: &Path, to: &Path) -> Result<(), String> {
+/// Same relative paths and sizes, and the same files linked together where
+/// the new place has links.
+fn verify_copy(from: &Path, to: &Path, links: bool) -> Result<(), String> {
     let (a, b) = (listing(from)?, listing(to)?);
     if a.files != b.files {
         let first = a.files.iter().find(|entry| !b.files.contains(entry)).or_else(|| b.files.iter().find(|e| !a.files.contains(e)));
@@ -936,7 +1016,7 @@ fn verify_copy(from: &Path, to: &Path) -> Result<(), String> {
             first.map(|(p, _)| format!(", first difference {}", p.display())).unwrap_or_default()
         ));
     }
-    if a.groups != b.groups {
+    if links && a.groups != b.groups {
         return Err("The copy lost some hard links. Nothing was changed.".into());
     }
     Ok(())
@@ -956,7 +1036,7 @@ fn listing(root: &Path) -> Result<Listing, String> {
         return Err(format!("{} is not a folder", root.display()));
     }
     walk(root, &mut |path, meta| {
-        if meta.is_dir() {
+        if meta.is_dir() || apple_double(path) {
             return;
         }
         let rel = path.strip_prefix(root).unwrap_or(path).to_path_buf();
@@ -1426,6 +1506,25 @@ mod tests {
     }
 
     #[test]
+    fn a_copy_to_a_volume_without_links_copies_each_name_and_skips_apple_double_files() {
+        let s = Scratch::new("nolinks");
+        let from = s.0.join("old");
+        tree(&from);
+        let to = s.0.join("new");
+        copy_tree(&from, &to, false, &mut Default::default()).unwrap();
+        let page = to.join("p1/c2.mtclean.d/pages/001.png");
+        let copy = to.join("p1/link-of-001.png");
+        assert_eq!(std::fs::read(&page).unwrap(), std::fs::read(&copy).unwrap());
+        assert!(file_id(&page, &std::fs::metadata(&page).unwrap()).is_none(), "copied, not linked");
+        // What macOS leaves on exFAT: not part of the library.
+        std::fs::write(to.join("p1/._c2.mtclean"), b"xattrs").unwrap();
+        verify_copy(&from, &to, false).unwrap();
+        assert!(verify_copy(&from, &to, true).is_err(), "where links work, a lost link is refused");
+        assert!(copy_bytes(&from, false, 4096) > copy_bytes(&from, true, 4096), "each name is counted");
+        assert_eq!(copy_bytes(&from, true, 1 << 17) % (1 << 17), 0, "rounded to the cluster");
+    }
+
+    #[test]
     fn a_release_build_and_a_test_build_have_their_own_pointers() {
         if std::env::var_os(POINTER_ENV).is_some() {
             return;
@@ -1570,7 +1669,7 @@ mod tests {
         tree(&from);
         let to = s.0.join("new");
         // The copy was renamed into place, but the journal still says copying.
-        copy_tree(&from, &to, &mut Default::default()).unwrap();
+        copy_tree(&from, &to, true, &mut Default::default()).unwrap();
         std::fs::create_dir_all(partial_of(&to)).unwrap();
         let pointer_file = s.0.join(POINTER_FILE);
         write_journal(&s.0, &journal(&from, &to, &pointer_file, Method::Copy, Phase::Copying)).unwrap();
@@ -1586,7 +1685,7 @@ mod tests {
         let s = Scratch::new("recover-copied");
         let (from, to) = (s.0.join("old"), s.0.join("new"));
         tree(&from);
-        copy_tree(&from, &to, &mut Default::default()).unwrap();
+        copy_tree(&from, &to, true, &mut Default::default()).unwrap();
         let pointer_file = s.0.join(POINTER_FILE);
         write_journal(&s.0, &journal(&from, &to, &pointer_file, Method::Copy, Phase::Copied)).unwrap();
         recover(&s.0).unwrap();
@@ -1632,7 +1731,7 @@ mod tests {
         let s = Scratch::new("recover-wait");
         let (from, to) = (s.0.join("old"), s.0.join("new"));
         tree(&from);
-        copy_tree(&from, &to, &mut Default::default()).unwrap();
+        copy_tree(&from, &to, true, &mut Default::default()).unwrap();
         std::fs::create_dir_all(from.join(LOCKS_DIR)).unwrap();
         let held = cleaner_core::project::lock::try_exclusive(&from.join(LOCKS_DIR).join(TYPESETTER_LOCK)).unwrap();
         let pointer_file = s.0.join(POINTER_FILE);

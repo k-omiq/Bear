@@ -811,10 +811,11 @@ never written as though it were general.
   windows-2025, second disk for the move). Results:
   `~/dev/manga-bench-sets/data-folder-2026-11-25/`. No external drive or network share has run a
   move.
-- **A move onto exFAT fails in both apps.** Linked raws cannot be linked again there (no
-  fallback to a copy, and verify demands the same link groups), and macOS writes `._` files
-  that verify counts as extra. It fails safely, with raw OS text. The free-space check ignores
-  exFAT cluster slack.
+- **exFAT moves fixed after the test** (both apps): a probe link decides whether the new place
+  has hard links, and without them each name is copied and the link check is skipped; macOS
+  `._` files are left out of the copy check; the space check rounds every file up to the
+  volume's cluster (statvfs, so Windows still counts 4 KB). Proved on a real exFAT image on this
+  Mac with a temporary probe; no external exFAT drive and no Windows exFAT volume has run it.
 - **Windows hard links fixed after the VM run** (file id by `GetFileInformationByHandle`, in both
   apps). CI's Windows tests pass; no real Windows machine has rerun the move.
 - **Cloud attempt journals are not tagged with the library id.** They stay keyed by chapter id in
