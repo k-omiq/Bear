@@ -794,20 +794,34 @@ fn preflight_copy(from: &Path, to: &Path) -> Result<(), String> {
 
 /// A file id: device and inode, so hard links count once.
 #[cfg(unix)]
-fn file_id(meta: &std::fs::Metadata) -> Option<(u64, u64)> {
+fn file_id(_path: &Path, meta: &std::fs::Metadata) -> Option<(u64, u64)> {
     use std::os::unix::fs::MetadataExt;
     (meta.nlink() > 1).then(|| (meta.dev(), meta.ino()))
 }
 
 #[cfg(windows)]
-fn file_id(_meta: &std::fs::Metadata) -> Option<(u64, u64)> {
-    // `MetadataExt::file_index` is unstable. A hard-linked file on Windows is
-    // then copied, not linked: it costs space, never data.
-    None
+fn file_id(path: &Path, meta: &std::fs::Metadata) -> Option<(u64, u64)> {
+    // Volume serial and file index, the Windows inode, from the file's own
+    // handle (`MetadataExt::file_index` is unstable). Without it a hard-linked
+    // page was copied twice on a move to another drive, and the verify step
+    // could not see the links it lost.
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+    if !meta.is_file() {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    // SAFETY: an all-zero BY_HANDLE_FILE_INFORMATION is a valid out value, and
+    // the handle stays open for the whole call.
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 || info.nNumberOfLinks < 2 {
+        return None;
+    }
+    Some((u64::from(info.dwVolumeSerialNumber), (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow)))
 }
 
 #[cfg(not(any(unix, windows)))]
-fn file_id(_meta: &std::fs::Metadata) -> Option<(u64, u64)> {
+fn file_id(_path: &Path, _meta: &std::fs::Metadata) -> Option<(u64, u64)> {
     None
 }
 
@@ -815,8 +829,8 @@ fn file_id(_meta: &std::fs::Metadata) -> Option<(u64, u64)> {
 fn tree_bytes(root: &Path) -> u64 {
     let mut seen = std::collections::HashSet::new();
     let mut total = 0;
-    walk(root, &mut |_, meta| {
-        if meta.is_file() && file_id(meta).is_none_or(|id| seen.insert(id)) {
+    walk(root, &mut |path, meta| {
+        if meta.is_file() && file_id(path, meta).is_none_or(|id| seen.insert(id)) {
             total += meta.len();
         }
     });
@@ -884,7 +898,7 @@ fn copy_tree(from: &Path, to: &Path, linked: &mut std::collections::HashMap<(u64
         } else if meta.is_dir() {
             copy_tree(&source, &target, linked)?;
         } else {
-            if let Some(id) = file_id(&meta) {
+            if let Some(id) = file_id(&source, &meta) {
                 if let Some(first) = linked.get(&id) {
                     std::fs::hard_link(first, &target).map_err(|e| format!("{}: {e}", target.display()))?;
                     continue;
@@ -922,7 +936,7 @@ fn verify_copy(from: &Path, to: &Path) -> Result<(), String> {
             first.map(|(p, _)| format!(", first difference {}", p.display())).unwrap_or_default()
         ));
     }
-    if cfg!(unix) && a.groups != b.groups {
+    if a.groups != b.groups {
         return Err("The copy lost some hard links. Nothing was changed.".into());
     }
     Ok(())
@@ -946,7 +960,7 @@ fn listing(root: &Path) -> Result<Listing, String> {
             return;
         }
         let rel = path.strip_prefix(root).unwrap_or(path).to_path_buf();
-        if let Some(id) = file_id(meta) {
+        if let Some(id) = file_id(path, meta) {
             ids.entry(id).or_default().push(rel.clone());
         }
         out.files.insert((rel, if meta.file_type().is_symlink() { 0 } else { meta.len() }));
@@ -1391,7 +1405,6 @@ mod tests {
             serde_json::to_vec(&serde_json::json!({ "sources": [{ "rel_path": "c2.mtclean.d/pages/001.png", "sha256": sha }] })).unwrap(),
         )
         .unwrap();
-        #[cfg(unix)]
         std::fs::hard_link(root.join("p1/c2.mtclean.d/pages/001.png"), root.join("p1/link-of-001.png")).unwrap();
     }
 
@@ -1498,13 +1511,10 @@ mod tests {
         assert!(old[0].path.file_name().unwrap().to_string_lossy().starts_with("old.moved-"));
         assert_eq!(old[0].bytes, tree_bytes(&to));
         assert!(!s.0.join("new.partial").exists());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            let a = std::fs::metadata(to.join("p1/c2.mtclean.d/pages/001.png")).unwrap();
-            let b = std::fs::metadata(to.join("p1/link-of-001.png")).unwrap();
-            assert_eq!(a.ino(), b.ino(), "the hard link survived the copy");
-        }
+        let (a, b) = (to.join("p1/c2.mtclean.d/pages/001.png"), to.join("p1/link-of-001.png"));
+        let id = |p: &Path| file_id(p, &std::fs::metadata(p).unwrap());
+        assert!(id(&a).is_some(), "the copy is still linked");
+        assert_eq!(id(&a), id(&b), "the hard link survived the copy");
     }
 
     #[test]
