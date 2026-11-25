@@ -1241,6 +1241,13 @@ export const es = {
       move: 'Mover',
       later: 'Más tarde',
     },
+    dataFolderPrompt: {
+      title: 'Una carpeta de datos para Manga Cleaner y Pear',
+      body: 'Mover pone tu biblioteca en {path}. Manga Cleaner y Pear comparten esa carpeta. Los capítulos limpios que guardes aquí aparecen luego en Pear.',
+      move: 'Mover',
+      choose: 'Elegir carpeta',
+      notNow: 'Ahora no',
+    },
     section: {
       projects: 'Proyectos',
       chapters: 'Capítulos',

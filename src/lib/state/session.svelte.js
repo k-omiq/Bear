@@ -213,6 +213,7 @@ function viewport() {
  * @property {'alt'|'meta'|'control'|'shift'} cloneSourceModifier - held while clicking to set the clone stamp's source; see `setCloneSourceModifier`
  * @property {import('../editor/navigation.js').Navigation} navigation - what the wheel, the middle button and a drag on empty canvas do; see `setNavigation`
  * @property {boolean} firstLaunchOffered - whether the first-launch download offer has been made on this machine
+ * @property {boolean} dataFolderPromptAnswered - whether Home's first-run shared data folder card has been answered (Not now, or a Move that worked); see `markDataFolderPromptAnswered`
  * @property {boolean} closeToTray - close control hides the window and keeps downloads running
  * @property {'rle'|'raw'} exportPsdCompression - how a PSD stores 8-bit channels: packed, or raw for readers that cannot unpack
  * @property {boolean} exportPsdLetteringLayer - whether a layered PSD carries a hidden layer marking where the lettering was
@@ -271,6 +272,7 @@ function defaults() {
     cloneSourceModifier: DEFAULT_POINTER_MODIFIER,
     navigation: defaultNavigation(),
     firstLaunchOffered: false,
+    dataFolderPromptAnswered: false,
     closeToTray: false,
     exportPsdCompression: 'rle',
     exportPsdLetteringLayer: false,
@@ -397,6 +399,9 @@ export function sanitizeSession(raw) {
     // the offer, and a machine that has already been asked carries a `true` it
     // wrote itself.
     firstLaunchOffered: boolOr(record.firstLaunchOffered, base.firstLaunchOffered),
+    // False for a record written before the card existed: a Legacy library
+    // is asked once, which is the point of the card.
+    dataFolderPromptAnswered: boolOr(record.dataFolderPromptAnswered, base.dataFolderPromptAnswered),
     closeToTray: boolOr(record.closeToTray, base.closeToTray),
     exportPsdCompression: /** @type {'rle'|'raw'} */ (
       oneOf(record.exportPsdCompression, PSD_COMPRESSIONS, base.exportPsdCompression)
@@ -522,6 +527,7 @@ function persistable() {
     cloneSourceModifier: session.cloneSourceModifier,
     navigation: { ...session.navigation },
     firstLaunchOffered: session.firstLaunchOffered,
+    dataFolderPromptAnswered: session.dataFolderPromptAnswered,
     closeToTray: session.closeToTray,
     exportPsdCompression: session.exportPsdCompression,
     exportPsdLetteringLayer: session.exportPsdLetteringLayer,
@@ -1056,6 +1062,23 @@ export function setCloudAllowed(allowed) {
  */
 export function markFirstLaunchOffered() {
   session.firstLaunchOffered = true
+  save()
+}
+
+/**
+ * Remember that Home's first-run data folder card has been answered
+ * (`home/DataFolderPrompt.svelte`, `docs/shared-data-folder.md` section 7).
+ *
+ * Set by Not now and by a Move that worked. Choose folder does not set it:
+ * Settings may be closed with nothing changed, and the card is then still the
+ * one place that asks. Settings > Data folder offers Setup either way.
+ *
+ * **Not a backend setting**, like `firstLaunchOffered`: it is this app's own
+ * answer, kept in this app's own store and never in the shared data folder,
+ * so each app keeps its own.
+ */
+export function markDataFolderPromptAnswered() {
+  session.dataFolderPromptAnswered = true
   save()
 }
 

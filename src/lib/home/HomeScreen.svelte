@@ -19,6 +19,7 @@
   import ChaptersView from './ChaptersView.svelte'
   import { onJobSettled } from '../state/jobs.svelte.js'
   import DataFolderCard from './DataFolderCard.svelte'
+  import DataFolderPrompt from './DataFolderPrompt.svelte'
   import { dataFolder } from '../state/datafolder.svelte.js'
   import { untrack } from 'svelte'
 
@@ -52,6 +53,7 @@
   <div class="inner">
     <HomeHeader />
     <DataFolderCard />
+    <DataFolderPrompt />
 
     <div class="content">
       {#if inChapters}
