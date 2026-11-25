@@ -13,8 +13,6 @@
    *
    * Drawn only once the status has answered: Pending has its own card
    * (`DataFolderCard.svelte`), and Shared and Unavailable need neither.
-   *
-   * @type {{ backend?: import('../api/backend.js').Backend, onmoved?: () => void }}
    */
   import { untrack } from 'svelte'
   import { Button } from '../ui/index.js'
@@ -30,6 +28,7 @@
   import { openSettings } from '../dialogs/settingslinks.js'
   import { t } from '../i18n/index.js'
 
+  /** @type {{ backend?: import('../api/backend.js').Backend, onmoved?: () => void }} */
   let { backend: givenBackend, onmoved } = $props()
   const backend = untrack(() => givenBackend ?? getBackend())
 
