@@ -124,11 +124,127 @@ fn read_json(path: &Path) -> Option<serde_json::Value> {
 }
 
 fn path_str(path: &Path) -> Result<&str, String> {
-    path.to_str().ok_or_else(|| format!("{} has characters this app cannot store. Pick a folder with a plainer name.", path.display()))
+    path.to_str().ok_or_else(|| format!("{} has characters this app cannot store. Pick a folder with a plainer name.", shown(path)))
 }
 
 fn has_content(dir: &Path) -> bool {
     std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
+}
+
+/// A path as the user is shown it: without the Windows `\\?\` (or
+/// `\\?\UNC\`) prefix a canonical path carries (contract section 11).
+pub fn shown(path: &Path) -> String {
+    shown_text(&path.display().to_string())
+}
+
+/// [`shown`] for a path already turned into text.
+pub fn shown_text(text: &str) -> String {
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        rest.to_owned()
+    } else {
+        text.to_owned()
+    }
+}
+
+/// The plain words for an OS error met while setting up or moving the data
+/// folder (contract section 11). The raw text goes to the log only.
+pub fn plain_io(path: &Path, error: &std::io::Error) -> String {
+    eprintln!("manga-cleaner: data folder: {}: {error}", path.display());
+    plain_words(error).to_owned()
+}
+
+fn plain_words(error: &std::io::Error) -> &'static str {
+    use std::io::ErrorKind;
+    const NO_SPACE: &str = "There is not enough free space on that drive.";
+    const NOT_ALLOWED: &str = "This app is not allowed to write there.";
+    const GONE: &str = "The drive was disconnected.";
+    const IN_USE: &str = "A file is in use by another app.";
+    const OTHER: &str = "The move could not finish.";
+    match error.kind() {
+        ErrorKind::StorageFull | ErrorKind::QuotaExceeded => return NO_SPACE,
+        ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem => return NOT_ALLOWED,
+        ErrorKind::ResourceBusy | ErrorKind::ExecutableFileBusy => return IN_USE,
+        _ => {}
+    }
+    match error.raw_os_error() {
+        // ENOSPC, EDQUOT (macOS, Linux).
+        Some(28 | 69 | 122) if cfg!(unix) => NO_SPACE,
+        // EROFS, EACCES, EPERM.
+        Some(30 | 13 | 1) if cfg!(unix) => NOT_ALLOWED,
+        // ENXIO, EIO, ENODEV: what a write to an unplugged drive meets.
+        Some(6 | 5 | 19) if cfg!(unix) => GONE,
+        // EBUSY, ETXTBSY.
+        Some(16 | 26) if cfg!(unix) => IN_USE,
+        // ERROR_DISK_FULL, ERROR_HANDLE_DISK_FULL.
+        Some(112 | 39) if cfg!(windows) => NO_SPACE,
+        // ERROR_ACCESS_DENIED, ERROR_WRITE_PROTECT.
+        Some(5 | 19) if cfg!(windows) => NOT_ALLOWED,
+        // ERROR_NOT_READY, ERROR_DEV_NOT_EXIST, ERROR_DEVICE_NOT_CONNECTED.
+        Some(21 | 55 | 1167) if cfg!(windows) => GONE,
+        // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
+        Some(32 | 33) if cfg!(windows) => IN_USE,
+        _ => OTHER,
+    }
+}
+
+/// An error that is not an OS error and not one of this module's own plain
+/// sentences (a manifest that would not save, say): logged, and said as "the
+/// move could not finish".
+fn plain_other(context: &str, raw: impl std::fmt::Display) -> String {
+    eprintln!("manga-cleaner: data folder: {context}: {raw}");
+    "The move could not finish.".into()
+}
+
+/* ------------------------------------------------------------------ */
+/* Is the sister app present? (contract section 4.1)                   */
+/* ------------------------------------------------------------------ */
+
+/// The sister app's release identifier. A dev build checks the release one
+/// too: it shares the dev pointer, but a real Pear still counts.
+pub const SISTER_ID: &str = "com.mangatypesetter.app";
+/// `1` or `0` overrides the sister test, for tests.
+pub const SISTER_ENV: &str = "MANGA_SISTER_PRESENT";
+
+/// Every place whose existence says Pear has run on this computer: the
+/// pointer, Pear's app data folder in each of the system's app data
+/// locations, its legacy library, and (macOS) its WebKit data folder, which
+/// is the reliable sign there because Pear's Rust side does not always make
+/// an app data folder.
+pub fn sister_paths(pointer: &Path, app_data_bases: &[PathBuf], home: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = vec![pointer.to_path_buf()];
+    paths.extend(app_data_bases.iter().map(|base| base.join(SISTER_ID)));
+    if let Some(home) = home {
+        paths.push(home.join("Documents").join("MangaTypesetter"));
+        if cfg!(target_os = "macos") {
+            paths.push(home.join("Library").join("WebKit").join(SISTER_ID));
+        }
+    }
+    paths
+}
+
+/// Whether any of `paths` is there. Reads only: nothing is created, and a
+/// broken symlink still counts as there. `env` is the override's value.
+pub fn sister_present_at(paths: &[PathBuf], env: Option<&str>) -> bool {
+    match env.map(str::trim) {
+        Some("1") => return true,
+        Some("0") => return false,
+        _ => {}
+    }
+    paths.iter().any(|path| std::fs::symlink_metadata(path).is_ok())
+}
+
+pub fn sister_present(app: &tauri::AppHandle) -> bool {
+    use tauri::Manager;
+    let env = std::env::var(SISTER_ENV).ok();
+    if matches!(env.as_deref().map(str::trim), Some("1" | "0")) {
+        return sister_present_at(&[], env.as_deref());
+    }
+    let paths = app.path();
+    let bases: Vec<PathBuf> = [paths.data_dir(), paths.local_data_dir(), paths.config_dir()].into_iter().flatten().collect();
+    let pointer = pointer_file(app).unwrap_or_default();
+    sister_present_at(&sister_paths(&pointer, &bases, paths.home_dir().ok().as_deref()), env.as_deref())
 }
 
 /* ------------------------------------------------------------------ */
@@ -187,14 +303,14 @@ pub fn read_pointer(path: &Path) -> PointerRead {
 
 pub fn write_pointer(path: &Path, pointer: &Pointer) -> Result<(), String> {
     let dir = path.parent().ok_or("the pointer has no folder")?;
-    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| plain_io(dir, &e))?;
     let body = serde_json::to_vec_pretty(&serde_json::json!({
         "schema": 1,
         "path": path_str(&pointer.path)?,
         "folderId": pointer.folder_id,
     }))
     .map_err(|e| e.to_string())?;
-    write_atomic(path, &body).map_err(|e| format!("{}: {e}", path.display()))
+    write_atomic(path, &body).map_err(|e| plain_io(path, &e))
 }
 
 /// `(schema, folderId)` of a data folder's marker.
@@ -212,7 +328,7 @@ fn ensure_marker(root: &Path) -> Result<String, String> {
     if let Some((schema, id)) = read_marker(root) {
         return if schema == 1 { Ok(id) } else { Err("That folder was set up by a newer version.".into()) };
     }
-    std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
+    std::fs::create_dir_all(root).map_err(|e| plain_io(root, &e))?;
     let id = new_uuid();
     let body = serde_json::to_vec_pretty(&serde_json::json!({
         "schema": 1,
@@ -221,8 +337,51 @@ fn ensure_marker(root: &Path) -> Result<String, String> {
         "createdAt": rfc3339_now(),
     }))
     .map_err(|e| e.to_string())?;
-    write_atomic(&root.join(MARKER), &body).map_err(|e| format!("{}: {e}", root.display()))?;
+    write_atomic(&root.join(MARKER), &body).map_err(|e| plain_io(root, &e))?;
     Ok(id)
+}
+
+/// What this app's own subfolder of the data folder holds (contract 5.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Own {
+    /// Not there, or an empty folder: "no subfolder yet".
+    Absent,
+    /// Has `index.json`, the cleaner's library file.
+    Library,
+    /// Has something, but not its library file.
+    Damaged,
+}
+
+/// Lock files, Finder's `.DS_Store` and macOS `._` files say nothing about
+/// whether a library is there.
+fn incidental(name: &str) -> bool {
+    name == ".DS_Store" || name.starts_with("._") || name.ends_with(".lock")
+}
+
+pub fn own_state(own: &Path) -> Own {
+    if own.join(crate::library::INDEX_FILE).is_file() {
+        return Own::Library;
+    }
+    let Ok(entries) = std::fs::read_dir(own) else { return Own::Absent };
+    let any = entries.flatten().any(|entry| !incidental(&entry.file_name().to_string_lossy()));
+    if any { Own::Damaged } else { Own::Absent }
+}
+
+/// Absent, or a folder with nothing in it but what [`incidental`] ignores.
+fn absent_or_empty(dir: &Path) -> bool {
+    match std::fs::read_dir(dir) {
+        Err(_) => !dir.exists(),
+        Ok(entries) => entries.flatten().all(|entry| entry.file_name() == ".DS_Store"),
+    }
+}
+
+/// How many titles the cleaner library at `root` holds. A library whose
+/// index cannot be read counts as having some: it is not a first launch.
+pub fn titles_in(root: &Path) -> usize {
+    if !root.join(crate::library::INDEX_FILE).exists() {
+        return 0;
+    }
+    crate::library::Library::at(root).index().map(|index| index.projects.len()).unwrap_or(1)
 }
 
 /// The id of the cleaner library at `root`, made on first ask. `None` where
@@ -309,21 +468,24 @@ pub fn resolve(pointer: PointerRead, legacy: &Path) -> Resolved {
     };
     let root = pointer.path.clone();
     if !root.is_dir() {
-        return unavailable(Some(pointer), format!("The data folder is not at {}. Reconnect the drive, or choose another folder.", root.display()));
+        return unavailable(Some(pointer), format!("The data folder is not at {}. Reconnect the drive, or choose another folder.", shown(&root)));
     }
     match read_marker(&root) {
-        None => return unavailable(Some(pointer), format!("{} is not a data folder any more (its {MARKER} is missing).", root.display())),
+        None => return unavailable(Some(pointer), format!("{} is not a data folder any more (its {MARKER} is missing).", shown(&root))),
         Some((schema, _)) if schema != 1 => return unavailable(Some(pointer), "The data folder was set up by a newer version. Update this app.".into()),
         Some((_, id)) if id != pointer.folder_id => {
-            return unavailable(Some(pointer), format!("{} is a different data folder than the one this computer set up.", root.display()));
+            return unavailable(Some(pointer), format!("{} is a different data folder than the one this computer set up.", shown(&root)));
         }
         Some(_) => {}
     }
+    // Version 2 (contract 5.1): Shared only once `Cleaner/` holds its library
+    // file. No subfolder, or an empty one, is Pending, whatever the legacy
+    // place holds: the start flows (Join) decide, never this read.
     let own = root.join(CLEANER_DIR);
-    if own.is_dir() || !has_content(&legacy) {
-        Resolved { mode: Mode::Shared, pointer: Some(pointer), library: Some(own), legacy, reason: None }
-    } else {
-        Resolved { mode: Mode::Pending, pointer: Some(pointer), library: Some(legacy.clone()), legacy, reason: None }
+    match own_state(&own) {
+        Own::Library => Resolved { mode: Mode::Shared, pointer: Some(pointer), library: Some(own), legacy, reason: None },
+        Own::Damaged => unavailable(Some(pointer), "The Cleaner folder inside the data folder is damaged.".into()),
+        Own::Absent => Resolved { mode: Mode::Pending, pointer: Some(pointer), library: Some(legacy.clone()), legacy, reason: None },
     }
 }
 
@@ -365,9 +527,8 @@ fn current(app: &tauri::AppHandle) -> Result<Resolved, String> {
 }
 
 /// Read the pointer again, settle the library, and take or let go of this
-/// app's lock to match. Shared mode with no `Cleaner/` yet (nothing was
-/// there to move) creates it: the marker has just proved the folder is the
-/// right one, so this is not the implicit creation the contract forbids.
+/// app's lock to match. Creates nothing: `Cleaner/` and its index are made
+/// only by a setup or a Join (contract 5.1).
 pub fn refresh(app: &tauri::AppHandle) -> Result<Resolved, String> {
     let blocked = settle_journal(&state_root(app)?);
     let mut resolved = resolve(read_pointer(&pointer_file(app)?), &legacy_dir(app)?);
@@ -376,11 +537,6 @@ pub fn refresh(app: &tauri::AppHandle) -> Result<Resolved, String> {
         resolved.mode = Mode::Unavailable;
         resolved.library = None;
         resolved.reason = Some(reason);
-    }
-    if resolved.mode == Mode::Shared {
-        if let Some(own) = &resolved.library {
-            let _ = std::fs::create_dir(own);
-        }
     }
     *RESOLVED.write().unwrap_or_else(|p| p.into_inner()) = Some(resolved.clone());
     hold_lock(if resolved.mode == Mode::Shared { resolved.root() } else { None });
@@ -488,11 +644,11 @@ pub fn typesetter_running(root: &Path) -> Running {
 pub struct MoveLock(#[allow(dead_code)] File);
 
 pub fn take_move_lock(state: &Path) -> Result<MoveLock, String> {
-    std::fs::create_dir_all(state).map_err(|e| format!("{}: {e}", state.display()))?;
+    std::fs::create_dir_all(state).map_err(|e| plain_io(state, &e))?;
     match cleaner_core::project::lock::try_exclusive(&state.join(MOVE_LOCK)) {
         Ok(Some(file)) => Ok(MoveLock(file)),
         Ok(None) => Err("The data folder is being moved right now. Try again when that is done.".into()),
-        Err(error) => Err(format!("{}: {error}", state.join(MOVE_LOCK).display())),
+        Err(error) => Err(plain_io(&state.join(MOVE_LOCK), &error)),
     }
 }
 
@@ -546,7 +702,7 @@ pub struct Journal {
 
 fn write_journal(state: &Path, journal: &Journal) -> Result<(), String> {
     let body = serde_json::to_vec_pretty(journal).map_err(|e| e.to_string())?;
-    write_atomic(&state.join(JOURNAL), &body).map_err(|e| format!("{}: {e}", state.display()))
+    write_atomic(&state.join(JOURNAL), &body).map_err(|e| plain_io(state, &e))
 }
 
 /// `Ok(None)`: no journal. `Err`: a journal this build cannot act on, which
@@ -554,7 +710,7 @@ fn write_journal(state: &Path, journal: &Journal) -> Result<(), String> {
 fn read_journal(state: &Path) -> Result<Option<Journal>, String> {
     let bytes = match std::fs::read(state.join(JOURNAL)) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("{}: {error}", state.join(JOURNAL).display())),
+        Err(error) => return Err(plain_io(&state.join(JOURNAL), &error)),
         Ok(bytes) => bytes,
     };
     match serde_json::from_slice::<Journal>(&bytes) {
@@ -601,7 +757,7 @@ fn set_aside(state: &Path, from: &Path) -> Result<(), String> {
     let stamp = rfc3339_now().replace([':', '.'], "-");
     let name = from.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let aside = from.with_file_name(format!("{name}.moved-{stamp}"));
-    std::fs::rename(from, &aside).map_err(|e| format!("{}: {e}", from.display()))?;
+    std::fs::rename(from, &aside).map_err(|e| plain_io(from, &e))?;
     let mut list = old_copies(state);
     list.push(OldCopy { bytes: tree_bytes(&aside), path: aside, moved_at: rfc3339_now() });
     save_old_copies(state, &list)
@@ -622,7 +778,7 @@ pub fn recover(state: &Path) -> Result<Option<String>, String> {
     if journal.kind == Kind::Move {
         for root in [&journal.from, &journal.to] {
             if typesetter_running(root) == Running::Yes {
-                return Err("Close the typesetter so the data folder move can finish.".into());
+                return Err("Close Pear so the data folder move can finish.".into());
             }
         }
     }
@@ -632,20 +788,20 @@ pub fn recover(state: &Path) -> Result<Option<String>, String> {
             Method::Rename if journal.to.exists() && !journal.from.exists() => journal.phase = Phase::Copied,
             Method::Rename => {
                 let _ = std::fs::remove_file(state.join(JOURNAL));
-                return Ok(Some(format!("A move of the data folder was stopped. Your data is still at {}.", journal.from.display())));
+                return Ok(Some(format!("A move of the data folder was stopped. Your data is still at {}.", shown(&journal.from))));
             }
             // Only while `from` is whole: the copy started from an absent or
             // empty `to`, so anything there is this move's own copy.
             Method::Copy if journal.from.exists() => {
                 let _ = std::fs::remove_dir_all(partial_of(&journal.to));
                 if journal.to.exists() {
-                    std::fs::remove_dir_all(&journal.to).map_err(|e| format!("{}: {e}", journal.to.display()))?;
+                    std::fs::remove_dir_all(&journal.to).map_err(|e| plain_io(&journal.to, &e))?;
                 }
                 let _ = std::fs::remove_file(state.join(JOURNAL));
-                return Ok(Some(format!("A move of the data folder was stopped. Your data is still at {}.", journal.from.display())));
+                return Ok(Some(format!("A move of the data folder was stopped. Your data is still at {}.", shown(&journal.from))));
             }
             Method::Copy if journal.to.exists() => journal.phase = Phase::Copied,
-            Method::Copy => return Err(format!("Neither {} nor {} is there. Reconnect the drive.", journal.from.display(), journal.to.display())),
+            Method::Copy => return Err(format!("Neither {} nor {} is there. Reconnect the drive.", shown(&journal.from), shown(&journal.to))),
         }
     }
     if journal.phase == Phase::Copied {
@@ -657,7 +813,7 @@ pub fn recover(state: &Path) -> Result<Option<String>, String> {
         set_aside(state, &journal.from)?;
     }
     let _ = std::fs::remove_file(state.join(JOURNAL));
-    Ok(Some(format!("A move of the data folder was finished. Your data is at {}.", journal.to.display())))
+    Ok(Some(format!("A move of the data folder was finished. Your data is at {}.", shown(&journal.to))))
 }
 
 /// How a move is to be checked and run. `force_copy` is for tests, which
@@ -672,6 +828,38 @@ pub struct MoveRequest<'a> {
     pub force_copy: bool,
     /// Only for the cleaner's own library: page hashes to check the copy by.
     pub verify_pages: bool,
+    /// A quiet setup (contract 5.2): one rename or nothing. A move that would
+    /// have to copy is given up, and nothing is changed.
+    pub rename_only: bool,
+}
+
+/// Bytes copied so far and the total of the copy in flight, for the
+/// dialog's "Copying 5.5 of 9.7 GB" (contract 5.4). Both zero when no copy
+/// runs.
+static COPY_DONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static COPY_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `(copied, total)` of the copy in flight.
+pub fn copy_progress() -> (u64, u64) {
+    use std::sync::atomic::Ordering;
+    (COPY_DONE.load(Ordering::Relaxed), COPY_TOTAL.load(Ordering::Relaxed))
+}
+
+struct CopyCounter;
+impl CopyCounter {
+    fn start(total: u64) -> CopyCounter {
+        use std::sync::atomic::Ordering;
+        COPY_DONE.store(0, Ordering::Relaxed);
+        COPY_TOTAL.store(total, Ordering::Relaxed);
+        CopyCounter
+    }
+}
+impl Drop for CopyCounter {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering;
+        COPY_DONE.store(0, Ordering::Relaxed);
+        COPY_TOTAL.store(0, Ordering::Relaxed);
+    }
 }
 
 /// Set while this process moves a tree: every library call is refused, so no
@@ -697,21 +885,21 @@ impl Drop for Moving {
 /// then renamed into place, and the old tree is set aside rather than
 /// deleted. A failure before the pointer is written leaves `from` as it was.
 pub fn run_move(request: MoveRequest) -> Result<(), String> {
-    let MoveRequest { state, pointer_file, kind, from, to, pointer, force_copy, verify_pages } = request;
+    let MoveRequest { state, pointer_file, kind, from, to, pointer, force_copy, verify_pages, rename_only } = request;
     if !from.is_dir() {
-        return Err(format!("{} is not a folder", from.display()));
+        return Err(format!("{} is not a folder", shown(from)));
     }
     if to.starts_with(from) {
         return Err("The new place is inside the old one.".into());
     }
     if to.exists() {
         if has_content(to) {
-            return Err(format!("{} is not empty", to.display()));
+            return Err(format!("{} is not empty", shown(to)));
         }
-        std::fs::remove_dir(to).map_err(|e| format!("{}: {e}", to.display()))?;
+        std::fs::remove_dir(to).map_err(|e| plain_io(to, &e))?;
     }
     if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| plain_io(parent, &e))?;
     }
     let mut journal = Journal {
         schema: 1,
@@ -737,9 +925,12 @@ pub fn run_move(request: MoveRequest) -> Result<(), String> {
         match std::fs::rename(from, to) {
             Ok(()) => true,
             Err(error) if cross_device(&error) => false,
-            Err(error) => return abandon(format!("{} -> {}: {error}", from.display(), to.display())),
+            Err(error) => return abandon(plain_io(from, &error)),
         }
     };
+    if !renamed && rename_only {
+        return abandon("The library is on another drive than the new place, so it was left where it is.".into());
+    }
     if !renamed {
         // Said before the first byte is copied, so a recovery knows that
         // anything at `to` is this move's own copy.
@@ -748,16 +939,17 @@ pub fn run_move(request: MoveRequest) -> Result<(), String> {
         let partial = partial_of(to);
         let _ = std::fs::remove_dir_all(&partial);
         if let Err(error) = std::fs::create_dir_all(&partial) {
-            return abandon(format!("{}: {error}", partial.display()));
+            return abandon(plain_io(&partial, &error));
         }
         let links = links_work(&partial);
         if let Err(error) = preflight_copy(from, &partial, links) {
             return abandon(error);
         }
+        let _counter = CopyCounter::start(tree_bytes(from));
         let copied = copy_tree(from, &partial, links, &mut Default::default())
             .and_then(|()| verify_copy(from, &partial, links))
             .and_then(|()| if verify_pages { verify_page_hashes(&partial) } else { Ok(()) })
-            .and_then(|()| std::fs::rename(&partial, to).map_err(|e| format!("{}: {e}", to.display())));
+            .and_then(|()| std::fs::rename(&partial, to).map_err(|e| plain_io(to, &e)));
         if let Err(error) = copied {
             let _ = std::fs::remove_dir_all(to);
             return abandon(error);
@@ -787,7 +979,7 @@ fn preflight_copy(from: &Path, to: &Path, links: bool) -> Result<(), String> {
     if offline > 0 {
         return Err(format!(
             "{offline} files in {} are only in the cloud. Download them first (in Finder or File Explorer), then try again.",
-            from.display()
+            shown(from)
         ));
     }
     let need = copy_bytes(from, links, cluster_size(to));
@@ -796,7 +988,7 @@ fn preflight_copy(from: &Path, to: &Path, links: bool) -> Result<(), String> {
         if free < need_with_margin {
             return Err(format!(
                 "Not enough space at {}: the move needs {:.1} GB and {:.1} GB is free.",
-                to.display(),
+                shown(to),
                 need_with_margin as f64 / 1e9,
                 free as f64 / 1e9
             ));
@@ -966,12 +1158,12 @@ fn copy_tree(
     links: bool,
     linked: &mut std::collections::HashMap<(u64, u64), PathBuf>,
 ) -> Result<(), String> {
-    std::fs::create_dir_all(to).map_err(|e| format!("{}: {e}", to.display()))?;
-    for entry in std::fs::read_dir(from).map_err(|e| format!("{}: {e}", from.display()))? {
-        let entry = entry.map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(to).map_err(|e| plain_io(to, &e))?;
+    for entry in std::fs::read_dir(from).map_err(|e| plain_io(from, &e))? {
+        let entry = entry.map_err(|e| plain_io(from, &e))?;
         let source = entry.path();
         let target = to.join(entry.file_name());
-        let meta = std::fs::symlink_metadata(&source).map_err(|e| format!("{}: {e}", source.display()))?;
+        let meta = std::fs::symlink_metadata(&source).map_err(|e| plain_io(&source, &e))?;
         if meta.file_type().is_symlink() {
             copy_symlink(&source, &target)?;
         } else if meta.is_dir() {
@@ -979,13 +1171,14 @@ fn copy_tree(
         } else {
             if let Some(id) = file_id(&source, &meta).filter(|_| links) {
                 if let Some(first) = linked.get(&id) {
-                    std::fs::hard_link(first, &target).map_err(|e| format!("{}: {e}", target.display()))?;
+                    std::fs::hard_link(first, &target).map_err(|e| plain_io(&target, &e))?;
                     continue;
                 }
                 linked.insert(id, target.clone());
             }
-            std::fs::copy(&source, &target).map_err(|e| format!("{}: {e}", source.display()))?;
-            flush_copied(&target).map_err(|e| format!("{}: {e}", target.display()))?;
+            std::fs::copy(&source, &target).map_err(|e| plain_io(&source, &e))?;
+            flush_copied(&target).map_err(|e| plain_io(&target, &e))?;
+            COPY_DONE.fetch_add(meta.len(), std::sync::atomic::Ordering::Relaxed);
         }
     }
     sync_dir(to);
@@ -994,13 +1187,13 @@ fn copy_tree(
 
 #[cfg(unix)]
 fn copy_symlink(source: &Path, target: &Path) -> Result<(), String> {
-    let link = std::fs::read_link(source).map_err(|e| format!("{}: {e}", source.display()))?;
-    std::os::unix::fs::symlink(link, target).map_err(|e| format!("{}: {e}", target.display()))
+    let link = std::fs::read_link(source).map_err(|e| plain_io(source, &e))?;
+    std::os::unix::fs::symlink(link, target).map_err(|e| plain_io(target, &e))
 }
 
 #[cfg(not(unix))]
 fn copy_symlink(source: &Path, target: &Path) -> Result<(), String> {
-    std::fs::copy(source, target).map(|_| ()).map_err(|e| format!("{}: {e}", source.display()))
+    std::fs::copy(source, target).map(|_| ()).map_err(|e| plain_io(&source, &e))
 }
 
 /// Same relative paths and sizes, and the same files linked together where
@@ -1013,7 +1206,7 @@ fn verify_copy(from: &Path, to: &Path, links: bool) -> Result<(), String> {
             "The copy does not match the original ({} vs {} files{}). Nothing was changed.",
             a.files.len(),
             b.files.len(),
-            first.map(|(p, _)| format!(", first difference {}", p.display())).unwrap_or_default()
+            first.map(|(p, _)| format!(", first difference {}", shown(p))).unwrap_or_default()
         ));
     }
     if links && a.groups != b.groups {
@@ -1033,7 +1226,7 @@ fn listing(root: &Path) -> Result<Listing, String> {
     let mut out = Listing::default();
     let mut ids: std::collections::HashMap<(u64, u64), Vec<PathBuf>> = Default::default();
     if !root.is_dir() {
-        return Err(format!("{} is not a folder", root.display()));
+        return Err(format!("{} is not a folder", shown(root)));
     }
     walk(root, &mut |path, meta| {
         if meta.is_dir() || apple_double(path) {
@@ -1075,11 +1268,11 @@ fn verify_page_hashes(root: &Path) -> Result<(), String> {
                 continue;
             }
             let Ok(bytes) = std::fs::read(&path) else {
-                return Err(format!("{} is missing from the copy. Nothing was changed.", path.display()));
+                return Err(format!("{} is missing from the copy. Nothing was changed.", shown(&path)));
             };
             let got = format!("{:x}", Sha256::digest(&bytes));
             if got != sha {
-                return Err(format!("{} did not copy correctly. Nothing was changed.", path.display()));
+                return Err(format!("{} did not copy correctly. Nothing was changed.", shown(&path)));
             }
         }
     }
@@ -1105,6 +1298,14 @@ pub struct Status {
     pub old_copies: Vec<OldCopy>,
     /// What the last start's recovery did, if anything.
     pub recovered: Option<String>,
+    /// Pear has run on this computer (contract 4.1).
+    pub sister_present: bool,
+    /// A move is unfinished: its journal is still there (start row B).
+    pub journal: bool,
+    /// How many titles the library this app reads now holds.
+    pub titles: usize,
+    /// The user's home folder, so the interface can say `~/Manga Library`.
+    pub home: Option<String>,
 }
 
 static RECOVERED: Mutex<Option<String>> = Mutex::new(None);
@@ -1127,6 +1328,10 @@ fn status_of(app: &tauri::AppHandle, resolved: &Resolved) -> Status {
         synced: resolved.root().is_some_and(|r| in_synced_folder(r, home.as_deref())),
         old_copies: state_root(app).map(|s| old_copies(&s)).unwrap_or_default(),
         recovered: RECOVERED.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+        sister_present: sister_present(app),
+        journal: state_root(app).is_ok_and(|state| journal_exists(&state)),
+        titles: resolved.library.as_deref().map(titles_in).unwrap_or(0),
+        home: home.as_ref().map(|h| h.display().to_string()),
     }
 }
 
@@ -1158,23 +1363,30 @@ pub async fn data_folder_status(app: tauri::AppHandle) -> Result<Status, String>
     .await
 }
 
-/// What every change needs first: nothing running here, and the typesetter
-/// closed when a shared folder is involved.
+/// What every change needs first: nothing running here (no job, no Send to
+/// Pear), and Pear closed in every data folder involved (contract 6 and 7:
+/// a Pending move into the folder is refused while Pear runs too).
 fn ready_to_move(roots: &[&Path], confirmed_closed: bool) -> Result<(), String> {
     if crate::jobs::running() > 0 {
         return Err("Wait for the running jobs to finish first.".into());
     }
+    if crate::send_to_pear::running() {
+        return Err("Wait for Send to Pear to finish first.".into());
+    }
     for root in roots {
         match typesetter_running(root) {
-            Running::Yes => return Err("Close the typesetter first. It is using the data folder.".into()),
+            Running::Yes => return Err(CLOSE_PEAR.into()),
             Running::CannotTell if !confirmed_closed => {
-                return Err("typesetter_unknown: This drive cannot tell whether the typesetter is open. Close it, then confirm.".into());
+                return Err("typesetter_unknown: This drive cannot tell whether Pear is open. Close it, then confirm.".into());
             }
             _ => {}
         }
     }
     Ok(())
 }
+
+/// The Blocked state's words (contract 5.4 and 7).
+pub const CLOSE_PEAR: &str = "Close Pear first.";
 
 /// Before the cleaner library moves: every origin path that leaves it becomes
 /// absolute, so the `..` chain from a manifest to the user's scan folder is
@@ -1201,7 +1413,7 @@ fn absolutize_origins(library: &Path, boundary: &Path) -> Result<(), String> {
                 }
             };
             if absolutize_sources(&mut job.project, path.parent().unwrap_or(library), boundary) {
-                job.flush().map_err(|e| format!("{}: {e}", path.display()))?;
+                job.flush().map_err(|e| plain_other(&path.display().to_string(), e))?;
             }
         }
     }
@@ -1263,7 +1475,9 @@ fn checked_target(target: &str) -> Result<PathBuf, String> {
 }
 
 /// Legacy: make `target` the data folder and move this library into
-/// `<target>/Cleaner`. Pending: the same into the existing folder.
+/// `<target>/Cleaner`. Pending: the same into the existing folder (Join).
+/// A library with nothing in it moves nothing: `Cleaner/` and its index are
+/// made, then the pointer (contract 5.5).
 #[tauri::command]
 pub async fn data_folder_setup(app: tauri::AppHandle, target: String, confirmed_closed: Option<bool>) -> Result<Status, String> {
     crate::library::blocking(move || {
@@ -1275,43 +1489,272 @@ pub async fn data_folder_setup(app: tauri::AppHandle, target: String, confirmed_
             Mode::Shared => return Err("The data folder is already set up.".into()),
             Mode::Unavailable => return Err(resolved.reason.unwrap_or_default()),
             Mode::Pending if resolved.root() != Some(target.as_path()) => {
-                return Err("The typesetter already set up a data folder. Move this library into that one.".into());
+                return Err("Pear already set up a data folder. Move this library into that one.".into());
             }
             _ => {}
         }
-        if target.exists() && has_content(&target) && !is_data_folder(&target) {
-            return Err(format!("{} is not empty. Pick an empty folder, or one that is already a data folder.", target.display()));
-        }
-        let own = target.join(CLEANER_DIR);
-        if own.exists() && has_content(&own) {
-            return Err(format!("{} already has a cleaner library.", own.display()));
-        }
-        // Only this app's own library moves, into a subfolder nothing else
-        // writes, so the typesetter may stay open.
-        ready_to_move(&[], confirmed_closed.unwrap_or(false))?;
-        let folder_id = ensure_marker(&target)?;
-        let pointer = Pointer { path: target.clone(), folder_id };
-        if has_content(&resolved.legacy) {
-            let _moving = Moving::start();
-            absolutize_origins(&resolved.legacy, &resolved.legacy)?;
-            run_move(MoveRequest {
-                state: &state,
-                pointer_file: &pointer_file(&app)?,
-                kind: Kind::Setup,
-                from: &resolved.legacy,
-                to: &own,
-                pointer,
-                force_copy: false,
-                verify_pages: true,
-            })?;
-        } else {
-            std::fs::create_dir_all(&own).map_err(|e| format!("{}: {e}", own.display()))?;
-            write_pointer(&pointer_file(&app)?, &pointer)?;
-        }
+        check_setup_target(&target)?;
+        // Contract 7: a setup or a Pending move is refused while Pear runs in
+        // that folder ("Close Pear first."), as any move is.
+        ready_to_move(&[target.as_path()], confirmed_closed.unwrap_or(false))?;
+        setup_into(&app, &state, &resolved, &target, false)?;
         let resolved = refresh(&app)?;
         Ok(status_of(&app, &resolved))
     })
     .await
+}
+
+/// A folder a setup may use: absent, empty, or already a data folder whose
+/// `Cleaner/` holds nothing.
+fn check_setup_target(target: &Path) -> Result<(), String> {
+    if target.exists() && has_content(target) && !is_data_folder(target) {
+        return Err(format!("{} is not empty. Pick an empty folder, or one that is already a data folder.", shown(target)));
+    }
+    let own = target.join(CLEANER_DIR);
+    if own_state(&own) != Own::Absent {
+        return Err(format!("{} already has a cleaner library.", shown(&own)));
+    }
+    Ok(())
+}
+
+/// The setup itself, under the move lock, every check already made: the
+/// marker, then this library into `Cleaner/` (or a new empty one), the index
+/// there, and the pointer last.
+fn setup_into(app: &tauri::AppHandle, state: &Path, resolved: &Resolved, target: &Path, rename_only: bool) -> Result<(), String> {
+    let own = target.join(CLEANER_DIR);
+    let folder_id = ensure_marker(target)?;
+    let pointer = Pointer { path: target.to_path_buf(), folder_id };
+    if has_content(&resolved.legacy) {
+        let _moving = Moving::start();
+        absolutize_origins(&resolved.legacy, &resolved.legacy).map_err(|e| plain_other("before the move", e))?;
+        run_move(MoveRequest {
+            state,
+            pointer_file: &pointer_file(app)?,
+            kind: Kind::Setup,
+            from: &resolved.legacy,
+            to: &own,
+            pointer: pointer.clone(),
+            force_copy: false,
+            verify_pages: true,
+            rename_only,
+        })?;
+        // A legacy folder that held files but never an index (nothing was
+        // ever created in it) must not read as a damaged `Cleaner/`.
+        crate::library::Library::at(&own).ensure_index()?;
+    } else {
+        crate::library::Library::at(&own).ensure_index()?;
+        write_pointer(&pointer_file(app)?, &pointer)?;
+    }
+    Ok(())
+}
+
+/* ------------------------------------------------------------------ */
+/* Quiet setup (contract 5.2)                                          */
+/* ------------------------------------------------------------------ */
+
+/// What a quiet setup would move and where, and what it must not touch.
+pub struct QuietCheck<'a> {
+    pub legacy: &'a Path,
+    pub default_root: &'a Path,
+    pub home: Option<&'a Path>,
+    pub jobs_running: bool,
+}
+
+/// Why a quiet setup must not run, or `None` when it may. Each reason is the
+/// one the contract lists; the app then stays Legacy and says nothing.
+pub fn quiet_refusal(check: &QuietCheck) -> Option<&'static str> {
+    if check.jobs_running {
+        return Some("a job is running");
+    }
+    if !absent_or_empty(check.default_root) {
+        return Some("the default place is not empty");
+    }
+    let library = has_content(check.legacy);
+    if library && !same_volume(check.legacy, check.default_root) {
+        return Some("the library is on another volume");
+    }
+    if library && cloud_only_files(check.legacy) > 0 {
+        return Some("some library files are only in the cloud");
+    }
+    if in_synced_folder(check.legacy, check.home) || in_synced_folder(check.default_root, check.home) {
+        return Some("a synced folder is involved");
+    }
+    None
+}
+
+/// The nearest folder of `path` that exists.
+fn existing_ancestor(path: &Path) -> Option<&Path> {
+    let mut at = path;
+    while !at.exists() {
+        at = at.parent()?;
+    }
+    Some(at)
+}
+
+/// Whether a rename from `a` to `b` stays on one volume. `b` need not exist.
+#[cfg(unix)]
+pub fn same_volume(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let dev = |p: &Path| existing_ancestor(p).and_then(|p| std::fs::metadata(p).ok()).map(|m| m.dev());
+    matches!((dev(a), dev(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// Windows: the same drive or share. A volume mounted in a folder is the
+/// rare case this misses; the quiet setup's rename then fails across
+/// volumes and gives up with nothing changed (`rename_only`).
+#[cfg(not(unix))]
+pub fn same_volume(a: &Path, b: &Path) -> bool {
+    let prefix = |p: &Path| match p.components().next() {
+        Some(std::path::Component::Prefix(prefix)) => Some(prefix.as_os_str().to_string_lossy().to_lowercase()),
+        _ => None,
+    };
+    prefix(a).is_some() && prefix(a) == prefix(b)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuietOutcome {
+    /// The library now lives in the shared folder.
+    pub done: bool,
+    pub status: Status,
+}
+
+/// Row E of the start table: no pointer and no Pear on this computer. Set up
+/// at `~/Manga Library` without asking, only when every check of contract
+/// 5.2 holds, and every check made again under `move.lock`. Anything else
+/// leaves the app in Legacy and answers `done: false`.
+#[tauri::command]
+pub async fn data_folder_quiet_setup(app: tauri::AppHandle) -> Result<QuietOutcome, String> {
+    crate::library::blocking(move || {
+        use tauri::Manager;
+        let home = app.path().home_dir().map_err(|e| e.to_string())?;
+        let default_root = home.join(DEFAULT_NAME);
+        let checks = |resolved: &Resolved| -> Option<&'static str> {
+            if resolved.mode != Mode::Legacy {
+                return Some("not in Legacy mode");
+            }
+            if sister_present(&app) {
+                return Some("Pear has run on this computer");
+            }
+            quiet_refusal(&QuietCheck {
+                legacy: &resolved.legacy,
+                default_root: &default_root,
+                home: Some(&home),
+                jobs_running: crate::jobs::running() > 0 || crate::send_to_pear::running(),
+            })
+        };
+        let not_done = |app: &tauri::AppHandle, why: &str| -> Result<QuietOutcome, String> {
+            eprintln!("manga-cleaner: data folder: no quiet setup: {why}");
+            let resolved = refresh(app)?;
+            Ok(QuietOutcome { done: false, status: status_of(app, &resolved) })
+        };
+        if let Some(why) = checks(&refresh(&app)?) {
+            return not_done(&app, why);
+        }
+        let state = state_root(&app)?;
+        let Ok(lock) = take_move_lock(&state) else { return not_done(&app, "the move lock is held") };
+        let resolved = refresh(&app)?;
+        if let Some(why) = checks(&resolved) {
+            drop(lock);
+            return not_done(&app, why);
+        }
+        let made = !default_root.exists();
+        if let Err(error) = setup_into(&app, &state, &resolved, &default_root, true) {
+            // Nothing moved: take back the folder this attempt made, so the
+            // default place is as it was.
+            if read_pointer(&pointer_file(&app)?) == PointerRead::None {
+                let _ = std::fs::remove_file(default_root.join(MARKER));
+                let _ = std::fs::remove_dir(default_root.join(CLEANER_DIR));
+                if made {
+                    let _ = std::fs::remove_dir(&default_root);
+                }
+            }
+            drop(lock);
+            return not_done(&app, &error);
+        }
+        drop(lock);
+        let resolved = refresh(&app)?;
+        Ok(QuietOutcome { done: resolved.mode == Mode::Shared, status: status_of(&app, &resolved) })
+    })
+    .await
+}
+
+/* ------------------------------------------------------------------ */
+/* The dialog's facts (contract 5.4)                                   */
+/* ------------------------------------------------------------------ */
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupPlan {
+    /// The folder the library would go into: the data folder, not `Cleaner/`.
+    pub target: String,
+    /// The bytes that would move, each hard-linked file once.
+    pub bytes: u64,
+    /// The library holds nothing: "Nothing to move."
+    pub nothing_to_move: bool,
+    /// One rename: "It takes a moment."
+    pub same_volume: bool,
+    /// The target is inside a folder a cloud service syncs.
+    pub synced: bool,
+    /// The target cannot take a library (not empty and not a data folder, or
+    /// one whose `Cleaner/` is already used): the plain reason.
+    pub refusal: Option<String>,
+}
+
+/// What a setup at `target` (or a Join of the pointer's folder when `target`
+/// is empty) would do: how much moves and whether it is one rename. Reads
+/// only.
+#[tauri::command]
+pub async fn data_folder_plan(app: tauri::AppHandle, target: Option<String>) -> Result<SetupPlan, String> {
+    crate::library::blocking(move || {
+        use tauri::Manager;
+        let resolved = current(&app)?;
+        let target = match target.filter(|t| !t.trim().is_empty()) {
+            Some(target) => checked_target(&target)?,
+            None => match resolved.root() {
+                Some(root) => root.to_path_buf(),
+                None => app.path().home_dir().map_err(|e| e.to_string())?.join(DEFAULT_NAME),
+            },
+        };
+        let library = has_content(&resolved.legacy) && resolved.mode != Mode::Shared;
+        let home = app.path().home_dir().ok();
+        Ok(SetupPlan {
+            bytes: if library { tree_bytes(&resolved.legacy) } else { 0 },
+            nothing_to_move: !library,
+            same_volume: !library || same_volume(&resolved.legacy, &target),
+            synced: in_synced_folder(&target, home.as_deref()),
+            refusal: check_setup_target(&target).err(),
+            target: target.display().to_string(),
+        })
+    })
+    .await
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveProgress {
+    pub copied: u64,
+    pub total: u64,
+}
+
+/// How far the copy in flight has come. Zero and zero when none runs.
+#[tauri::command]
+pub fn data_folder_progress() -> MoveProgress {
+    let (copied, total) = copy_progress();
+    MoveProgress { copied, total }
+}
+
+/// Open the data folder in Finder or File Explorer: the quiet setup's
+/// "Show". Only ever the pointer's folder, never a path the interface names.
+#[tauri::command]
+pub async fn data_folder_show(app: tauri::AppHandle) -> Result<(), String> {
+    let root = crate::library::blocking({
+        let app = app.clone();
+        move || current(&app)?.root().map(Path::to_path_buf).ok_or_else(|| "There is no data folder.".to_owned())
+    })
+    .await?;
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_path(root.display().to_string(), None::<&str>).map_err(|e| e.to_string())
 }
 
 /// Shared: move the whole data folder to `target`, both apps' data with it.
@@ -1346,6 +1789,7 @@ pub async fn data_folder_move(app: tauri::AppHandle, target: String, confirmed_c
             pointer: Pointer { path: target.clone(), folder_id: pointer.folder_id },
             force_copy: false,
             verify_pages: true,
+            rename_only: false,
         });
         drop(moving);
         let resolved = refresh(&app)?;
@@ -1364,7 +1808,7 @@ pub async fn data_folder_use_existing(app: tauri::AppHandle, target: String, con
         let resolved = refresh(&app)?;
         let target = checked_target(&target)?;
         let Some((1, folder_id)) = read_marker(&target) else {
-            return Err(format!("{} is not a data folder (it has no {MARKER}).", target.display()));
+            return Err(format!("{} is not a data folder (it has no {MARKER}).", shown(&target)));
         };
         if let PointerRead::Unknown(reason) = read_pointer(&pointer_file(&app)?) {
             return Err(reason);
@@ -1405,7 +1849,7 @@ pub async fn data_folder_delete_old_copy(app: tauri::AppHandle, path: String) ->
             return Err(reason);
         }
         let copy = list.remove(at);
-        std::fs::remove_dir_all(&copy.path).map_err(|e| format!("{}: {e}", copy.path.display()))?;
+        std::fs::remove_dir_all(&copy.path).map_err(|e| plain_io(&copy.path, &e))?;
         save_old_copies(&state, &list)?;
         let resolved = refresh(&app)?;
         Ok(status_of(&app, &resolved))
@@ -1422,7 +1866,7 @@ fn old_copy_refusal(path: &Path, live: &[PathBuf]) -> Option<String> {
     for live in live {
         let live = lexical_normalise(live);
         if path.starts_with(&live) || live.starts_with(&path) {
-            return Some(format!("{} is in use. It was not deleted.", path.display()));
+            return Some(format!("{} is in use. It was not deleted.", shown(&path)));
         }
     }
     None
@@ -1502,6 +1946,7 @@ mod tests {
             pointer: Pointer { path: to.to_path_buf(), folder_id: "id".into() },
             force_copy,
             verify_pages: true,
+            rename_only: false,
         }
     }
 
@@ -1570,15 +2015,162 @@ mod tests {
         assert_eq!(resolve(PointerRead::Good(other), &legacy).mode, Mode::Unavailable);
         // Newer schema anywhere.
         assert_eq!(resolve(PointerRead::Unknown("newer".into()), &legacy).mode, Mode::Unavailable);
-        // Good pointer and nothing to move: shared.
+        // Good pointer and nothing to move: still Pending (version 2). The
+        // start flows ask to Join; this read never makes `Cleaner/`.
         let r = resolve(PointerRead::Good(pointer.clone()), &legacy);
-        assert_eq!((r.mode, r.library), (Mode::Shared, Some(root.join("Cleaner"))));
-        // The typesetter set it up while this library is still at home.
+        assert_eq!((r.mode, r.library), (Mode::Pending, Some(legacy.clone())));
+        assert!(!root.join("Cleaner").exists(), "resolving creates nothing");
+        // Pear set it up while this library is still at home.
         tree(&legacy);
         let r = resolve(PointerRead::Good(pointer.clone()), &legacy);
         assert_eq!((r.mode, r.library), (Mode::Pending, Some(legacy.clone())));
+        // An empty subfolder is "no subfolder yet".
         std::fs::create_dir_all(root.join("Cleaner")).unwrap();
-        assert_eq!(resolve(PointerRead::Good(pointer), &legacy).mode, Mode::Shared);
+        std::fs::write(root.join("Cleaner/.DS_Store"), b"").unwrap();
+        std::fs::write(root.join("Cleaner/index.json.lock"), b"").unwrap();
+        assert_eq!(resolve(PointerRead::Good(pointer.clone()), &legacy).mode, Mode::Pending);
+        // Something there, but no library file: damaged, Unavailable.
+        std::fs::create_dir_all(root.join("Cleaner/p1")).unwrap();
+        let r = resolve(PointerRead::Good(pointer.clone()), &legacy);
+        assert_eq!((r.mode, r.library), (Mode::Unavailable, None));
+        assert_eq!(r.reason.as_deref(), Some("The Cleaner folder inside the data folder is damaged."));
+        // Its library file: Shared.
+        crate::library::Library::at(root.join("Cleaner")).ensure_index().unwrap();
+        let r = resolve(PointerRead::Good(pointer), &legacy);
+        assert_eq!((r.mode, r.library), (Mode::Shared, Some(root.join("Cleaner"))));
+    }
+
+    #[test]
+    fn the_sister_test_reads_each_source_and_the_override() {
+        let s = Scratch::new("sister");
+        let home = s.0.join("home");
+        let (data, local, config) = (s.0.join("data"), s.0.join("local"), s.0.join("config"));
+        let pointer = s.0.join("state/MangaLibrary/data-folder.json");
+        let paths = sister_paths(&pointer, &[data.clone(), local.clone(), config.clone()], Some(&home));
+        assert!(!sister_present_at(&paths, None), "nothing has run");
+        assert!(sister_present_at(&paths, Some("1")));
+        let mut sources = vec![
+            pointer.clone(),
+            data.join(SISTER_ID),
+            local.join(SISTER_ID),
+            config.join(SISTER_ID),
+            home.join("Documents/MangaTypesetter"),
+        ];
+        if cfg!(target_os = "macos") {
+            sources.push(home.join("Library/WebKit").join(SISTER_ID));
+        }
+        assert_eq!(paths.len(), sources.len());
+        for source in &sources {
+            assert!(paths.contains(source), "{}", source.display());
+            std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+            if source == &pointer {
+                std::fs::write(source, b"{}").unwrap();
+            } else {
+                std::fs::create_dir_all(source).unwrap();
+            }
+            assert!(sister_present_at(&paths, None), "{}", source.display());
+            assert!(!sister_present_at(&paths, Some("0")), "the override wins");
+            if source == &pointer {
+                std::fs::remove_file(source).unwrap();
+            } else {
+                std::fs::remove_dir_all(source).unwrap();
+            }
+        }
+        assert!(!sister_present_at(&paths, None));
+        assert!(!s.0.join("data").join(SISTER_ID).exists(), "the check creates nothing");
+    }
+
+    fn quiet<'a>(legacy: &'a Path, default_root: &'a Path, home: &'a Path) -> QuietCheck<'a> {
+        QuietCheck { legacy, default_root, home: Some(home), jobs_running: false }
+    }
+
+    #[test]
+    fn a_quiet_setup_runs_only_when_every_check_holds() {
+        let s = Scratch::new("quiet");
+        let home = s.0.join("home");
+        let legacy = s.0.join("appdata/library");
+        let default_root = home.join(DEFAULT_NAME);
+        tree(&legacy);
+        std::fs::create_dir_all(&home).unwrap();
+        assert_eq!(quiet_refusal(&quiet(&legacy, &default_root, &home)), None, "absent default place, one volume");
+        std::fs::create_dir_all(&default_root).unwrap();
+        std::fs::write(default_root.join(".DS_Store"), b"").unwrap();
+        assert_eq!(quiet_refusal(&quiet(&legacy, &default_root, &home)), None, "an empty folder is fine");
+        std::fs::write(default_root.join("notes.txt"), b"x").unwrap();
+        assert!(quiet_refusal(&quiet(&legacy, &default_root, &home)).is_some(), "the default place has files");
+        std::fs::remove_file(default_root.join("notes.txt")).unwrap();
+        assert!(quiet_refusal(&QuietCheck { jobs_running: true, ..quiet(&legacy, &default_root, &home) }).is_some());
+        let synced = home.join("Library/CloudStorage/Dropbox/library");
+        tree(&synced);
+        assert!(quiet_refusal(&quiet(&synced, &default_root, &home)).is_some(), "a synced library");
+        let synced_target = home.join("Dropbox").join(DEFAULT_NAME);
+        assert!(quiet_refusal(&quiet(&legacy, &synced_target, &home)).is_some(), "a synced default place");
+        // No library yet: nothing to check about volumes or the cloud.
+        assert_eq!(quiet_refusal(&quiet(&s.0.join("none"), &default_root, &home)), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn volumes_are_told_apart() {
+        let s = Scratch::new("volume");
+        assert!(same_volume(&s.0, &s.0.join("not/yet/there")));
+        // `/dev` is its own file system on macOS and Linux.
+        assert!(!same_volume(&s.0, Path::new("/dev")));
+    }
+
+    #[test]
+    fn a_rename_only_move_that_would_copy_changes_nothing() {
+        let s = Scratch::new("rename-only");
+        let from = s.0.join("old");
+        tree(&from);
+        let to = s.0.join("new");
+        let pointer_file = s.0.join("data-folder.json");
+        let refused = run_move(MoveRequest { rename_only: true, ..request(&s, &pointer_file, &from, &to, true) });
+        assert!(refused.is_err());
+        assert!(from.join("index.json").exists() && !to.exists() && !partial_of(&to).exists());
+        assert_eq!(read_pointer(&pointer_file), PointerRead::None);
+        assert!(read_journal(&s.0).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_setup_target_must_be_empty_or_a_data_folder_with_no_library() {
+        let s = Scratch::new("target");
+        assert!(check_setup_target(&s.0.join("absent")).is_ok());
+        let used = s.0.join("used");
+        std::fs::create_dir_all(&used).unwrap();
+        std::fs::write(used.join("x"), b"x").unwrap();
+        assert!(check_setup_target(&used).is_err());
+        let folder = s.0.join("folder");
+        good(&folder);
+        assert!(check_setup_target(&folder).is_ok());
+        crate::library::Library::at(folder.join(CLEANER_DIR)).ensure_index().unwrap();
+        assert!(check_setup_target(&folder).is_err(), "Cleaner/ is taken");
+    }
+
+    #[test]
+    fn os_errors_read_as_plain_words_and_paths_lose_the_long_prefix() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(plain_words(&Error::from(ErrorKind::StorageFull)), "There is not enough free space on that drive.");
+        assert_eq!(plain_words(&Error::from(ErrorKind::PermissionDenied)), "This app is not allowed to write there.");
+        assert_eq!(plain_words(&Error::from(ErrorKind::ResourceBusy)), "A file is in use by another app.");
+        assert_eq!(plain_words(&Error::other("x")), "The move could not finish.");
+        if cfg!(unix) {
+            assert_eq!(plain_words(&Error::from_raw_os_error(28)), "There is not enough free space on that drive.");
+            assert_eq!(plain_words(&Error::from_raw_os_error(6)), "The drive was disconnected.");
+        }
+        let raw = Error::other("Os { code: 28, kind: StorageFull }");
+        assert!(!plain_io(Path::new("/x"), &raw).contains("Os {"), "raw text goes to the log only");
+        assert_eq!(shown_text(r"\\?\C:\Manga Library"), r"C:\Manga Library");
+        assert_eq!(shown_text(r"\\?\UNC\server\share\Manga"), r"\\server\share\Manga");
+        assert_eq!(shown_text("/Users/me/Manga Library"), "/Users/me/Manga Library");
+    }
+
+    #[test]
+    fn titles_count_the_index_projects() {
+        let s = Scratch::new("titles");
+        assert_eq!(titles_in(&s.0), 0);
+        std::fs::write(s.0.join("index.json"), br#"{"version":1,"projects":[{"id":"p1","name":"A","mode":"single","created":0,"last_opened":0}]}"#).unwrap();
+        assert_eq!(titles_in(&s.0), 1);
     }
 
     #[test]

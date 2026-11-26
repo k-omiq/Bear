@@ -980,6 +980,49 @@ pub(crate) struct HandoffMeta {
     pub number: Option<u32>,
     pub label: Option<String>,
     pub app_version: String,
+    /// One Save, or Send to Pear (contract 8.1, version 2).
+    pub send: SendKind,
+}
+
+/// The message's `send` field: one Save, or a bulk Send to Pear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SendKind {
+    Save,
+    Bulk,
+}
+
+impl SendKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            SendKind::Save => "save",
+            SendKind::Bulk => "bulk",
+        }
+    }
+}
+
+/// The message's facts about one chapter, from the library's index. A split
+/// chapter's label (`12.5`) is carried as typed, and `number` is its whole
+/// number: Pear's chapter key reads `label` first (contract 8.4.2).
+pub(crate) fn meta_for(
+    project: &library::IndexProject,
+    chapter: &library::IndexChapter,
+    library_id: &str,
+    app_version: &str,
+    send: SendKind,
+) -> HandoffMeta {
+    HandoffMeta {
+        library_id: library_id.to_owned(),
+        project_id: project.id.clone(),
+        chapter_id: chapter.id.clone(),
+        project_name: project.name.clone(),
+        longstrip: project.mode == StripMode::Longstrip,
+        rtl: project.reading_direction == library::ReadingDirection::Rtl,
+        title: chapter.name.clone(),
+        number: Some(chapter.number),
+        label: chapter.label.clone(),
+        app_version: app_version.to_owned(),
+        send,
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1174,6 +1217,7 @@ fn stage_handoff(job: &Job, meta: &HandoffMeta, root: &Path, staging: &Path, nex
         }));
     }
     let count = pages.len();
+    let cleaned_pages = pages.iter().filter(|page| !page["cleaned"].is_null()).count();
     let message = serde_json::json!({
         "schema": 1,
         "from": "manga-cleaner",
@@ -1185,7 +1229,8 @@ fn stage_handoff(job: &Job, meta: &HandoffMeta, root: &Path, staging: &Path, nex
             "layout": if meta.longstrip { "longstrip" } else { "pages" },
             "readingDirection": if meta.rtl { "rtl" } else { "ltr" },
         },
-        "chapter": { "title": meta.title, "number": meta.number, "label": meta.label },
+        "chapter": { "title": meta.title, "number": meta.number, "label": meta.label, "cleanedPages": cleaned_pages },
+        "send": meta.send.as_str(),
         "pages": pages,
     });
     let body = serde_json::to_vec_pretty(&message).map_err(|e| e.to_string())?;
@@ -1198,21 +1243,88 @@ fn stage_handoff(job: &Job, meta: &HandoffMeta, root: &Path, staging: &Path, nex
 fn publish_handoff(base: &Path, key: &str, staging: &Path) -> Result<(), String> {
     let target = base.join(key);
     let stale = base.join(format!(".stale-{key}-{}", random_suffix()));
-    let had_stale = match std::fs::rename(&target, &stale) {
+    let had_stale = match rename_retrying(&target, &stale) {
         Ok(()) => true,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => return Err(format!("{}: {error}", target.display())),
+        Err(error) => return Err(format!("{}: {error}", crate::data_folder::shown(&target))),
     };
-    if let Err(error) = std::fs::rename(staging, &target) {
+    if let Err(error) = rename_retrying(staging, &target) {
         if had_stale {
-            let _ = std::fs::rename(&stale, &target);
+            let _ = rename_retrying(&stale, &target);
         }
-        return Err(format!("{}: {error}", target.display()));
+        return Err(format!("{}: {error}", crate::data_folder::shown(&target)));
     }
     if had_stale {
         let _ = std::fs::remove_dir_all(&stale);
     }
     Ok(())
+}
+
+/// A rename in `handoff/`, retried when Windows refuses it with a sharing
+/// violation: Pear may hold `handoff.json` open for a moment while it reads
+/// a waiting message (contract 8.4.2). 5 retries over 1 second.
+fn rename_retrying(from: &Path, to: &Path) -> std::io::Result<()> {
+    retry_sharing(|| std::fs::rename(from, to), sharing_violation, std::time::Duration::from_millis(200))
+}
+
+/// `ERROR_SHARING_VIOLATION` and `ERROR_LOCK_VIOLATION`. Never on unix,
+/// where an open file does not stop a rename.
+fn sharing_violation(error: &std::io::Error) -> bool {
+    cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33))
+}
+
+/// `attempt`, then up to 5 more tries `pause` apart while `retry` says the
+/// error is worth waiting out.
+fn retry_sharing(
+    mut attempt: impl FnMut() -> std::io::Result<()>,
+    retry: impl Fn(&std::io::Error) -> bool,
+    pause: std::time::Duration,
+) -> std::io::Result<()> {
+    let mut left = 5;
+    loop {
+        match attempt() {
+            Err(error) if left > 0 && retry(&error) => {
+                left -= 1;
+                std::thread::sleep(pause);
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Export one chapter of `lib` and leave its message, then record when it
+/// was sent. The one path both Save and Send to Pear take (contract 8.4.1).
+pub(crate) fn send_chapter(
+    lib: &library::Library,
+    root: &Path,
+    chapter_id: &str,
+    next_to_raws: bool,
+    app_version: &str,
+    send: SendKind,
+) -> Result<SaveResult, String> {
+    let index = lib.index().map_err(|e| e.to_string())?;
+    let (project, chapter) = index
+        .projects
+        .iter()
+        .find_map(|p| p.chapters.iter().find(|c| c.id == chapter_id).map(|c| (p, c)))
+        .ok_or_else(|| format!("no chapter {chapter_id}"))?;
+    let library_id = crate::data_folder::library_id(lib.root()).ok_or("the library cannot be written")?;
+    let job_path = lib.job_path(&project.id, &chapter.id);
+    let result = {
+        let _lock = crate::run::lock_chapter(&job_path)?;
+        let job = Job::open(&job_path).map_err(|e| e.to_string())?;
+        write_handoff(&job, &meta_for(project, chapter, &library_id, app_version, send), root, next_to_raws)?
+    };
+    if result.status == "saved" {
+        // After the export, so a Save that wrote nothing of its own into
+        // the job cannot read as a change made after it.
+        lib.mark_sent(chapter_id, now_ms()).map_err(|e| e.to_string())?;
+    }
+    Ok(result)
+}
+
+pub(crate) fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// Save: export and send the chapter to the typesetter.
@@ -1223,37 +1335,15 @@ pub async fn save_to_typesetter(app: tauri::AppHandle, chapter_id: String) -> Re
             return Ok(SaveResult::refused(Some("notice.save.needsDataFolder"), None));
         };
         let lib = library::Library::for_app(&app).map_err(|e| e.to_string())?;
-        let index = lib.index().map_err(|e| e.to_string())?;
-        let (project, chapter) = index
-            .projects
-            .iter()
-            .find_map(|p| p.chapters.iter().find(|c| c.id == chapter_id).map(|c| (p, c)))
-            .ok_or_else(|| format!("no chapter {chapter_id}"))?;
-        let library_id = crate::data_folder::library_id(lib.root()).ok_or("the library cannot be written")?;
-        let job_path = lib.job_path(&project.id, &chapter.id);
-        let _lock = crate::run::lock_chapter(&job_path)?;
-        let job = Job::open(&job_path).map_err(|e| e.to_string())?;
         let settings = crate::settings::read(&app).unwrap_or(serde_json::Value::Null);
         let next_to_raws = settings.get("saveCleanedTo").and_then(|v| v.as_str()) == Some("next-to-raws");
-        let meta = HandoffMeta {
-            library_id,
-            project_id: project.id.clone(),
-            chapter_id: chapter.id.clone(),
-            project_name: project.name.clone(),
-            longstrip: project.mode == StripMode::Longstrip,
-            rtl: project.reading_direction == library::ReadingDirection::Rtl,
-            title: chapter.name.clone(),
-            number: Some(chapter.number),
-            label: chapter.label.clone(),
-            app_version: app.package_info().version.to_string(),
-        };
-        write_handoff(&job, &meta, &root, next_to_raws)
+        send_chapter(&lib, &root, &chapter_id, next_to_raws, &app.package_info().version.to_string(), SendKind::Save)
     })
     .await?;
     match result.status {
         "saved" => crate::events::notice(
             if result.next_to_raws.is_some() { "notice.save.sentAndSaved" } else { "notice.save.sent" },
-            serde_json::json!({ "count": result.pages, "path": result.next_to_raws }),
+            serde_json::json!({ "count": result.pages, "path": result.next_to_raws.as_deref().map(crate::data_folder::shown_text) }),
             "info",
         ),
         _ => crate::events::notice(
@@ -3045,6 +3135,7 @@ mod handoff_tests {
             number: Some(3),
             label: None,
             app_version: "test".into(),
+            send: SendKind::Save,
         }
     }
 
@@ -3177,17 +3268,68 @@ mod handoff_tests {
 
     /// The fixture Pear's filer tests read. Regenerate with
     /// `MC_WRITE_GOLDEN=1 cargo test golden_handoff`, then copy it to Pear.
+    /// Version 2's optional fields (`send`, `chapter.cleanedPages`) are left
+    /// out of the comparison: the version 1 fixture stays as both apps have it.
     #[test]
     fn golden_handoff_matches_the_checked_in_fixture() {
         let s = Scratch::new("golden");
         let job = golden_job(&s);
         write_handoff(&job, &meta(), &s.0, false).unwrap();
-        let dir = message_dir(&s.0);
-        let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/handoff/golden").join(handoff_key(&meta()));
+        let message = compare_golden(&s, &meta(), "golden", |message| {
+            message.as_object_mut().unwrap().remove("send");
+            message["chapter"].as_object_mut().unwrap().remove("cleanedPages");
+        });
+        assert_eq!(message["send"], "save", "a Save says so");
+        assert_eq!(message["chapter"]["cleanedPages"], 3);
+    }
+
+    /// Version 2 (contract section 10): a title Pear has a candidate for
+    /// ("Dungeon streamer" against "Dungeon Steamer"), sent in bulk, and a
+    /// chapter that links by page map to one Pear already has, sent by Save.
+    #[test]
+    fn golden_handoff_v2_matches_the_checked_in_fixtures() {
+        let candidate = HandoffMeta {
+            project_id: "p4".into(),
+            chapter_id: "c1".into(),
+            project_name: "Dungeon streamer".into(),
+            title: "Chapter 1".into(),
+            number: Some(1),
+            label: Some("1".into()),
+            send: SendKind::Bulk,
+            ..meta()
+        };
+        let link = HandoffMeta {
+            project_id: "p5".into(),
+            chapter_id: "c3".into(),
+            project_name: "Surviving the Apocalypse".into(),
+            title: "Chapter 3".into(),
+            number: Some(3),
+            label: Some("3".into()),
+            send: SendKind::Save,
+            ..meta()
+        };
+        for (meta, folder) in [(candidate, "golden-v2/candidate"), (link, "golden-v2/link")] {
+            let s = Scratch::new("golden-v2");
+            let job = golden_job(&s);
+            write_handoff(&job, &meta, &s.0, false).unwrap();
+            let message = compare_golden(&s, &meta, folder, |_| {});
+            assert_eq!(message["chapter"]["cleanedPages"], 3);
+        }
+    }
+
+    /// Compare the message written for `meta` with the fixture in
+    /// `fixtures/handoff/<folder>/<key>/`, images and all, after `strip`.
+    /// `MC_WRITE_GOLDEN=1` writes the fixture first. Answers the message as
+    /// written (with the fixed `sentAt`).
+    fn compare_golden(s: &Scratch, meta: &HandoffMeta, folder: &str, strip: impl Fn(&mut serde_json::Value)) -> serde_json::Value {
+        let dir = s.0.join("handoff/to-typesetter").join(handoff_key(meta));
+        let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/handoff").join(folder).join(handoff_key(meta));
         let mut message = read(&dir.join("handoff.json"));
         message["sentAt"] = "2026-11-25T10:00:00.000Z".into();
-        let body = serde_json::to_vec_pretty(&message).unwrap();
+        let written = message.clone();
         if std::env::var_os("MC_WRITE_GOLDEN").is_some() {
+            let mut kept = message.clone();
+            strip(&mut kept);
             let _ = std::fs::remove_dir_all(&golden);
             for sub in ["raws", "cleaned"] {
                 std::fs::create_dir_all(golden.join(sub)).unwrap();
@@ -3196,8 +3338,9 @@ mod handoff_tests {
                     std::fs::copy(entry.path(), golden.join(sub).join(entry.file_name())).unwrap();
                 }
             }
-            std::fs::write(golden.join("handoff.json"), &body).unwrap();
+            std::fs::write(golden.join("handoff.json"), serde_json::to_vec_pretty(&kept).unwrap()).unwrap();
         }
+        strip(&mut message);
         assert_eq!(read(&golden.join("handoff.json")), message, "the message format changed: update both apps and the fixture");
         for page in message["pages"].as_array().unwrap() {
             for key in ["raw", "cleaned"] {
@@ -3205,5 +3348,58 @@ mod handoff_tests {
                 assert_eq!(std::fs::read(golden.join(name)).unwrap(), std::fs::read(dir.join(name)).unwrap(), "{name}");
             }
         }
+        written
+    }
+
+    /// A split chapter's number as typed reaches Pear in `label`, which its
+    /// chapter key reads first; `number` is the whole number.
+    #[test]
+    fn a_split_chapter_sends_its_label_as_typed() {
+        let (number, label) = library::chapter_label("12.5").unwrap();
+        let chapter: library::IndexChapter = serde_json::from_value(serde_json::json!({
+            "id": "c9", "name": "Chapter 12.5", "number": number, "label": label,
+            "source_path": null, "created": 0, "last_opened": 0,
+        }))
+        .unwrap();
+        let project: library::IndexProject = serde_json::from_value(serde_json::json!({
+            "id": "p1", "name": "Golden Series", "mode": "single", "source_path": null, "created": 0, "last_opened": 0,
+        }))
+        .unwrap();
+        let meta = meta_for(&project, &chapter, "11111111-2222-4333-8444-555555555555", "test", SendKind::Save);
+        let s = Scratch::new("split");
+        let job = golden_job(&s);
+        write_handoff(&job, &meta, &s.0, false).unwrap();
+        let message = read(&s.0.join("handoff/to-typesetter").join(handoff_key(&meta)).join("handoff.json"));
+        assert_eq!(message["chapter"]["label"], "12.5");
+        assert_eq!(message["chapter"]["number"], 12);
+        assert_eq!(message["chapter"]["title"], "Chapter 12.5");
+    }
+
+    #[test]
+    fn a_rename_refused_by_a_sharing_violation_is_tried_five_more_times() {
+        use std::io::{Error, ErrorKind};
+        let busy = |e: &Error| e.kind() == ErrorKind::ResourceBusy;
+        let mut tries = 0;
+        let outcome = retry_sharing(|| {
+            tries += 1;
+            if tries < 4 { Err(Error::from(ErrorKind::ResourceBusy)) } else { Ok(()) }
+        }, busy, std::time::Duration::ZERO);
+        assert!(outcome.is_ok());
+        assert_eq!(tries, 4);
+        let mut tries = 0;
+        let outcome = retry_sharing(|| {
+            tries += 1;
+            Err(Error::from(ErrorKind::ResourceBusy))
+        }, busy, std::time::Duration::ZERO);
+        assert!(outcome.is_err());
+        assert_eq!(tries, 6, "the first try and 5 more");
+        let mut tries = 0;
+        let _ = retry_sharing(|| {
+            tries += 1;
+            Err(Error::from(ErrorKind::NotFound))
+        }, busy, std::time::Duration::ZERO);
+        assert_eq!(tries, 1, "any other error is said at once");
+        // Over one second in all on Windows.
+        assert!(!sharing_violation(&Error::from(ErrorKind::NotFound)));
     }
 }

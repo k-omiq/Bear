@@ -32,6 +32,7 @@ mod rollback;
 mod screen_color;
 pub mod run;
 fn app_context() -> tauri::Context<tauri::Wry> { tauri::generate_context!() }
+mod send_to_pear;
 mod settings;
 mod smoke;
 mod tile;
@@ -273,6 +274,14 @@ pub fn run() {
             data_folder::data_folder_move,
             data_folder::data_folder_use_existing,
             data_folder::data_folder_delete_old_copy,
+            data_folder::data_folder_quiet_setup,
+            data_folder::data_folder_plan,
+            data_folder::data_folder_progress,
+            data_folder::data_folder_show,
+            send_to_pear::send_to_pear_titles,
+            send_to_pear::send_to_pear_start,
+            send_to_pear::send_to_pear_progress,
+            send_to_pear::send_to_pear_stop,
             exporting::save_to_typesetter,
             library::create_project,
             library::create_chapter,
