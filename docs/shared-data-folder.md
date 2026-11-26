@@ -150,7 +150,7 @@ this computer?** True when any of these exists:
 | Mode | When | Library used | What the user sees |
 |---|---|---|---|
 | Legacy | No pointer | The old private place | Settings offers "Set up shared folder". |
-| Pending | Pointer is good, this app's data is still in its old place | The old private place | A card: "Move your library into the shared folder". |
+| Pending | Pointer is good, this app's data is still in its old place | The old private place | The dialog of section 5.4 (row D), once. Settings > Data folder keeps the offer. A Home card may also offer it until the user answers. |
 | Shared | Pointer is good, marker matches `folderId`, own subfolder has its library file (`Cleaner/index.json` or the Pear equivalent), or there was nothing to move and setup created it | `<root>/<App>/` | Normal. |
 | Unavailable | Pointer exists, but the folder is missing (unplugged drive), its marker is missing, its `folderId` differs, or a schema is newer | None | A blocking screen: "Data folder not found at X. Reconnect the drive, or choose another folder." |
 
@@ -175,7 +175,11 @@ one row; the first row that matches wins.
 
 Unavailable for any other reason (section 5 table) stays as in version 1.
 
-"No subfolder yet" also covers a subfolder that exists but is empty. A
+"No subfolder yet" also covers a subfolder that exists but is empty. One
+exception: when this app's stored answer says it already set up or joined
+this folder (`accepted`, or a version 1 value read as one), an empty
+subfolder is filled with its library file without asking, and the app is
+Shared. A version 1 setup with nothing to move can leave this state. A
 non-empty subfolder without its library file is Unavailable: "The Pear (or
 Cleaner) folder inside the data folder is damaged."
 
@@ -194,8 +198,10 @@ without asking, only when all of these hold:
 - It is on the same volume as this app's current library, so Setup is one
   `rename`: instant, nothing copied. (No library yet: nothing to check.)
 - No file in the current library is cloud-only (section 7, step 2).
-- Neither the current library nor the default place is inside a known sync
-  folder (section 7, "Default location").
+- The default place is not inside a known sync folder (section 7, "Default
+  location"). The current library may be in one (Pear's legacy
+  `~/Documents/MangaTypesetter` often is): moving out of it is the point, and
+  the cloud-only check above covers the risk.
 - No job is running. (It runs before the library opens, so none can be.)
 - Every check above is made again under `move.lock`, just before the
   rename. The other app's lock rules (section 6) apply as for any setup.
@@ -244,7 +250,7 @@ Top to bottom:
 5. One line that says what will happen:
    - Set up, same volume: "Your library moves there. It takes a moment."
    - Set up, other volume: "Your library (9.7 GB) is copied there. It takes
-     about 8 minutes." The time uses 20 MB/s and rounds up to whole minutes.
+     about 9 minutes." The time uses 20 MB/s and rounds up to whole minutes.
    - Join: "Pear already uses this folder. Your library (4.4 GB) moves in
      next to it." Same-volume and other-volume variants as for Set up.
    - No library yet: "Nothing to move."
@@ -589,7 +595,10 @@ then containment, then name order.
 **Waiting**: a message that waits stays in `handoff/to-typesetter/<key>`,
 unclaimed. To list it, Pear's Rust side reads its `handoff.json` in place
 (a read-only command; it opens only that file, never the images, and closes
-it at once) and never writes there. Pear keeps in memory which keys it has
+it at once) and never writes there. Only while the match screen shows a
+row that may link (section 8.4.4), Pear also reads the message's raws in
+place, to hash them and read their sizes; it never claims or writes them
+for that. Pear keeps in memory which keys it has
 judged, with their `sentAt`. A key is judged again when its `sentAt` changes
 or a Pear project is created, renamed or deleted; otherwise a waiting
 message is neither claimed nor re-read. The cleaner retries a directory
@@ -624,7 +633,7 @@ One row per waiting cleaner title:
     project, next to Pear's.
   - **Skip this chapter**.
 - If pages cannot be paired (rule below), link and replace are not offered.
-  The row says why, for example "Pages differ: 15 here, 14 in Pear", and
+  The row says why, for example "Pages differ: 15 in Manga Cleaner, 14 in Pear", and
   offers "Add as a separate chapter" or "Skip this chapter".
 
 - A Pear project can be chosen by one row only. Once one row picks it, the
