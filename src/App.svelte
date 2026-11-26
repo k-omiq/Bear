@@ -52,7 +52,15 @@
   import DataFolderBusy from './lib/shell/DataFolderBusy.svelte'
   import DataFolderDialog from './lib/dialogs/DataFolderDialog.svelte'
   import SendToPearStatus from './lib/shell/SendToPearStatus.svelte'
-  import { dataFolder, dataFolderHeld, loadDataFolder, runStartFlow, startDialog } from './lib/state/datafolder.svelte.js'
+  import {
+    QUIET_SETUP_NOTICE,
+    dataFolder,
+    dataFolderHeld,
+    loadDataFolder,
+    runStartFlow,
+    showQuietSetupNotice,
+    startDialog,
+  } from './lib/state/datafolder.svelte.js'
   import { openSettings } from './lib/dialogs/settingslinks.js'
   import { untrack } from 'svelte'
 
@@ -119,6 +127,12 @@
   // The first read also runs the start table once (contract section 5.1):
   // a quiet setup, the first-run Join step, or the centered dialog.
   $effect(() => untrack(() => void loadDataFolder().then(() => runStartFlow())))
+  // The quiet setup's one-time notice waits for the first-launch dialog to
+  // close: under it, it could not be seen (contract 5.2).
+  $effect(() => {
+    const covered = firstLaunch.open
+    if (session.quietSetupNotice) untrack(() => showQuietSetupNotice({ covered }))
+  })
   // In the editor too: an unplugged drive must not wait for a refused call.
   $effect(() => {
     const refresh = () => {
@@ -207,7 +221,7 @@
       open: () => openSettings('dataFolder'),
     },
     // The one-time line after a quiet setup: Show opens the folder.
-    'notice.dataFolder.quietSetup': {
+    [QUIET_SETUP_NOTICE]: {
       labelKey: 'notice.dataFolder.show',
       open: () => void getBackend().dataFolderShow?.().catch(() => {}),
       sticky: true,

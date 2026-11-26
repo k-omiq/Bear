@@ -11,6 +11,7 @@ import { setBackend } from '../api/backend.js'
 import { createMockBackend } from '../api/mock.js'
 import { t } from '../i18n/index.js'
 import { dataFolder, resetDataFolder, startDialog, startFlow } from '../state/datafolder.svelte.js'
+import { dismissFirstLaunch, firstLaunch, resetFirstLaunch } from '../dialogs/firstlaunch.svelte.js'
 import { session } from '../state/session.svelte.js'
 import { app } from '../state/app.svelte.js'
 import App from '../../App.svelte'
@@ -37,6 +38,7 @@ beforeEach(() => {
   // The first-launch offer is a dialog of its own; it is not what this file is about.
   session.firstLaunchOffered = true
   session.dataFolderPromptAnswered = false
+  session.quietSetupNotice = null
   app.notices.length = 0
 })
 
@@ -151,4 +153,22 @@ it('asks Join in the dialog when Pear set the folder up and this app was used be
   await waitFor(() => expect(dataFolder.status?.mode).toBe('shared'))
   await screen.findByText(t('startFolder.done', { path: '~/Manga Library' }), { exact: false })
   expect(screen.getByRole('button', { name: t('startFolder.chooseTitles') })).toBeTruthy()
+})
+
+it('holds the quiet setup notice until the first-launch dialog closes, then keeps it', async () => {
+  session.firstLaunchOffered = false
+  mockBackend()
+  try {
+    render(App)
+    await waitFor(() => expect(dataFolder.status?.mode).toBe('shared'))
+    await waitFor(() => expect(firstLaunch.open).toBe(true))
+    expect(app.notices.some((n) => n.key === 'notice.dataFolder.quietSetup')).toBe(false)
+    expect(session.quietSetupNotice).toBe('~/Manga Library')
+    dismissFirstLaunch()
+    await waitFor(() => expect(app.notices.filter((n) => n.key === 'notice.dataFolder.quietSetup')).toHaveLength(1))
+    expect(session.quietSetupNotice).toBeNull()
+    expect((await screen.findAllByText(t('notice.dataFolder.quietSetup', { path: '~/Manga Library' }))).length).toBeGreaterThan(0)
+  } finally {
+    resetFirstLaunch()
+  }
 })

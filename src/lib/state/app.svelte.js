@@ -74,6 +74,7 @@ export const MAX_NOTICES = 4
  * @property {'info'|'warn'} tone
  * @property {string} [icon]
  * @property {number} [duration]
+ * @property {boolean} [keep] - never pushed out by newer notices
  */
 
 export const app = $state({
@@ -310,7 +311,10 @@ const ONCE_WHILE_SHOWN = new Set(['retouch.notice.noScreen'])
  * Queue a notice. Takes i18n data, never text - the backend's `notice` events
  * are forwarded here verbatim.
  *
- * @param {{key: string, params?: Record<string, unknown>, tone?: 'info'|'warn', icon?: string, duration?: number}} spec
+ * A `keep` notice is never pushed out by newer ones: it stays until it is
+ * closed or its action is pressed.
+ *
+ * @param {{key: string, params?: Record<string, unknown>, tone?: 'info'|'warn', icon?: string, duration?: number, keep?: boolean}} spec
  * @returns {string} the notice's id
  */
 export function notify(spec) {
@@ -327,9 +331,14 @@ export function notify(spec) {
     tone: spec.tone ?? 'info',
     icon: spec.icon,
     duration: spec.duration,
+    keep: spec.keep === true,
   }
   app.notices.push(notice)
-  while (app.notices.length > MAX_NOTICES) app.notices.shift()
+  while (app.notices.length > MAX_NOTICES) {
+    const oldest = app.notices.findIndex((shown) => !shown.keep)
+    if (oldest < 0) break
+    app.notices.splice(oldest, 1)
+  }
   return notice.id
 }
 

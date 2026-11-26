@@ -156,12 +156,17 @@ pub fn plain_io(path: &Path, error: &std::io::Error) -> String {
 }
 
 fn plain_words(error: &std::io::Error) -> &'static str {
+    plain_words_or(error, "The move could not finish.")
+}
+
+/// [`plain_words`], with `other` for an error none of the common ones is.
+pub(crate) fn plain_words_or(error: &std::io::Error, other: &'static str) -> &'static str {
     use std::io::ErrorKind;
     const NO_SPACE: &str = "There is not enough free space on that drive.";
     const NOT_ALLOWED: &str = "This app is not allowed to write there.";
     const GONE: &str = "The drive was disconnected.";
     const IN_USE: &str = "A file is in use by another app.";
-    const OTHER: &str = "The move could not finish.";
+
     match error.kind() {
         ErrorKind::StorageFull | ErrorKind::QuotaExceeded => return NO_SPACE,
         ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem => return NOT_ALLOWED,
@@ -185,7 +190,7 @@ fn plain_words(error: &std::io::Error) -> &'static str {
         Some(21 | 55 | 1167) if cfg!(windows) => GONE,
         // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
         Some(32 | 33) if cfg!(windows) => IN_USE,
-        _ => OTHER,
+        _ => other,
     }
 }
 

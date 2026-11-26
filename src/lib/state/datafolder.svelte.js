@@ -26,8 +26,8 @@
 
 import { getBackend } from '../api/backend.js'
 import { onBackendError } from '../api/backenderrors.js'
-import { notify } from './app.svelte.js'
-import { session, setStartAnswer } from './session.svelte.js'
+import { app, notify } from './app.svelte.js'
+import { session, setQuietSetupNotice, setStartAnswer } from './session.svelte.js'
 import { fillsEmptySubfolder, readStartAnswers, shownPath, startAction, startRow } from './startflow.js'
 
 /** @typedef {import('../api/backend.js').DataFolderStatus} DataFolderStatus */
@@ -323,13 +323,34 @@ export async function runStartFlow(backend = getBackend()) {
     if (!outcome.done) return
     dataFolder.generation += 1
     setStartAnswer('setup', 'accepted', 'shared')
-    notify({
-      key: 'notice.dataFolder.quietSetup',
-      params: { path: shownPath(outcome.status.root, outcome.status.home) },
-    })
+    // Said once it can be seen (`showQuietSetupNotice`), not now: the
+    // first-launch dialog may be over it.
+    setQuietSetupNotice(shownPath(outcome.status.root, outcome.status.home))
   } catch (error) {
     console.error('the quiet setup could not run', error)
   }
+}
+
+/** The key of the quiet setup's one-time notice. */
+export const QUIET_SETUP_NOTICE = 'notice.dataFolder.quietSetup'
+
+/**
+ * Show the quiet setup's one-time notice once nothing covers it (contract
+ * 5.2): after the first-launch dialog has closed. It then stays until it is
+ * closed or Show is pressed, and newer notices do not push it out. It
+ * counts as shown only from here, so a quit before it was visible shows it
+ * on the next start. Answers whether it showed it now.
+ *
+ * @param {{covered: boolean}} facts - whether the first-launch dialog is up
+ */
+export function showQuietSetupNotice({ covered }) {
+  const path = session.quietSetupNotice
+  if (!path || covered) return false
+  if (!app.notices.some((shown) => shown.key === QUIET_SETUP_NOTICE)) {
+    notify({ key: QUIET_SETUP_NOTICE, params: { path }, keep: true })
+  }
+  setQuietSetupNotice(null)
+  return true
 }
 
 /**

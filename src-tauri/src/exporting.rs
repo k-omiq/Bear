@@ -1243,16 +1243,19 @@ fn stage_handoff(job: &Job, meta: &HandoffMeta, root: &Path, staging: &Path, nex
 fn publish_handoff(base: &Path, key: &str, staging: &Path) -> Result<(), String> {
     let target = base.join(key);
     let stale = base.join(format!(".stale-{key}-{}", random_suffix()));
-    let had_stale = match rename_retrying(&target, &stale) {
+    // The earlier message steps aside first. Pear may be reading it: on
+    // Windows a folder with a file open inside refuses the rename with
+    // ERROR_ACCESS_DENIED, so that rename waits that out too.
+    let had_stale = match rename_held_retrying(&target, &stale) {
         Ok(()) => true,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => return Err(format!("{}: {error}", crate::data_folder::shown(&target))),
+        Err(error) => return Err(publish_error(&target, &error)),
     };
     if let Err(error) = rename_retrying(staging, &target) {
         if had_stale {
             let _ = rename_retrying(&stale, &target);
         }
-        return Err(format!("{}: {error}", crate::data_folder::shown(&target)));
+        return Err(publish_error(&target, &error));
     }
     if had_stale {
         let _ = std::fs::remove_dir_all(&stale);
@@ -1267,10 +1270,40 @@ fn rename_retrying(from: &Path, to: &Path) -> std::io::Result<()> {
     retry_sharing(|| std::fs::rename(from, to), sharing_violation, std::time::Duration::from_millis(200))
 }
 
+/// The rename that moves the earlier message aside: also retried on
+/// `ERROR_ACCESS_DENIED`, which is what Windows answers for a folder with a
+/// file open inside (Pear reading `handoff.json`). 5 retries over 1 second.
+fn rename_held_retrying(from: &Path, to: &Path) -> std::io::Result<()> {
+    retry_sharing(|| std::fs::rename(from, to), |e| held_os_error(e.raw_os_error(), cfg!(windows)), std::time::Duration::from_millis(200))
+}
+
 /// `ERROR_SHARING_VIOLATION` and `ERROR_LOCK_VIOLATION`. Never on unix,
 /// where an open file does not stop a rename.
 fn sharing_violation(error: &std::io::Error) -> bool {
     cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33))
+}
+
+/// A Windows refusal that means another app has the folder open: access
+/// denied (a file open inside), or a sharing or lock violation.
+fn held_os_error(code: Option<i32>, windows: bool) -> bool {
+    windows && matches!(code, Some(5 | 32 | 33))
+}
+
+/// What a Save that could not publish its message says.
+const PEAR_READING: &str = "Pear is reading this chapter. Try Save again in a moment.";
+
+/// The plain words for a publish that failed; the raw text goes to the log
+/// only (contract section 11, "Plain errors").
+fn publish_error(target: &Path, error: &std::io::Error) -> String {
+    eprintln!("manga-cleaner: save: {}: {error}", target.display());
+    publish_words(error, cfg!(windows)).to_owned()
+}
+
+fn publish_words(error: &std::io::Error, windows: bool) -> &'static str {
+    if held_os_error(error.raw_os_error(), windows) {
+        return PEAR_READING;
+    }
+    crate::data_folder::plain_words_or(error, "The chapter could not be written to the data folder.")
 }
 
 /// `attempt`, then up to 5 more tries `pause` apart while `retry` says the
@@ -3401,5 +3434,56 @@ mod handoff_tests {
         assert_eq!(tries, 1, "any other error is said at once");
         // Over one second in all on Windows.
         assert!(!sharing_violation(&Error::from(ErrorKind::NotFound)));
+    }
+
+    #[test]
+    fn a_message_folder_held_open_on_windows_is_waited_out_then_said_plainly() {
+        use std::io::Error;
+        // Access denied is what Windows says for a folder with a file open inside.
+        let held = |e: &Error| held_os_error(e.raw_os_error(), true);
+        let mut tries = 0;
+        let outcome = retry_sharing(|| {
+            tries += 1;
+            if tries < 3 { Err(Error::from_raw_os_error(5)) } else { Ok(()) }
+        }, held, std::time::Duration::ZERO);
+        assert!(outcome.is_ok());
+        assert_eq!(tries, 3, "released while it waited: the Save goes through");
+        let mut tries = 0;
+        let outcome = retry_sharing(|| {
+            tries += 1;
+            Err(Error::from_raw_os_error(5))
+        }, held, std::time::Duration::ZERO);
+        assert_eq!(tries, 6, "the first try and 5 more");
+        let error = outcome.unwrap_err();
+        assert_eq!(publish_words(&error, true), PEAR_READING);
+        for code in [32, 33] {
+            assert_eq!(publish_words(&Error::from_raw_os_error(code), true), PEAR_READING);
+        }
+        // Never raw OS text, and never the held words for another error or on unix.
+        assert_eq!(publish_words(&Error::from(std::io::ErrorKind::StorageFull), true), "There is not enough free space on that drive.");
+        assert_eq!(publish_words(&Error::from(std::io::ErrorKind::Other), true), "The chapter could not be written to the data folder.");
+        assert!(!held_os_error(Some(5), false));
+        assert!(!held_os_error(Some(2), true));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_publish_keeps_the_earlier_message_whole_and_says_it_plainly() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("mc-publish-{}", random_suffix()));
+        let base = dir.join("to-typesetter");
+        std::fs::create_dir_all(base.join("key")).unwrap();
+        std::fs::write(base.join("key/handoff.json"), b"earlier").unwrap();
+        let staging = base.join(".staging-key-x");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join("handoff.json"), b"new").unwrap();
+        // A base that refuses every rename: as a held folder would.
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let refused = publish_handoff(&base, "key", &staging);
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let said = refused.unwrap_err();
+        assert!(!said.contains("os error") && !said.contains(&base.display().to_string()), "plain words only: {said}");
+        assert_eq!(std::fs::read(base.join("key/handoff.json")).unwrap(), b"earlier");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -5,7 +5,7 @@
  * first-run Join step. The backend is a stub per test.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { app } from './app.svelte.js'
+import { app, notify } from './app.svelte.js'
 import { session } from './session.svelte.js'
 import {
   PROGRESS_POLL_MS,
@@ -19,6 +19,7 @@ import {
   openStartDialog,
   resetDataFolder,
   runStartFlow,
+  showQuietSetupNotice,
   startAnswers,
   startBlocked,
   startDialog,
@@ -65,6 +66,7 @@ async function start(backend) {
 beforeEach(() => {
   resetDataFolder()
   session.dataFolderPromptAnswered = false
+  session.quietSetupNotice = null
   session.firstLaunchOffered = true
   app.notices.length = 0
 })
@@ -77,15 +79,30 @@ afterEach(() => {
 })
 
 describe('the quiet setup (row E)', () => {
-  it('runs once, stores Set up as accepted, and says where with a Show line', async () => {
+  it('runs once, stores Set up as accepted, and keeps its notice until it can be seen', async () => {
     const backend = stub(status())
     await start(backend)
     expect(backend.dataFolderQuietSetup).toHaveBeenCalledTimes(1)
     expect(dataFolder.status?.mode).toBe('shared')
     expect(startAnswers()).toEqual({ setup: 'accepted' })
     expect(dataFolder.generation).toBe(1)
+    // Not said under the first-launch dialog; still owed.
+    expect(app.notices).toHaveLength(0)
+    expect(session.quietSetupNotice).toBe('~/Manga Library')
+    expect(showQuietSetupNotice({ covered: true })).toBe(false)
+    expect(app.notices).toHaveLength(0)
+    expect(session.quietSetupNotice).toBe('~/Manga Library')
+    // Once it is uncovered: said, kept, and no longer owed.
+    expect(showQuietSetupNotice({ covered: false })).toBe(true)
     const notice = app.notices.find((n) => n.key === 'notice.dataFolder.quietSetup')
     expect(notice?.params).toEqual({ path: '~/Manga Library' })
+    expect(notice?.keep).toBe(true)
+    expect(session.quietSetupNotice).toBeNull()
+    expect(showQuietSetupNotice({ covered: false })).toBe(false)
+    // Newer notices never push it out.
+    for (let i = 0; i < 8; i += 1) notify({ key: 'notice.save.failed', params: { detail: String(i) } })
+    expect(app.notices.filter((n) => n.key === 'notice.dataFolder.quietSetup')).toHaveLength(1)
+    expect(app.notices).toHaveLength(4)
     // Once per launch.
     await runStartFlow(backend)
     expect(backend.dataFolderQuietSetup).toHaveBeenCalledTimes(1)
@@ -97,6 +114,7 @@ describe('the quiet setup (row E)', () => {
     expect(dataFolder.status?.mode).toBe('legacy')
     expect(startAnswers()).toEqual({})
     expect(app.notices).toHaveLength(0)
+    expect(session.quietSetupNotice).toBeNull()
   })
 
   it('is not run over a version 1 Not now', async () => {

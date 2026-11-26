@@ -214,6 +214,7 @@ function viewport() {
  * @property {import('../editor/navigation.js').Navigation} navigation - what the wheel, the middle button and a drag on empty canvas do; see `setNavigation`
  * @property {boolean} firstLaunchOffered - whether the first-launch download offer has been made on this machine
  * @property {boolean|{setup?: 'accepted'|'declined', join?: 'accepted'|'declined'}} dataFolderPromptAnswered - the start answers about the shared data folder, per question (`docs/shared-data-folder.md` section 5.3); `true` is a version 1 answer, read by `state/startflow.js#readStartAnswers`; see `setStartAnswer`
+ * @property {string|null} quietSetupNotice - the path a quiet setup put the library at, while its one-time notice has not been visible yet (`docs/shared-data-folder.md` section 5.2); see `setQuietSetupNotice`
  * @property {boolean} closeToTray - close control hides the window and keeps downloads running
  * @property {'rle'|'raw'} exportPsdCompression - how a PSD stores 8-bit channels: packed, or raw for readers that cannot unpack
  * @property {boolean} exportPsdLetteringLayer - whether a layered PSD carries a hidden layer marking where the lettering was
@@ -293,6 +294,7 @@ function defaults() {
     navigation: defaultNavigation(),
     firstLaunchOffered: false,
     dataFolderPromptAnswered: false,
+    quietSetupNotice: null,
     closeToTray: false,
     exportPsdCompression: 'rle',
     exportPsdLetteringLayer: false,
@@ -424,6 +426,7 @@ export function sanitizeSession(raw) {
     // version 2 one answer per question; both are kept as they are and read
     // by `state/startflow.js#readStartAnswers`.
     dataFolderPromptAnswered: startAnswersOr(record.dataFolderPromptAnswered, base.dataFolderPromptAnswered),
+    quietSetupNotice: typeof record.quietSetupNotice === 'string' && record.quietSetupNotice !== '' ? record.quietSetupNotice : base.quietSetupNotice,
     closeToTray: boolOr(record.closeToTray, base.closeToTray),
     exportPsdCompression: /** @type {'rle'|'raw'} */ (
       oneOf(record.exportPsdCompression, PSD_COMPRESSIONS, base.exportPsdCompression)
@@ -550,6 +553,7 @@ function persistable() {
     navigation: { ...session.navigation },
     firstLaunchOffered: session.firstLaunchOffered,
     dataFolderPromptAnswered: session.dataFolderPromptAnswered,
+    quietSetupNotice: session.quietSetupNotice,
     closeToTray: session.closeToTray,
     exportPsdCompression: session.exportPsdCompression,
     exportPsdLetteringLayer: session.exportPsdLetteringLayer,
@@ -1113,6 +1117,19 @@ export function setStartAnswer(question, how, mode = null) {
     : raw && typeof raw === 'object' ? { ...raw } : {}
   answers[question] = how
   session.dataFolderPromptAnswered = answers
+  save()
+}
+
+/**
+ * The quiet setup's one-time notice (contract 5.2), kept until it has been
+ * visible: a path while it waits, `null` once it was shown. Kept in this
+ * app's own store, so a quit before the first-launch dialog closed still
+ * shows it on the next start.
+ *
+ * @param {string|null} path
+ */
+export function setQuietSetupNotice(path) {
+  session.quietSetupNotice = typeof path === 'string' && path !== '' ? path : null
   save()
 }
 
