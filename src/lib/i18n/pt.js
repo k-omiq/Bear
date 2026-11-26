@@ -116,6 +116,9 @@ export const pt = {
   },
   shell: {
     dataFolder: {
+      titleMoveUnfinished: 'A mudança da pasta de dados não terminou',
+      bodyMoveUnfinished: 'O app termina a mudança sozinho assim que puder. Feche o Pear se ele estiver aberto.',
+      checking: 'Verificando de novo a cada poucos segundos.',
       moving: 'A pasta de dados está sendo movida. Isso pode levar alguns minutos. O app volta quando terminar.',
       title: 'Pasta de dados não encontrada',
       reasonUnknown: 'A pasta de dados não foi encontrada.',
@@ -170,6 +173,8 @@ export const pt = {
   },
   settings: {
     dataFolder: {
+      sendTitles: 'Enviar títulos ao Pear…',
+      sendTitlesBody: 'Leve ao Pear os títulos que você limpou antes.',
       intro: 'Uma pasta onde o Manga Cleaner e o diagramador guardam as suas bibliotecas. Salvar envia um capítulo para lá, e o diagramador o recebe.',
       recovered: 'No último início: {detail}',
       where: 'Local',
@@ -1234,19 +1239,77 @@ export const pt = {
       formatChanged: 'Página {page}: Salvo como {used} em vez de {requested}: {requested} não tem modo {mode}, e converter alteraria o arquivo.',
     },
   },
+  startFolder: {
+    title: 'Uma pasta para os dois apps',
+    lineOne: 'O Manga Cleaner e o Pear guardam seus títulos em um só lugar.',
+    lineTwo: 'Os capítulos que você limpa aparecem no Pear quando você os salva.',
+    drawing: 'Manga Cleaner e Pear apontando para uma só pasta',
+    change: 'Alterar…',
+    chooser: 'Escolha onde colocar a pasta de dados',
+    setupSameVolume: 'Sua biblioteca é movida para lá. Leva só um instante.',
+    setupOtherVolume: {
+      select: 'minutes',
+      one: 'Sua biblioteca ({bytes:memory}) é copiada para lá. Leva cerca de 1 minuto.',
+      other: 'Sua biblioteca ({bytes:memory}) é copiada para lá. Leva cerca de {minutes} minutos.',
+    },
+    joinSameVolume: 'O Pear já usa esta pasta. Sua biblioteca ({bytes:memory}) é movida para o lado dela.',
+    joinOtherVolume: {
+      select: 'minutes',
+      one: 'O Pear já usa esta pasta. Sua biblioteca ({bytes:memory}) é copiada para o lado dela. Leva cerca de 1 minuto.',
+      other: 'O Pear já usa esta pasta. Sua biblioteca ({bytes:memory}) é copiada para o lado dela. Leva cerca de {minutes} minutos.',
+    },
+    nothingToMove: 'Não há nada para mover.',
+    planning: 'Verificando sua biblioteca…',
+    use: 'Usar uma pasta',
+    notNow: 'Agora não',
+    blocked: 'Feche o Pear primeiro.',
+    checkAgain: 'Verificar de novo',
+    copying: 'Copiando {copied:memory} de {total:memory}',
+    moving: 'Movendo sua biblioteca…',
+    done: 'Pronto. Os dois apps agora usam {path}.',
+    titles: {
+      one: 'Você tem 1 título no Manga Cleaner. Enviá-lo ao Pear?',
+      other: 'Você tem {count} títulos no Manga Cleaner. Enviá-los ao Pear?',
+    },
+    chooseTitles: 'Escolher títulos…',
+    later: 'Depois',
+    failed: 'A biblioteca não foi movida.',
+    nothingChanged: 'Nada foi alterado.',
+  },
+  sendToPear: {
+    title: 'Enviar títulos ao Pear',
+    intro: 'Os capítulos com páginas limpas vão para o Pear. Depois o Pear pergunta como eles combinam com os títulos que já tem.',
+    loading: 'Lendo seus títulos…',
+    empty: 'Ainda não há títulos no Manga Cleaner.',
+    counts: {
+      select: 'chapters',
+      one: '1 capítulo, {cleaned} limpos',
+      other: '{chapters} capítulos, {cleaned} limpos',
+    },
+    nothingCleaned: 'Nada limpo ainda',
+    sentBefore: 'Enviado antes',
+    again: 'Enviar tudo de novo',
+    againDescription: 'Envia todos os capítulos limpos, também os já enviados que não mudaram.',
+    send: {
+      one: 'Enviar 1 título',
+      other: 'Enviar {count} títulos',
+    },
+    nothingNew: 'Nada novo para enviar. Ative Enviar tudo de novo para enviar tudo.',
+    sending: {
+      select: 'total',
+      one: 'Enviando {done} de 1 capítulo',
+      other: 'Enviando {done} de {total} capítulos',
+    },
+    stop: 'Parar',
+    failed: 'Não enviado: {detail}',
+    open: 'Enviar títulos ao Pear',
+  },
   home: {
     dataFolder: {
       title: 'Pasta de dados compartilhada',
       body: 'O diagramador configurou uma pasta de dados compartilhada em {path}. Mover para lá a sua biblioteca de limpeza?',
       move: 'Mover',
       later: 'Depois',
-    },
-    dataFolderPrompt: {
-      title: 'Uma pasta de dados para o Manga Cleaner e o Pear',
-      body: 'Mover coloca a sua biblioteca em {path}. O Manga Cleaner e o Pear compartilham essa pasta. Os capítulos limpos que você salvar aqui aparecem depois no Pear.',
-      move: 'Mover',
-      choose: 'Escolher pasta',
-      notNow: 'Agora não',
     },
     section: {
       projects: 'Projetos',
@@ -1921,6 +1984,16 @@ export const pt = {
     detectorFor: 'Limpar {language}',
   },
   onboarding: {
+    join: {
+      heading: 'Uma pasta para os dois apps',
+      body: 'O Pear já guarda os títulos dele em {path}. Usar a mesma pasta?',
+      use: 'Usar a mesma pasta',
+      keep: 'Manter separado',
+      working: 'Preparando a pasta…',
+      done: 'Pronto. Os dois apps agora usam {path}.',
+      kept: 'Mantido separado. Em Configurações, em Pasta de dados, você pode entrar nela depois.',
+      failed: 'Não foi feito: {detail}',
+    },
     title: 'Configurar o Manga Cleaner',
     stepOf: 'Etapa {current} de {total}',
     progressLabel: 'Progresso da configuração',
@@ -2961,6 +3034,21 @@ export const pt = {
     },
   },
   notice: {
+    dataFolder: {
+      quietSetup: 'Sua biblioteca agora fica em {path}.',
+      show: 'Mostrar',
+    },
+    sendToPear: {
+      done: {
+        one: '1 capítulo enviado ao Pear.',
+        other: '{count} capítulos enviados ao Pear.',
+      },
+      stopped: {
+        one: 'Parado. 1 capítulo foi enviado ao Pear.',
+        other: 'Parado. {count} capítulos foram enviados ao Pear.',
+      },
+      failed: 'Capítulos enviados ao Pear: {count}. Não enviados: {failed}.',
+    },
     save: {
       sent: {
         one: '1 página enviada ao diagramador.',

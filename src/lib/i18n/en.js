@@ -149,6 +149,9 @@ export const en = {
   /* ================================================================== */
   shell: {
     dataFolder: {
+      titleMoveUnfinished: 'Data folder move not finished',
+      bodyMoveUnfinished: 'The app finishes the move by itself as soon as it can. Close Pear if it is open.',
+      checking: 'Checking again every few seconds.',
       moving: 'The data folder is moving. This can take a few minutes. The app is back when it ends.',
       title: 'Data folder not found',
       reasonUnknown: 'The data folder cannot be found.',
@@ -222,6 +225,8 @@ export const en = {
   /* ================================================================== */
   settings: {
     dataFolder: {
+      sendTitles: 'Send titles to Pear…',
+      sendTitlesBody: 'Bring the titles you cleaned before across to Pear.',
       intro: 'One folder that Manga Cleaner and the typesetter both keep their libraries in. Save sends a chapter there, and the typesetter picks it up.',
       recovered: 'At the last start: {detail}',
       where: 'Location',
@@ -1476,20 +1481,77 @@ export const en = {
   /* ================================================================== */
   /* home - library, chapters, and Home's four dialogs                   */
   /* ================================================================== */
+  startFolder: {
+    title: 'One folder for both apps',
+    lineOne: 'Manga Cleaner and Pear keep your titles in one place.',
+    lineTwo: 'Chapters you clean show up in Pear when you save them.',
+    drawing: 'Manga Cleaner and Pear, both pointing at one folder',
+    change: 'Change…',
+    chooser: 'Choose where to put the data folder',
+    setupSameVolume: 'Your library moves there. It takes a moment.',
+    setupOtherVolume: {
+      select: 'minutes',
+      one: 'Your library ({bytes:memory}) is copied there. It takes about 1 minute.',
+      other: 'Your library ({bytes:memory}) is copied there. It takes about {minutes} minutes.',
+    },
+    joinSameVolume: 'Pear already uses this folder. Your library ({bytes:memory}) moves in next to it.',
+    joinOtherVolume: {
+      select: 'minutes',
+      one: 'Pear already uses this folder. Your library ({bytes:memory}) is copied in next to it. It takes about 1 minute.',
+      other: 'Pear already uses this folder. Your library ({bytes:memory}) is copied in next to it. It takes about {minutes} minutes.',
+    },
+    nothingToMove: 'Nothing to move.',
+    planning: 'Looking at your library…',
+    use: 'Use one folder',
+    notNow: 'Not now',
+    blocked: 'Close Pear first.',
+    checkAgain: 'Check again',
+    copying: 'Copying {copied:memory} of {total:memory}',
+    moving: 'Moving your library…',
+    done: 'Done. Both apps now use {path}.',
+    titles: {
+      one: 'You have 1 title in Manga Cleaner. Send it to Pear?',
+      other: 'You have {count} titles in Manga Cleaner. Send them to Pear?',
+    },
+    chooseTitles: 'Choose titles…',
+    later: 'Later',
+    failed: 'The library did not move.',
+    nothingChanged: 'Nothing was changed.',
+  },
+  sendToPear: {
+    title: 'Send titles to Pear',
+    intro: 'Chapters with cleaned pages go to Pear. Pear then asks how they match the titles it already has.',
+    loading: 'Reading your titles…',
+    empty: 'There are no titles in Manga Cleaner yet.',
+    counts: {
+      select: 'chapters',
+      one: '1 chapter, {cleaned} cleaned',
+      other: '{chapters} chapters, {cleaned} cleaned',
+    },
+    nothingCleaned: 'Nothing cleaned yet',
+    sentBefore: 'Sent before',
+    again: 'Send all again',
+    againDescription: 'Sends every cleaned chapter, also the ones sent before that did not change.',
+    send: {
+      one: 'Send 1 title',
+      other: 'Send {count} titles',
+    },
+    nothingNew: 'Nothing new to send. Turn on Send all again to send it all.',
+    sending: {
+      select: 'total',
+      one: 'Sending {done} of 1 chapter',
+      other: 'Sending {done} of {total} chapters',
+    },
+    stop: 'Stop',
+    failed: 'Not sent: {detail}',
+    open: 'Send titles to Pear',
+  },
   home: {
     dataFolder: {
       title: 'Shared data folder',
       body: 'The typesetter set up a shared data folder at {path}. Move your cleaner library there?',
       move: 'Move',
       later: 'Later',
-    },
-    // The first-run card in Legacy mode (home/DataFolderPrompt.svelte).
-    dataFolderPrompt: {
-      title: 'One data folder for Manga Cleaner and Pear',
-      body: 'Move puts your library in {path}. Manga Cleaner and Pear share that folder. Cleaned chapters you save here then show up in Pear.',
-      move: 'Move',
-      choose: 'Choose folder',
-      notNow: 'Not now',
     },
     section: {
       projects: 'Projects',
@@ -2472,6 +2534,16 @@ export const en = {
     detectorFor: 'Clean {language}',
   },
   onboarding: {
+    join: {
+      heading: 'One folder for both apps',
+      body: 'Pear already keeps its titles in {path}. Use the same folder?',
+      use: 'Use the same folder',
+      keep: 'Keep separate',
+      working: 'Setting up the folder…',
+      done: 'Done. Both apps now use {path}.',
+      kept: 'Kept separate. Settings, under Data folder, can join it later.',
+      failed: 'Not done: {detail}',
+    },
     title: 'Set up Manga Cleaner',
     stepOf: 'Step {current} of {total}',
     progressLabel: 'Setup progress',
@@ -3722,6 +3794,21 @@ export const en = {
   /* something that already happened.                                    */
   /* ================================================================== */
   notice: {
+    dataFolder: {
+      quietSetup: 'Your library now lives in {path}.',
+      show: 'Show',
+    },
+    sendToPear: {
+      done: {
+        one: 'Sent 1 chapter to Pear.',
+        other: 'Sent {count} chapters to Pear.',
+      },
+      stopped: {
+        one: 'Stopped. 1 chapter was sent to Pear.',
+        other: 'Stopped. {count} chapters were sent to Pear.',
+      },
+      failed: 'Chapters sent to Pear: {count}. Not sent: {failed}.',
+    },
     save: {
       sent: {
         one: 'Sent 1 page to the typesetter.',

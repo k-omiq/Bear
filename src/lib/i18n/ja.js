@@ -116,6 +116,9 @@ export const ja = {
   },
   shell: {
     dataFolder: {
+      titleMoveUnfinished: 'データフォルダーの移動が完了していません',
+      bodyMoveUnfinished: 'アプリはできるようになりしだい自動で移動を完了します。Pear が開いていれば閉じてください。',
+      checking: '数秒ごとに確認し直しています。',
       moving: 'データフォルダーを移動しています。数分かかることがあります。終わるとアプリに戻ります。',
       title: 'データフォルダーが見つかりません',
       reasonUnknown: 'データフォルダーが見つかりません。',
@@ -169,6 +172,8 @@ export const ja = {
   },
   settings: {
     dataFolder: {
+      sendTitles: 'タイトルを Pear に送る…',
+      sendTitlesBody: 'これまでにクリーニングしたタイトルを Pear に送ります。',
       intro: 'Manga Cleaner と写植アプリが両方のライブラリを置く 1 つのフォルダーです。保存するとチャプターがそこへ送られ、写植アプリが受け取ります。',
       recovered: '前回の起動時: {detail}',
       where: '場所',
@@ -1226,19 +1231,77 @@ export const ja = {
       formatChanged: 'ページ {page}: {requested} ではなく {used} で保存しました。{requested} には {mode} モードがなく、変換するとファイルが変わってしまうためです。',
     },
   },
+  startFolder: {
+    title: '2 つのアプリで 1 つのフォルダー',
+    lineOne: 'Manga Cleaner と Pear がタイトルを 1 か所にまとめます。',
+    lineTwo: 'クリーニングしたチャプターは、保存すると Pear に表示されます。',
+    drawing: '1 つのフォルダーを共有する Manga Cleaner と Pear',
+    change: '変更…',
+    chooser: 'データフォルダーを置く場所を選択',
+    setupSameVolume: 'ライブラリをそこに移動します。すぐに終わります。',
+    setupOtherVolume: {
+      select: 'minutes',
+      one: 'ライブラリ ({bytes:memory}) をそこにコピーします。約 1 分かかります。',
+      other: 'ライブラリ ({bytes:memory}) をそこにコピーします。約 {minutes} 分かかります。',
+    },
+    joinSameVolume: 'Pear はすでにこのフォルダーを使っています。ライブラリ ({bytes:memory}) をその隣に移動します。',
+    joinOtherVolume: {
+      select: 'minutes',
+      one: 'Pear はすでにこのフォルダーを使っています。ライブラリ ({bytes:memory}) をその隣にコピーします。約 1 分かかります。',
+      other: 'Pear はすでにこのフォルダーを使っています。ライブラリ ({bytes:memory}) をその隣にコピーします。約 {minutes} 分かかります。',
+    },
+    nothingToMove: '移動するものはありません。',
+    planning: 'ライブラリを確認しています…',
+    use: '1 つのフォルダーを使う',
+    notNow: '今はしない',
+    blocked: '先に Pear を閉じてください。',
+    checkAgain: 'もう一度確認',
+    copying: '{total:memory} 中 {copied:memory} をコピー中',
+    moving: 'ライブラリを移動しています…',
+    done: '完了しました。2 つのアプリは {path} を使います。',
+    titles: {
+      one: 'Manga Cleaner に 1 件のタイトルがあります。Pear に送りますか?',
+      other: 'Manga Cleaner に {count} 件のタイトルがあります。Pear に送りますか?',
+    },
+    chooseTitles: 'タイトルを選ぶ…',
+    later: 'あとで',
+    failed: 'ライブラリは移動されませんでした。',
+    nothingChanged: '何も変更されていません。',
+  },
+  sendToPear: {
+    title: 'タイトルを Pear に送る',
+    intro: 'クリーニング済みのページがあるチャプターを Pear に送ります。そのあと Pear が、既存のタイトルとの対応を確認します。',
+    loading: 'タイトルを読み込んでいます…',
+    empty: 'Manga Cleaner にはまだタイトルがありません。',
+    counts: {
+      select: 'chapters',
+      one: '1 チャプター、クリーニング済み {cleaned}',
+      other: '{chapters} チャプター、クリーニング済み {cleaned}',
+    },
+    nothingCleaned: 'まだクリーニングしていません',
+    sentBefore: '送信済み',
+    again: 'すべてもう一度送る',
+    againDescription: 'クリーニング済みのチャプターをすべて送ります。送信済みで変更のないものも含みます。',
+    send: {
+      one: '1 件のタイトルを送る',
+      other: '{count} 件のタイトルを送る',
+    },
+    nothingNew: '新しく送るものはありません。すべて送るには「すべてもう一度送る」をオンにしてください。',
+    sending: {
+      select: 'total',
+      one: '1 チャプター中 {done} を送信中',
+      other: '{total} チャプター中 {done} を送信中',
+    },
+    stop: '停止',
+    failed: '送れませんでした: {detail}',
+    open: 'タイトルを Pear に送る',
+  },
   home: {
     dataFolder: {
       title: '共有データフォルダー',
       body: '写植アプリが {path} に共有データフォルダーを設定しました。クリーナーのライブラリをそこへ移動しますか？',
       move: '移動',
       later: 'あとで',
-    },
-    dataFolderPrompt: {
-      title: 'Manga Cleaner と Pear で共有するデータフォルダー',
-      body: '「移動」でライブラリを {path} に移します。Manga Cleaner と Pear はこのフォルダーを共有します。ここで保存したクリーニング済みのチャプターは Pear に表示されます。',
-      move: '移動',
-      choose: 'フォルダーを選択',
-      notNow: '今はしない',
     },
     section: {
       projects: 'プロジェクト',
@@ -1893,6 +1956,16 @@ export const ja = {
     detectorFor: '{language}をクリーン',
   },
   onboarding: {
+    join: {
+      heading: '2 つのアプリで 1 つのフォルダー',
+      body: 'Pear はすでに {path} にタイトルを保存しています。同じフォルダーを使いますか?',
+      use: '同じフォルダーを使う',
+      keep: '別々にする',
+      working: 'フォルダーを準備しています…',
+      done: '完了しました。2 つのアプリは {path} を使います。',
+      kept: '別々のままにしました。あとから設定のデータフォルダーで参加できます。',
+      failed: 'できませんでした: {detail}',
+    },
     title: 'Manga Cleaner のセットアップ',
     stepOf: 'ステップ {current} / {total}',
     progressLabel: 'セットアップの進行状況',
@@ -2915,6 +2988,21 @@ export const ja = {
     },
   },
   notice: {
+    dataFolder: {
+      quietSetup: 'ライブラリは {path} に移りました。',
+      show: '表示',
+    },
+    sendToPear: {
+      done: {
+        one: '1 チャプターを Pear に送りました。',
+        other: '{count} チャプターを Pear に送りました。',
+      },
+      stopped: {
+        one: '停止しました。1 チャプターを Pear に送りました。',
+        other: '停止しました。{count} チャプターを Pear に送りました。',
+      },
+      failed: 'Pear に送ったチャプター: {count}。送れなかったチャプター: {failed}。',
+    },
     save: {
       sent: {
         other: '{count} ページを写植アプリへ送りました。',

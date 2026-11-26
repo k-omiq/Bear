@@ -51,6 +51,27 @@ export const FIRST_LAUNCH_STEPS = Object.freeze([
 ])
 
 /**
+ * The step "Join" (`docs/shared-data-folder.md` section 5.5): offered only
+ * at start row C, when Pear already set up the shared data folder and this
+ * is the cleaner's first launch. It sits after the theme, well before the
+ * model downloads, so the library's place is settled first.
+ */
+export const JOIN_STEP = 'join'
+
+/**
+ * The steps this setup shows: `FIRST_LAUNCH_STEPS`, with Join after the
+ * theme when it is offered.
+ *
+ * @param {{join?: boolean}} [options]
+ * @returns {readonly string[]}
+ */
+export function firstLaunchStepsWith({ join = false } = {}) {
+  if (!join) return FIRST_LAUNCH_STEPS
+  const at = FIRST_LAUNCH_STEPS.indexOf('theme') + 1
+  return Object.freeze([...FIRST_LAUNCH_STEPS.slice(0, at), JOIN_STEP, ...FIRST_LAUNCH_STEPS.slice(at)])
+}
+
+/**
  * @typedef {Object} PlanRow
  * @property {string} id - a catalogue row's id, or `runtime`
  * @property {string} labelKey - the i18n key that names it

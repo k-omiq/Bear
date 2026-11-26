@@ -116,6 +116,9 @@ export const ko = {
   },
   shell: {
     dataFolder: {
+      titleMoveUnfinished: '데이터 폴더 이동이 끝나지 않았습니다',
+      bodyMoveUnfinished: '앱이 가능해지는 대로 이동을 스스로 마칩니다. Pear가 열려 있으면 닫으세요.',
+      checking: '몇 초마다 다시 확인하고 있습니다.',
       moving: '데이터 폴더를 옮기는 중입니다. 몇 분 걸릴 수 있습니다. 끝나면 앱으로 돌아갑니다.',
       title: '데이터 폴더를 찾을 수 없습니다',
       reasonUnknown: '데이터 폴더를 찾을 수 없습니다.',
@@ -169,6 +172,8 @@ export const ko = {
   },
   settings: {
     dataFolder: {
+      sendTitles: 'Pear로 제목 보내기…',
+      sendTitlesBody: '전에 정리한 제목을 Pear로 가져갑니다.',
       intro: 'Manga Cleaner와 식자 앱이 함께 라이브러리를 두는 폴더 하나입니다. 저장하면 챕터가 그곳으로 보내지고 식자 앱이 가져갑니다.',
       recovered: '지난 시작 시: {detail}',
       where: '위치',
@@ -1223,19 +1228,77 @@ export const ko = {
       formatChanged: '페이지 {page}: {requested} 대신 {used}(으)로 저장했습니다: {requested}에는 {mode} 모드가 없으며, 변환하면 파일이 바뀝니다.',
     },
   },
+  startFolder: {
+    title: '두 앱에 폴더 하나',
+    lineOne: 'Manga Cleaner와 Pear가 제목을 한곳에 보관합니다.',
+    lineTwo: '정리한 챕터는 저장하면 Pear에 나타납니다.',
+    drawing: '폴더 하나를 함께 쓰는 Manga Cleaner와 Pear',
+    change: '변경…',
+    chooser: '데이터 폴더를 둘 곳을 고르세요',
+    setupSameVolume: '라이브러리를 그곳으로 옮깁니다. 금방 끝납니다.',
+    setupOtherVolume: {
+      select: 'minutes',
+      one: '라이브러리({bytes:memory})를 그곳으로 복사합니다. 약 1분 걸립니다.',
+      other: '라이브러리({bytes:memory})를 그곳으로 복사합니다. 약 {minutes}분 걸립니다.',
+    },
+    joinSameVolume: 'Pear가 이미 이 폴더를 쓰고 있습니다. 라이브러리({bytes:memory})를 그 옆으로 옮깁니다.',
+    joinOtherVolume: {
+      select: 'minutes',
+      one: 'Pear가 이미 이 폴더를 쓰고 있습니다. 라이브러리({bytes:memory})를 그 옆으로 복사합니다. 약 1분 걸립니다.',
+      other: 'Pear가 이미 이 폴더를 쓰고 있습니다. 라이브러리({bytes:memory})를 그 옆으로 복사합니다. 약 {minutes}분 걸립니다.',
+    },
+    nothingToMove: '옮길 것이 없습니다.',
+    planning: '라이브러리를 살펴보는 중…',
+    use: '폴더 하나 쓰기',
+    notNow: '나중에',
+    blocked: '먼저 Pear를 닫으세요.',
+    checkAgain: '다시 확인',
+    copying: '{total:memory} 중 {copied:memory} 복사 중',
+    moving: '라이브러리를 옮기는 중…',
+    done: '완료했습니다. 이제 두 앱 모두 {path}를 씁니다.',
+    titles: {
+      one: 'Manga Cleaner에 제목이 1개 있습니다. Pear로 보낼까요?',
+      other: 'Manga Cleaner에 제목이 {count}개 있습니다. Pear로 보낼까요?',
+    },
+    chooseTitles: '제목 고르기…',
+    later: '나중에',
+    failed: '라이브러리를 옮기지 못했습니다.',
+    nothingChanged: '아무것도 바뀌지 않았습니다.',
+  },
+  sendToPear: {
+    title: 'Pear로 제목 보내기',
+    intro: '정리된 페이지가 있는 챕터를 Pear로 보냅니다. 그다음 Pear가 이미 있는 제목과 어떻게 맞출지 묻습니다.',
+    loading: '제목을 읽는 중…',
+    empty: 'Manga Cleaner에 아직 제목이 없습니다.',
+    counts: {
+      select: 'chapters',
+      one: '챕터 1개, 정리됨 {cleaned}',
+      other: '챕터 {chapters}개, 정리됨 {cleaned}',
+    },
+    nothingCleaned: '아직 정리한 것이 없습니다',
+    sentBefore: '보낸 적 있음',
+    again: '모두 다시 보내기',
+    againDescription: '정리된 챕터를 모두 보냅니다. 전에 보냈고 바뀌지 않은 챕터도 포함합니다.',
+    send: {
+      one: '제목 1개 보내기',
+      other: '제목 {count}개 보내기',
+    },
+    nothingNew: '새로 보낼 것이 없습니다. 모두 보내려면 모두 다시 보내기를 켜세요.',
+    sending: {
+      select: 'total',
+      one: '챕터 1개 중 {done}개 보내는 중',
+      other: '챕터 {total}개 중 {done}개 보내는 중',
+    },
+    stop: '중지',
+    failed: '보내지 못했습니다: {detail}',
+    open: 'Pear로 제목 보내기',
+  },
   home: {
     dataFolder: {
       title: '공유 데이터 폴더',
       body: '식자 앱이 {path}에 공유 데이터 폴더를 설정했습니다. 클리너 라이브러리를 그곳으로 옮길까요?',
       move: '옮기기',
       later: '나중에',
-    },
-    dataFolderPrompt: {
-      title: 'Manga Cleaner와 Pear가 함께 쓰는 데이터 폴더',
-      body: '옮기기를 누르면 라이브러리가 {path} 폴더로 옮겨집니다. Manga Cleaner와 Pear가 이 폴더를 함께 씁니다. 여기서 저장한 정리된 챕터는 Pear에 나타납니다.',
-      move: '옮기기',
-      choose: '폴더 선택',
-      notNow: '지금은 안 함',
     },
     section: {
       projects: '프로젝트',
@@ -1890,6 +1953,16 @@ export const ko = {
     detectorFor: '{language} 클린',
   },
   onboarding: {
+    join: {
+      heading: '두 앱에 폴더 하나',
+      body: 'Pear는 이미 {path}에 제목을 보관하고 있습니다. 같은 폴더를 쓸까요?',
+      use: '같은 폴더 쓰기',
+      keep: '따로 두기',
+      working: '폴더를 준비하는 중…',
+      done: '완료했습니다. 이제 두 앱 모두 {path}를 씁니다.',
+      kept: '따로 두었습니다. 나중에 설정의 데이터 폴더에서 합칠 수 있습니다.',
+      failed: '하지 못했습니다: {detail}',
+    },
     title: 'Manga Cleaner 설정',
     stepOf: '{total}단계 중 {current}단계',
     progressLabel: '설정 진행률',
@@ -2912,6 +2985,21 @@ export const ko = {
     },
   },
   notice: {
+    dataFolder: {
+      quietSetup: '이제 라이브러리는 {path}에 있습니다.',
+      show: '보기',
+    },
+    sendToPear: {
+      done: {
+        one: '챕터 1개를 Pear로 보냈습니다.',
+        other: '챕터 {count}개를 Pear로 보냈습니다.',
+      },
+      stopped: {
+        one: '중지했습니다. 챕터 1개를 Pear로 보냈습니다.',
+        other: '중지했습니다. 챕터 {count}개를 Pear로 보냈습니다.',
+      },
+      failed: 'Pear로 보낸 챕터: {count}. 보내지 못한 챕터: {failed}.',
+    },
     save: {
       sent: {
         other: '식자 앱으로 {count}페이지를 보냈습니다.',

@@ -22,13 +22,14 @@
   import { session } from '../state/session.svelte.js'
   import { denoise } from '../state/denoise.svelte.js'
   import { openNewProject } from '../home/actions.js'
-  import { FIRST_LAUNCH_STEPS } from './firstlaunch.js'
+  import { joinFromFirstRun, keepSeparate, startAnswers } from '../state/datafolder.svelte.js'
   import {
     chosenBytes,
     closeFirstLaunchProvisioner,
     dismissFirstLaunch,
     finishedFiles,
     firstLaunch,
+    firstLaunchSteps,
     nextFirstLaunchStep,
     openFirstLaunchProvisioner,
     pauseAll,
@@ -40,6 +41,7 @@
   } from './firstlaunch.svelte.js'
   import WelcomeStep from './onboarding/WelcomeStep.svelte'
   import ThemeStep from './onboarding/ThemeStep.svelte'
+  import JoinStep from './onboarding/JoinStep.svelte'
   import TokenStep from './onboarding/TokenStep.svelte'
   import BackgroundStep from './onboarding/BackgroundStep.svelte'
   import DetectionStep from './onboarding/DetectionStep.svelte'
@@ -56,6 +58,7 @@
   const HEADINGS = {
     welcome: 'onboarding.welcome.heading',
     theme: 'onboarding.theme.heading',
+    join: 'onboarding.join.heading',
     token: 'onboarding.token.heading',
     background: 'onboarding.background.heading',
     detection: 'onboarding.detection.heading',
@@ -73,9 +76,11 @@
   const WIDE = ['detection', 'cleaning', 'denoise', 'runtime', 'dependencies', 'downloads', 'measure']
 
   const step = $derived(firstLaunch.step)
+  /** Join is a step only at start row C (`state/datafolder.svelte.js#startFlow`). */
+  const steps = $derived(firstLaunchSteps())
   /** Welcome is the cover, not a step, so the bar counts from the one after it. */
-  const position = $derived(FIRST_LAUNCH_STEPS.indexOf(/** @type {any} */ (step)))
-  const total = FIRST_LAUNCH_STEPS.length - 1
+  const position = $derived(steps.indexOf(step))
+  const total = $derived(steps.length - 1)
 
   /** @type {HTMLElement|undefined} */
   let heading = $state()
@@ -104,6 +109,15 @@
   const actions = $derived.by(() => {
     /** @type {Action} */
     const next = { label: t('onboarding.action.next'), run: nextFirstLaunchStep, enter: true }
+    if (step === 'join' && !startAnswers().join) {
+      // The question's own two answers. Either one stores it, so going back
+      // to this step later shows what was done and Next.
+      return {
+        back: true,
+        secondary: { label: t('onboarding.join.keep'), run: keepSeparateAndGo },
+        primary: { label: t('onboarding.join.use'), run: joinAndGo, enter: false },
+      }
+    }
     if (step === 'token') {
       const hasToken = firstLaunch.plan?.hasToken === true
       // Empty and nothing saved, Skip is the step's primary action, so the
@@ -193,6 +207,15 @@
     return { back: true, secondary: null, primary: next }
   })
 
+  async function joinAndGo() {
+    if (await joinFromFirstRun()) nextFirstLaunchStep()
+  }
+
+  function keepSeparateAndGo() {
+    keepSeparate()
+    nextFirstLaunchStep()
+  }
+
   async function saveToken() {
     if (await saveFirstLaunchToken()) nextFirstLaunchStep()
   }
@@ -266,7 +289,7 @@
       aria-valuemax={total}
       aria-valuenow={position}
     >
-      {#each FIRST_LAUNCH_STEPS.slice(1) as name, index (name)}
+      {#each steps.slice(1) as name, index (name)}
         <span class:on={index < position}></span>
       {/each}
     </div>
@@ -282,6 +305,8 @@
           <WelcomeStep />
         {:else if step === 'theme'}
           <ThemeStep />
+        {:else if step === 'join'}
+          <JoinStep />
         {:else if step === 'token'}
           <TokenStep onsubmit={saveToken} />
         {:else if step === 'background'}

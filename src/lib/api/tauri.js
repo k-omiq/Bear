@@ -204,6 +204,15 @@ const IMPLEMENTED = Object.freeze({
   dataFolderUseExisting: 'data_folder_use_existing',
   dataFolderDeleteOldCopy: 'data_folder_delete_old_copy',
   saveToTypesetter: 'save_to_typesetter',
+  dataFolderQuietSetup: 'data_folder_quiet_setup',
+  dataFolderPlan: 'data_folder_plan',
+  dataFolderProgress: 'data_folder_progress',
+  dataFolderShow: 'data_folder_show',
+  dataFolderFillEmpty: 'data_folder_fill_empty',
+  sendToPearTitles: 'send_to_pear_titles',
+  sendToPearStart: 'send_to_pear_start',
+  sendToPearProgress: 'send_to_pear_progress',
+  sendToPearStop: 'send_to_pear_stop',
 })
 
 /** Every method the seam contract fixes, so the adapter can be checked against it. */
@@ -375,6 +384,15 @@ export const SEAM_METHODS = Object.freeze([
   'dataFolderUseExisting',
   'dataFolderDeleteOldCopy',
   'saveToTypesetter',
+  'dataFolderQuietSetup',
+  'dataFolderPlan',
+  'dataFolderProgress',
+  'dataFolderShow',
+  'dataFolderFillEmpty',
+  'sendToPearTitles',
+  'sendToPearStart',
+  'sendToPearProgress',
+  'sendToPearStop',
 ])
 
 /**
@@ -970,6 +988,15 @@ export function createTauriBackend({ fallback, invoke, listen }) {
       call(IMPLEMENTED.dataFolderUseExisting, { target, confirmedClosed }),
     dataFolderDeleteOldCopy: ({ path }) => call(IMPLEMENTED.dataFolderDeleteOldCopy, { path }),
     saveToTypesetter: ({ chapterId }) => call(IMPLEMENTED.saveToTypesetter, { chapterId }),
+    dataFolderQuietSetup: () => call(IMPLEMENTED.dataFolderQuietSetup),
+    dataFolderPlan: ({ target = null } = {}) => call(IMPLEMENTED.dataFolderPlan, { target }),
+    dataFolderProgress: () => call(IMPLEMENTED.dataFolderProgress),
+    dataFolderShow: () => call(IMPLEMENTED.dataFolderShow),
+    dataFolderFillEmpty: () => call(IMPLEMENTED.dataFolderFillEmpty),
+    sendToPearTitles: () => call(IMPLEMENTED.sendToPearTitles),
+    sendToPearStart: ({ projectIds, again = false }) => call(IMPLEMENTED.sendToPearStart, { projectIds, again }),
+    sendToPearProgress: () => call(IMPLEMENTED.sendToPearProgress),
+    sendToPearStop: () => call(IMPLEMENTED.sendToPearStop),
   }
 
   const backend = {}

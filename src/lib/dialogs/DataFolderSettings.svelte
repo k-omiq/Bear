@@ -35,9 +35,13 @@
     deleteOldCopy,
     loadDataFolder,
   } from '../state/datafolder.svelte.js'
+  import { openSendToPear } from '../state/sendtopear.svelte.js'
+  import { shownPath } from '../state/startflow.js'
   import { t } from '../i18n/index.js'
 
   let { backend: givenBackend } = $props()
+  /** A path as the user reads it: no `\\?\` prefix, `~` for home. @param {string|null|undefined} path */
+  const sp = (path) => shownPath(path, dataFolder.status?.home)
   const backend = untrack(() => givenBackend ?? getBackend())
 
   const uid = $props.id()
@@ -191,11 +195,11 @@
 
 <h3 class="sub">{t('settings.dataFolder.where')}</h3>
 <div class="where" data-mode={mode}>
-  <p class="mode">{t(modeKey, { path: status?.root ?? '', reason: status?.reason ?? '' })}</p>
+  <p class="mode">{t(modeKey, { path: sp(status?.root), reason: status?.reason ?? '' })}</p>
   {#if mode === 'shared' && status?.root}
-    <p class="path" title={status.root}>{status.root}</p>
+    <p class="path" title={shownPath(status.root)}>{sp(status.root)}</p>
   {:else if status?.library}
-    <p class="path quiet" title={status.library}>{t('settings.dataFolder.libraryAt', { path: status.library })}</p>
+    <p class="path quiet" title={shownPath(status.library)}>{t('settings.dataFolder.libraryAt', { path: sp(status.library) })}</p>
   {/if}
 </div>
 
@@ -261,7 +265,7 @@
         variant="primary"
         disabled={busy || !!blocked}
         onclick={() => void change('setup', status.root ?? '')}
-      >{t('settings.dataFolder.moveInto', { path: status.root })}</Button>
+      >{t('settings.dataFolder.moveInto', { path: sp(status.root) })}</Button>
     </div>
   </div>
 {:else if mode === 'shared'}
@@ -300,6 +304,13 @@
       </div>
     {/if}
   </div>
+  <!-- Send to Pear (contract section 8.4.1): the titles cleaned before. -->
+  <div class="block">
+    <p class="quiet">{t('settings.dataFolder.sendTitlesBody')}</p>
+    <div class="actions">
+      <Button disabled={busy} onclick={openSendToPear}>{t('settings.dataFolder.sendTitles')}</Button>
+    </div>
+  </div>
 {/if}
 
 {#if status?.oldCopies?.length}
@@ -309,7 +320,7 @@
     {#each status.oldCopies as copy (copy.path)}
       <li class="copy">
         <div class="facts">
-          <span class="path" title={copy.path}>{copy.path}</span>
+          <span class="path" title={shownPath(copy.path)}>{sp(copy.path)}</span>
           <span class="quiet">{t('settings.dataFolder.oldCopies.size', { bytes: copy.bytes, date: day(copy.movedAt) })}</span>
         </div>
         {#if deleting === copy.path}

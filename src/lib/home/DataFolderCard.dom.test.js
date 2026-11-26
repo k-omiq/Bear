@@ -52,3 +52,19 @@ it('draws nothing outside Pending', () => {
     view.unmount()
   }
 })
+
+it('is not drawn once Join was answered Not now, nor beside the start dialog', async () => {
+  const { session } = await import('../state/session.svelte.js')
+  const { startDialog } = await import('../state/datafolder.svelte.js')
+  dataFolder.status = /** @type {any} */ (PENDING)
+  session.dataFolderPromptAnswered = { join: 'declined' }
+  let view = render(DataFolderCard, { props: { backend: /** @type {any} */ ({}) } })
+  expect(view.queryByText(t('home.dataFolder.title'))).toBeNull()
+  view.unmount()
+  session.dataFolderPromptAnswered = false
+  startDialog.open = true
+  view = render(DataFolderCard, { props: { backend: /** @type {any} */ ({}) } })
+  expect(view.queryByText(t('home.dataFolder.title'))).toBeNull()
+  view.unmount()
+  startDialog.open = false
+})

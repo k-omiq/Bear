@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { t } from '../i18n/index.js'
-import { app } from '../state/app.svelte.js'
+import { app, closeAllModals } from '../state/app.svelte.js'
 import { dataFolder, resetDataFolder } from '../state/datafolder.svelte.js'
 import { jobs, resetJobs } from '../state/jobs.svelte.js'
 import DataFolderSettings from './DataFolderSettings.svelte'
@@ -55,6 +55,7 @@ beforeEach(() => resetDataFolder())
 
 afterEach(() => {
   cleanup()
+  closeAllModals()
   app.route = route
   resetDataFolder()
   resetJobs()
@@ -209,5 +210,25 @@ describe('Settings > Data folder', () => {
     await waitFor(() => expect(radio(t('settings.dataFolder.save.nextToRaws')).getAttribute('aria-checked')).toBe('true'))
     await fireEvent.click(radio(t('settings.dataFolder.save.dataFolder')))
     await waitFor(() => expect(backend.writeSettings).toHaveBeenCalledWith({ saveCleanedTo: 'data-folder' }))
+  })
+})
+
+describe('Settings > Data folder, version 2', () => {
+  it('offers Send titles to Pear while Shared, and shows paths without the long prefix and with ~', async () => {
+    const backend = stub(status({ ...SHARED, root: '/Users/reader/Manga Library', home: '/Users/reader' }))
+    await mount(backend)
+    expect(screen.getByText('~/Manga Library')).toBeTruthy()
+    await fireEvent.click(button(t('settings.dataFolder.sendTitles')))
+    expect(app.modals.at(-1)?.kind).toBe('sendToPear')
+  })
+
+  it('offers no send outside Shared', async () => {
+    await mount(stub(status()))
+    expect(screen.queryByRole('button', { name: t('settings.dataFolder.sendTitles') })).toBeNull()
+  })
+
+  it('drops the Windows long-path prefix from a shown path', async () => {
+    await mount(stub(status({ mode: 'shared', root: '\\\\?\\D:\\Manga Library', library: '\\\\?\\D:\\Manga Library\\Cleaner' })))
+    expect(screen.getByText('D:\\Manga Library')).toBeTruthy()
   })
 })

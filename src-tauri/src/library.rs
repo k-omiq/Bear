@@ -170,7 +170,7 @@ use cleaner_core::project::{
 /// The library's own directory under the app's data directory, and the index
 /// inside it.
 const LIBRARY_DIR: &str = "library";
-const INDEX_FILE: &str = "index.json";
+pub const INDEX_FILE: &str = "index.json";
 
 /// Where a page converted at ingest is written, inside the job's sidecar
 /// directory. A sub-directory rather than the sidecar root so that a page file
@@ -362,6 +362,13 @@ pub struct IndexChapter {
     /// so its report is said once; the report itself stays in the manifest.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub input_reported: bool,
+    /// When this chapter was last handed to Pear, by a Save or by Send to
+    /// Pear, in milliseconds since the epoch (`docs/shared-data-folder.md`
+    /// section 8.4.1). The chapter is *changed* when its manifest or job
+    /// folder was modified after it. An older build drops the field on save,
+    /// which only means the chapter is sent again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_sent_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1794,6 +1801,65 @@ impl Library {
         Ok(())
     }
 
+    /// Write an empty index where there is none: the library file that makes
+    /// `<data folder>/Cleaner` a library rather than "no subfolder yet"
+    /// (`docs/shared-data-folder.md` section 5.1). An index already there is
+    /// left alone.
+    pub fn ensure_index(&self) -> Result<(), String> {
+        let path = self.index_path();
+        if path.exists() {
+            return Ok(());
+        }
+        std::fs::create_dir_all(&self.root).map_err(|e| crate::data_folder::plain_io(&self.root, &e))?;
+        let body = serde_json::to_vec_pretty(&Index::default()).map_err(|e| e.to_string())?;
+        crate::data_folder::write_atomic(&path, &body).map_err(|e| crate::data_folder::plain_io(&path, &e))
+    }
+
+    /// Record that a chapter was just handed to Pear.
+    pub fn mark_sent(&self, chapter_id: &str, at_ms: u64) -> Result<(), LibraryError> {
+        let _lock = self.lock_index()?;
+        let mut index = self.index()?;
+        let Some(chapter) = index.projects.iter_mut().flat_map(|p| p.chapters.iter_mut()).find(|c| c.id == chapter_id) else {
+            return Ok(());
+        };
+        chapter.last_sent_at = Some(at_ms);
+        self.save(&mut index)
+    }
+
+    /// The newest change to a chapter's job: its manifest, or any folder of
+    /// its `.d` tree (page files are never rewritten in place, so a new or
+    /// removed file shows on its folder). Milliseconds since the epoch.
+    pub fn job_changed_at(&self, project_id: &str, chapter_id: &str) -> Option<u64> {
+        let manifest = self.job_path(project_id, chapter_id);
+        let ms = |meta: std::fs::Metadata| {
+            meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as u64)
+        };
+        let mut newest = std::fs::metadata(&manifest).ok().and_then(ms);
+        let mut job_dir = manifest.clone().into_os_string();
+        job_dir.push(".d");
+        let mut stack = vec![PathBuf::from(job_dir)];
+        while let Some(dir) = stack.pop() {
+            let Ok(meta) = std::fs::metadata(&dir) else { continue };
+            newest = newest.max(ms(meta));
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    stack.push(entry.path());
+                }
+            }
+        }
+        newest
+    }
+
+    /// Whether a chapter was never sent, or changed since it was
+    /// (`docs/shared-data-folder.md` section 8.4.1).
+    pub fn changed_since_sent(&self, project_id: &str, chapter: &IndexChapter) -> bool {
+        match chapter.last_sent_at {
+            None => true,
+            Some(sent) => self.job_changed_at(project_id, &chapter.id).is_some_and(|at| at > sent),
+        }
+    }
+
     /* ---------- reads ---------- */
 
     pub fn list_projects(&self) -> Result<Vec<ApiProject>, LibraryError> {
@@ -2013,6 +2079,7 @@ impl Library {
                 created: at,
                 last_opened: at,
                 input_reported: false,
+                last_sent_at: None,
             },
         );
         self.save(&mut index)?;
@@ -7591,6 +7658,7 @@ mod tests {
                     created: 0,
                     last_opened: 0,
                     input_reported: false,
+                    last_sent_at: None,
                 },
                 IndexChapter {
                     id: "ch12".into(),
@@ -7601,6 +7669,7 @@ mod tests {
                     created: 0,
                     last_opened: 0,
                     input_reported: false,
+                    last_sent_at: None,
                 },
             ],
         });

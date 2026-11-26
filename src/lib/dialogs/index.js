@@ -36,6 +36,7 @@ import CloudCleanStreamConsentDialog from './CloudCleanStreamConsentDialog.svelt
 import WorkflowReviewDialog from './WorkflowReviewDialog.svelte'
 import DenoiseDialog from './DenoiseDialog.svelte'
 import DenoiseCompareDialog from './DenoiseCompareDialog.svelte'
+import SendToPearDialog from './SendToPearDialog.svelte'
 
 /**
  * Null-prototype on purpose. `kind` is a plain string that reaches this table
@@ -58,6 +59,7 @@ const DIALOGS = Object.assign(Object.create(null), homeDialogs, {
   workflowReview: WorkflowReviewDialog,
   denoise: DenoiseDialog,
   denoiseCompare: DenoiseCompareDialog,
+  sendToPear: SendToPearDialog,
 })
 
 /**

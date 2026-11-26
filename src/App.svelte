@@ -50,7 +50,17 @@
   import QuitJobsDialog from './lib/dialogs/QuitJobsDialog.svelte'
   import DataFolderUnavailable from './lib/shell/DataFolderUnavailable.svelte'
   import DataFolderBusy from './lib/shell/DataFolderBusy.svelte'
-  import { dataFolder, dataFolderHeld, loadDataFolder } from './lib/state/datafolder.svelte.js'
+  import DataFolderDialog from './lib/dialogs/DataFolderDialog.svelte'
+  import SendToPearStatus from './lib/shell/SendToPearStatus.svelte'
+  import {
+    QUIET_SETUP_NOTICE,
+    dataFolder,
+    dataFolderHeld,
+    loadDataFolder,
+    runStartFlow,
+    showQuietSetupNotice,
+    startDialog,
+  } from './lib/state/datafolder.svelte.js'
   import { openSettings } from './lib/dialogs/settingslinks.js'
   import { untrack } from 'svelte'
 
@@ -114,7 +124,15 @@
   // The data folder's mode decides what the window can show at all. Read at
   // boot, and again when the window comes back to the front: the typesetter
   // may have set one up meanwhile (Pending), or its drive may be back.
-  $effect(() => untrack(() => void loadDataFolder()))
+  // The first read also runs the start table once (contract section 5.1):
+  // a quiet setup, the first-run Join step, or the centered dialog.
+  $effect(() => untrack(() => void loadDataFolder().then(() => runStartFlow())))
+  // The quiet setup's one-time notice waits for the first-launch dialog to
+  // close: under it, it could not be seen (contract 5.2).
+  $effect(() => {
+    const covered = firstLaunch.open
+    if (session.quietSetupNotice) untrack(() => showQuietSetupNotice({ covered }))
+  })
   // In the editor too: an unplugged drive must not wait for a refused call.
   $effect(() => {
     const refresh = () => {
@@ -127,6 +145,12 @@
   // says what is going on, and the status is read again when it ends.
   const held = $derived(dataFolderHeld())
   const unavailable = $derived(dataFolder.status?.mode === 'unavailable' && !held)
+  // The start dialog's Working state is the move's own progress, so it
+  // stands in for the busy cover while it is up.
+  const startWorking = $derived(startDialog.open && startDialog.phase === 'working')
+  const startShown = $derived(
+    startDialog.open && !firstLaunch.open && !unavailable && (app.modals.length === 0 || startWorking)
+  )
 
   // Background jobs: runs and denoises outlive the dialog or the editor that
   // started them, so the one subscription that follows them is here, with the
@@ -195,6 +219,12 @@
     'notice.save.needsDataFolder': {
       labelKey: 'settings.section.dataFolder',
       open: () => openSettings('dataFolder'),
+    },
+    // The one-time line after a quiet setup: Show opens the folder.
+    [QUIET_SETUP_NOTICE]: {
+      labelKey: 'notice.dataFolder.show',
+      open: () => void getBackend().dataFolderShow?.().catch(() => {}),
+      sticky: true,
     },
     'notice.run.engineFault': {
       labelKey: 'settings.section.performance',
@@ -356,7 +386,7 @@
      nothing behind can open a chapter or start a run. -->
 {#if unavailable}
   <DataFolderUnavailable />
-{:else if held}
+{:else if held && !startWorking}
   <DataFolderBusy />
 {/if}
 
@@ -379,6 +409,7 @@
        14px anchor and the notice stack rises above it. Both are `z-index: 10`,
        below the floating windows at `20 + rank`. -->
   <div class="corner" bind:clientHeight={panelHeight}>
+    <SendToPearStatus />
     <CloudJobStatus />
     <LoadedModels
       models={[...loaded, ...cloudRows]}
@@ -420,6 +451,13 @@
     <FirstLaunchDialog />
   {/if}
 </div>
+
+<!-- The data folder's start dialog (contract section 5.4), beside the stack
+     for the same reason as the first-launch offer, and outside the inert
+     layer: its Working state stays up while the move holds the window. -->
+{#if startShown}
+  <DataFolderDialog />
+{/if}
 
 <!-- The quit guard's question goes over whatever is up, the stack or the
      offer, and last in the document so its backdrop is the top one. It is not

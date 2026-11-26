@@ -116,6 +116,9 @@ export const fr = {
   },
   shell: {
     dataFolder: {
+      titleMoveUnfinished: 'Déplacement du dossier de données inachevé',
+      bodyMoveUnfinished: 'L\'app termine le déplacement d\'elle-même dès qu\'elle le peut. Fermez Pear s\'il est ouvert.',
+      checking: 'Nouvelle vérification toutes les quelques secondes.',
       moving: 'Le dossier de données est en cours de déplacement. Cela peut prendre quelques minutes. L\'app revient à la fin.',
       title: 'Dossier de données introuvable',
       reasonUnknown: 'Le dossier de données est introuvable.',
@@ -170,6 +173,8 @@ export const fr = {
   },
   settings: {
     dataFolder: {
+      sendTitles: 'Envoyer les titres à Pear…',
+      sendTitlesBody: 'Faites passer à Pear les titres nettoyés auparavant.',
       intro: 'Un dossier où Manga Cleaner et le logiciel de lettrage gardent tous deux leur bibliothèque. Enregistrer y envoie un chapitre, que le logiciel de lettrage récupère.',
       recovered: 'Au dernier démarrage : {detail}',
       where: 'Emplacement',
@@ -1234,19 +1239,77 @@ export const fr = {
       formatChanged: 'Page {page} : Enregistré en {used} au lieu de {requested} : {requested} n’a pas de mode {mode}, et une conversion modifierait le fichier.',
     },
   },
+  startFolder: {
+    title: 'Un dossier pour les deux apps',
+    lineOne: 'Manga Cleaner et Pear rangent vos titres au même endroit.',
+    lineTwo: 'Les chapitres que vous nettoyez apparaissent dans Pear quand vous les enregistrez.',
+    drawing: 'Manga Cleaner et Pear, tous deux reliés à un seul dossier',
+    change: 'Changer…',
+    chooser: 'Choisissez où placer le dossier de données',
+    setupSameVolume: 'Votre bibliothèque y est déplacée. Cela prend un instant.',
+    setupOtherVolume: {
+      select: 'minutes',
+      one: 'Votre bibliothèque ({bytes:memory}) y est copiée. Cela prend environ 1 minute.',
+      other: 'Votre bibliothèque ({bytes:memory}) y est copiée. Cela prend environ {minutes} minutes.',
+    },
+    joinSameVolume: 'Pear utilise déjà ce dossier. Votre bibliothèque ({bytes:memory}) vient se placer à côté.',
+    joinOtherVolume: {
+      select: 'minutes',
+      one: 'Pear utilise déjà ce dossier. Votre bibliothèque ({bytes:memory}) est copiée à côté. Cela prend environ 1 minute.',
+      other: 'Pear utilise déjà ce dossier. Votre bibliothèque ({bytes:memory}) est copiée à côté. Cela prend environ {minutes} minutes.',
+    },
+    nothingToMove: 'Rien à déplacer.',
+    planning: 'Examen de votre bibliothèque…',
+    use: 'Utiliser un seul dossier',
+    notNow: 'Pas maintenant',
+    blocked: 'Fermez d\'abord Pear.',
+    checkAgain: 'Vérifier à nouveau',
+    copying: 'Copie de {copied:memory} sur {total:memory}',
+    moving: 'Déplacement de votre bibliothèque…',
+    done: 'Terminé. Les deux apps utilisent maintenant {path}.',
+    titles: {
+      one: 'Vous avez 1 titre dans Manga Cleaner. L\'envoyer à Pear ?',
+      other: 'Vous avez {count} titres dans Manga Cleaner. Les envoyer à Pear ?',
+    },
+    chooseTitles: 'Choisir les titres…',
+    later: 'Plus tard',
+    failed: 'La bibliothèque n\'a pas été déplacée.',
+    nothingChanged: 'Rien n\'a été modifié.',
+  },
+  sendToPear: {
+    title: 'Envoyer les titres à Pear',
+    intro: 'Les chapitres aux pages nettoyées partent vers Pear. Pear demande ensuite comment les associer aux titres qu\'il a déjà.',
+    loading: 'Lecture de vos titres…',
+    empty: 'Il n\'y a pas encore de titre dans Manga Cleaner.',
+    counts: {
+      select: 'chapters',
+      one: '1 chapitre, {cleaned} nettoyés',
+      other: '{chapters} chapitres, {cleaned} nettoyés',
+    },
+    nothingCleaned: 'Rien de nettoyé pour le moment',
+    sentBefore: 'Déjà envoyé',
+    again: 'Tout renvoyer',
+    againDescription: 'Envoie chaque chapitre nettoyé, y compris ceux déjà envoyés qui n\'ont pas changé.',
+    send: {
+      one: 'Envoyer 1 titre',
+      other: 'Envoyer {count} titres',
+    },
+    nothingNew: 'Rien de nouveau à envoyer. Activez Tout renvoyer pour tout envoyer.',
+    sending: {
+      select: 'total',
+      one: 'Envoi de {done} sur 1 chapitre',
+      other: 'Envoi de {done} sur {total} chapitres',
+    },
+    stop: 'Arrêter',
+    failed: 'Non envoyé : {detail}',
+    open: 'Envoyer les titres à Pear',
+  },
   home: {
     dataFolder: {
       title: 'Dossier de données partagé',
       body: 'Le logiciel de lettrage a configuré un dossier de données partagé dans {path}. Y déplacer votre bibliothèque de nettoyage ?',
       move: 'Déplacer',
       later: 'Plus tard',
-    },
-    dataFolderPrompt: {
-      title: 'Un dossier de données pour Manga Cleaner et Pear',
-      body: 'Déplacer met votre bibliothèque dans {path}. Manga Cleaner et Pear partagent ce dossier. Les chapitres nettoyés que vous enregistrez ici apparaissent ensuite dans Pear.',
-      move: 'Déplacer',
-      choose: 'Choisir un dossier',
-      notNow: 'Pas maintenant',
     },
     section: {
       projects: 'Projets',
@@ -1921,6 +1984,16 @@ export const fr = {
     detectorFor: 'Nettoyage : {language}',
   },
   onboarding: {
+    join: {
+      heading: 'Un dossier pour les deux apps',
+      body: 'Pear range déjà ses titres dans {path}. Utiliser le même dossier ?',
+      use: 'Utiliser le même dossier',
+      keep: 'Garder séparé',
+      working: 'Préparation du dossier…',
+      done: 'Terminé. Les deux apps utilisent maintenant {path}.',
+      kept: 'Gardés séparés. Les Réglages, sous Dossier de données, permettent de le rejoindre plus tard.',
+      failed: 'Non effectué : {detail}',
+    },
     title: 'Configurer Manga Cleaner',
     stepOf: 'Étape {current} sur {total}',
     progressLabel: 'Progression de la configuration',
@@ -2961,6 +3034,21 @@ export const fr = {
     },
   },
   notice: {
+    dataFolder: {
+      quietSetup: 'Votre bibliothèque se trouve maintenant dans {path}.',
+      show: 'Afficher',
+    },
+    sendToPear: {
+      done: {
+        one: '1 chapitre envoyé à Pear.',
+        other: '{count} chapitres envoyés à Pear.',
+      },
+      stopped: {
+        one: 'Arrêté. 1 chapitre a été envoyé à Pear.',
+        other: 'Arrêté. {count} chapitres ont été envoyés à Pear.',
+      },
+      failed: 'Chapitres envoyés à Pear : {count}. Non envoyés : {failed}.',
+    },
     save: {
       sent: {
         one: '1 page envoyée au logiciel de lettrage.',

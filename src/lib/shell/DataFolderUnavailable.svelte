@@ -12,7 +12,10 @@
    * chooser to open.
    *
    * Everything behind it is inert while it is up (`App.svelte`), and focus
-   * starts on Try again.
+   * starts on Try again. It also checks by itself every three seconds and
+   * when the window comes to the front (contract section 7), so a drive
+   * plugged back in, or a move that can finish now, needs no click. A move
+   * left unfinished (the journal is there) has its own heading.
    *
    * @type {{ backend?: import('../api/backend.js').Backend }}
    */
@@ -40,10 +43,20 @@
   /** @type {HTMLElement|undefined} */
   let root = $state()
 
+  /** How often the screen checks by itself whether the folder is back. */
+  const RECHECK_MS = 3000
+
   // The screen is the window now: focus starts on its first way out.
   onMount(() => {
     root?.querySelector('button')?.focus()
+    // The focus check is the shell's (`App.svelte`); this is the timer.
+    const timer = setInterval(() => {
+      if (!checking && dataFolder.busy === null) void loadDataFolder(backend)
+    }, RECHECK_MS)
+    return () => clearInterval(timer)
   })
+
+  const unfinished = $derived(dataFolder.status?.journal === true)
 
   async function retry() {
     if (busy) return
@@ -65,9 +78,10 @@
 
 <div bind:this={root} class="blocked" role="alertdialog" aria-modal="true" aria-labelledby="data-folder-title" aria-describedby="data-folder-reason">
   <div class="card">
-    <h1 id="data-folder-title">{t('shell.dataFolder.title')}</h1>
+    <h1 id="data-folder-title">{unfinished ? t('shell.dataFolder.titleMoveUnfinished') : t('shell.dataFolder.title')}</h1>
     <p id="data-folder-reason" class="reason">{dataFolder.status?.reason || t('shell.dataFolder.reasonUnknown')}</p>
-    <p class="quiet">{t('shell.dataFolder.body')}</p>
+    <p class="quiet">{unfinished ? t('shell.dataFolder.bodyMoveUnfinished') : t('shell.dataFolder.body')}</p>
+    <p class="quiet" role="status">{t('shell.dataFolder.checking')}</p>
 
     <div class="actions">
       <Button variant="primary" disabled={busy} onclick={() => void retry()}>{t('shell.dataFolder.retry')}</Button>

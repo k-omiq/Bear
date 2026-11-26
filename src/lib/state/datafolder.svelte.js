@@ -26,6 +26,9 @@
 
 import { getBackend } from '../api/backend.js'
 import { onBackendError } from '../api/backenderrors.js'
+import { app, notify } from './app.svelte.js'
+import { session, setQuietSetupNotice, setStartAnswer } from './session.svelte.js'
+import { fillsEmptySubfolder, readStartAnswers, shownPath, startAction, startRow } from './startflow.js'
 
 /** @typedef {import('../api/backend.js').DataFolderStatus} DataFolderStatus */
 /** @typedef {'setup'|'move'|'useExisting'} ChangeKind */
@@ -232,8 +235,272 @@ async function checkMoving(backend = getBackend()) {
 
 onBackendError((error) => noteLibraryError(error))
 
+/* ------------------------------------------------------------------ */
+/* The start flows (docs/shared-data-folder.md section 5)              */
+/* ------------------------------------------------------------------ */
+
+/** How often the Working state asks how far the copy has come. */
+export const PROGRESS_POLL_MS = 400
+
+/**
+ * The centered dialog of rows D and F (section 5.4). Not on the modal stack:
+ * like the first-launch screen it belongs to the start, and its Working
+ * state must stay up over the busy cover while the library moves.
+ *
+ * `phase`: `ask` (the question, or Blocked while Pear runs), `working`,
+ * `done`, `failed`.
+ */
+export const startDialog = $state({
+  open: false,
+  /** @type {'setup'|'join'} */
+  variant: 'setup',
+  /** @type {'ask'|'working'|'done'|'failed'} */
+  phase: 'ask',
+  /** The data folder the library goes into. */
+  target: '',
+  /** @type {import('../api/backend.js').DataFolderPlan|null} */
+  plan: null,
+  /** The plan is being read. */
+  planning: false,
+  /** The reason a setup failed, in plain words. @type {string|null} */
+  error: null,
+  /** The failed setup left everything as it was. */
+  nothingChanged: false,
+  /** The copy in flight. */
+  progress: { copied: 0, total: 0 },
+})
+
+/** What the start decided, once per launch. */
+export const startFlow = $state({
+  /** The start flow has run this launch. */
+  ran: false,
+  /** Row C: the first-launch dialog carries the Join step. */
+  joinStep: false,
+})
+
+/** The stored answers, read against the mode now. */
+export function startAnswers() {
+  return readStartAnswers(session.dataFolderPromptAnswered, dataFolder.status?.mode)
+}
+
+/**
+ * Run the start table once, after the first status read: a quiet setup
+ * (row E), the Join step (row C), or the dialog (rows D and F), each only
+ * when its question has no stored answer.
+ *
+ * @param {import('../api/backend.js').Backend} [backend]
+ */
+export async function runStartFlow(backend = getBackend()) {
+  if (startFlow.ran) return
+  startFlow.ran = true
+  // An empty `Cleaner/` this app already set up or joined is filled, not
+  // asked about (contract 5.1).
+  if (fillsEmptySubfolder(dataFolder.status, session.dataFolderPromptAnswered) && typeof backend.dataFolderFillEmpty === 'function') {
+    try {
+      dataFolder.status = await backend.dataFolderFillEmpty()
+      dataFolder.generation += 1
+    } catch (error) {
+      console.error('the empty Cleaner folder could not be filled', error)
+    }
+    if (dataFolder.status?.mode === 'shared') return
+  }
+  const answers = startAnswers()
+  const row = startRow(dataFolder.status, { answers, firstLaunchDone: session.firstLaunchOffered })
+  const action = startAction(row, answers)
+  if (!action) return
+  if (action.kind === 'join') {
+    startFlow.joinStep = true
+    return
+  }
+  if (action.kind === 'dialog') {
+    await openStartDialog(action.variant, backend)
+    return
+  }
+  if (typeof backend.dataFolderQuietSetup !== 'function') return
+  try {
+    const outcome = await backend.dataFolderQuietSetup()
+    dataFolder.status = outcome.status
+    if (!outcome.done) return
+    dataFolder.generation += 1
+    setStartAnswer('setup', 'accepted', 'shared')
+    // Said once it can be seen (`showQuietSetupNotice`), not now: the
+    // first-launch dialog may be over it.
+    setQuietSetupNotice(shownPath(outcome.status.root, outcome.status.home))
+  } catch (error) {
+    console.error('the quiet setup could not run', error)
+  }
+}
+
+/** The key of the quiet setup's one-time notice. */
+export const QUIET_SETUP_NOTICE = 'notice.dataFolder.quietSetup'
+
+/**
+ * Show the quiet setup's one-time notice once nothing covers it (contract
+ * 5.2): after the first-launch dialog has closed. It then stays until it is
+ * closed or Show is pressed, and newer notices do not push it out. It
+ * counts as shown only from here, so a quit before it was visible shows it
+ * on the next start. Answers whether it showed it now.
+ *
+ * @param {{covered: boolean}} facts - whether the first-launch dialog is up
+ */
+export function showQuietSetupNotice({ covered }) {
+  const path = session.quietSetupNotice
+  if (!path || covered) return false
+  if (!app.notices.some((shown) => shown.key === QUIET_SETUP_NOTICE)) {
+    notify({ key: QUIET_SETUP_NOTICE, params: { path }, keep: true })
+  }
+  setQuietSetupNotice(null)
+  return true
+}
+
+/**
+ * Open the dialog. Set up proposes `~/Manga Library`; Join names the folder
+ * Pear already uses and offers no other.
+ *
+ * @param {'setup'|'join'} variant
+ * @param {import('../api/backend.js').Backend} [backend]
+ */
+export async function openStartDialog(variant, backend = getBackend()) {
+  startDialog.open = true
+  startDialog.variant = variant
+  startDialog.phase = 'ask'
+  startDialog.error = null
+  startDialog.nothingChanged = false
+  startDialog.progress = { copied: 0, total: 0 }
+  startDialog.target = (variant === 'join' ? dataFolder.status?.root : dataFolder.status?.defaultRoot) ?? ''
+  dataFolder.error = null
+  dataFolder.confirm = null
+  await planStartDialog(backend)
+}
+
+/**
+ * Change where Set up puts the folder ("Change…"), and read the plan again.
+ *
+ * @param {string} target
+ * @param {import('../api/backend.js').Backend} [backend]
+ */
+export async function setStartTarget(target, backend = getBackend()) {
+  if (startDialog.variant !== 'setup' || startDialog.phase === 'working') return
+  startDialog.target = target
+  await planStartDialog(backend)
+}
+
+/** @param {import('../api/backend.js').Backend} backend */
+async function planStartDialog(backend) {
+  if (typeof backend.dataFolderPlan !== 'function') return
+  startDialog.planning = true
+  const asked = startDialog.target
+  try {
+    const plan = await backend.dataFolderPlan({ target: startDialog.variant === 'join' ? null : asked })
+    if (startDialog.target === asked) startDialog.plan = plan
+  } catch (error) {
+    startDialog.plan = null
+    startDialog.error = message(error)
+  } finally {
+    startDialog.planning = false
+  }
+}
+
+/**
+ * Whether the dialog may not go ahead now: Pear is open in the folder a
+ * Join would move into ("Close Pear first."). A drive that cannot tell is
+ * not blocked: the move asks the user to confirm instead.
+ */
+export function startBlocked() {
+  return startDialog.variant === 'join' && dataFolder.status?.typesetterRunning === 'yes'
+}
+
+/** "Check again": read the status, which says whether Pear still runs. */
+export async function checkStartAgain(backend = getBackend()) {
+  await loadDataFolder(backend)
+}
+
+/**
+ * "Use one folder": run the setup or the Join, the copy's progress polled
+ * meanwhile. Done, it stores the answer as accepted; a drive that cannot
+ * tell whether Pear runs puts the question back with the confirm.
+ *
+ * @param {{confirmedClosed?: boolean, backend?: import('../api/backend.js').Backend}} [options]
+ */
+export async function acceptStart({ confirmedClosed = false, backend = getBackend() } = {}) {
+  if (startDialog.phase === 'working' || startBlocked()) return false
+  const before = dataFolder.status?.mode ?? null
+  startDialog.phase = 'working'
+  startDialog.error = null
+  startDialog.progress = { copied: 0, total: 0 }
+  const timer = globalThis.setInterval(() => void pollProgress(backend), PROGRESS_POLL_MS)
+  let done = false
+  try {
+    done = await changeDataFolder('setup', startDialog.target, { confirmedClosed, backend })
+  } finally {
+    globalThis.clearInterval(timer)
+  }
+  if (done) {
+    setStartAnswer(startDialog.variant, 'accepted', 'shared')
+    startDialog.phase = 'done'
+    return true
+  }
+  if (dataFolder.confirm) {
+    startDialog.phase = 'ask'
+    return false
+  }
+  startDialog.phase = 'failed'
+  startDialog.error = dataFolder.error
+  startDialog.nothingChanged = (dataFolder.status?.mode ?? null) === before
+  return false
+}
+
+/** @param {import('../api/backend.js').Backend} backend */
+async function pollProgress(backend) {
+  if (startDialog.phase !== 'working' || typeof backend.dataFolderProgress !== 'function') return
+  try {
+    startDialog.progress = await backend.dataFolderProgress()
+  } catch {
+    // The next tick asks again.
+  }
+}
+
+/** "Not now": stored as declined, never asked again. */
+export function declineStart() {
+  if (startDialog.phase === 'working') return
+  setStartAnswer(startDialog.variant, 'declined', dataFolder.status?.mode ?? null)
+  closeStartDialog()
+}
+
+export function closeStartDialog() {
+  if (startDialog.phase === 'working') return
+  startDialog.open = false
+  dataFolder.confirm = null
+}
+
+/**
+ * The first-run Join step's "Use the same folder" (row C). Nothing to move on
+ * a new install: the backend makes `Cleaner/` and its index.
+ *
+ * @param {import('../api/backend.js').Backend} [backend]
+ */
+export async function joinFromFirstRun(backend = getBackend()) {
+  const root = dataFolder.status?.root
+  if (!root) return false
+  const done = await changeDataFolder('setup', root, { backend })
+  if (done) setStartAnswer('join', 'accepted', 'shared')
+  return done
+}
+
+/** The first-run Join step's "Keep separate". */
+export function keepSeparate() {
+  setStartAnswer('join', 'declined', dataFolder.status?.mode ?? null)
+}
+
 /** For tests. */
 export function resetDataFolder() {
+  startFlow.ran = false
+  startFlow.joinStep = false
+  startDialog.open = false
+  startDialog.phase = 'ask'
+  startDialog.plan = null
+  startDialog.error = null
+  startDialog.target = ''
   if (poll !== null) clearTimeout(poll)
   poll = null
   reading = null

@@ -8,6 +8,8 @@
   import UpdateDialog from './UpdateDialog.svelte'
   import JobsIndicator from '../shell/JobsIndicator.svelte'
   import Wordmark from './Wordmark.svelte'
+  import { dataFolder } from '../state/datafolder.svelte.js'
+  import { openSendToPear } from '../state/sendtopear.svelte.js'
 
   /**
    * Home's header, and the whole of it: the wordmark, update badge if available,
@@ -59,6 +61,11 @@
       <span class="update-dot"></span>
       {t('update.action.availableTag', { version: update.version ? (update.version.startsWith('v') ? update.version : `v${update.version}`) : '' })}
     </Button>
+  {/if}
+
+  <!-- Send to Pear (contract section 8.4.1), while both apps share the folder. -->
+  {#if dataFolder.status?.mode === 'shared'}
+    <Button size="lg" variant="soft" onclick={openSendToPear}>{t('sendToPear.open')}</Button>
   {/if}
 
   <IconButton
