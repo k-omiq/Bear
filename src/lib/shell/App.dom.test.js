@@ -10,8 +10,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/sv
 import { setBackend } from '../api/backend.js'
 import { createMockBackend } from '../api/mock.js'
 import { t } from '../i18n/index.js'
-import { dataFolder, resetDataFolder } from '../state/datafolder.svelte.js'
+import { dataFolder, resetDataFolder, startDialog, startFlow } from '../state/datafolder.svelte.js'
 import { session } from '../state/session.svelte.js'
+import { app } from '../state/app.svelte.js'
 import App from '../../App.svelte'
 
 const TIMING = { method: 0, openChapter: 0, export: 0, cloud: 0, analysis: 0, provision: 0, region: 0, pageTail: 0, noticeStagger: 0 }
@@ -35,6 +36,8 @@ beforeEach(() => {
   resetDataFolder()
   // The first-launch offer is a dialog of its own; it is not what this file is about.
   session.firstLaunchOffered = true
+  session.dataFolderPromptAnswered = false
+  app.notices.length = 0
 })
 
 afterEach(() => {
@@ -42,6 +45,7 @@ afterEach(() => {
   resetDataFolder()
   setBackend(null)
   session.firstLaunchOffered = offered
+  session.dataFolderPromptAnswered = false
   vi.unstubAllGlobals()
 })
 
@@ -79,6 +83,8 @@ it('holds Home under the busy cover while the Pending move runs, then lists the 
   backend.dataFolderSetup = (spec) => new Promise((resolve, reject) => {
     finish = () => real(spec).then(resolve, reject)
   })
+  // The Home card, not the start dialog: the start table has run already.
+  startFlow.ran = true
   const { container } = render(App)
   const move = await screen.findByRole('button', { name: t('home.dataFolder.move') })
   await waitFor(() => expect(backend.listProjects).toHaveBeenCalledTimes(1))
@@ -102,4 +108,47 @@ it('shows a move elsewhere as the busy cover, not the unavailable screen', async
   expect(screen.queryByRole('alertdialog', { name: t('shell.dataFolder.title') })).toBeNull()
   expect(layer(container).inert).toBe(true)
   expect(dataFolder.moving).toBe(true)
+})
+
+
+it('sets the folder up quietly when Pear never ran here, and says where with Show', async () => {
+  const backend = mockBackend()
+  const show = vi.spyOn(backend, 'dataFolderShow')
+  render(App)
+  await waitFor(() => expect(dataFolder.status?.mode).toBe('shared'))
+  await waitFor(() => expect(app.notices.filter((n) => n.key === 'notice.dataFolder.quietSetup').map((n) => n.params)).toEqual([{ path: '~/Manga Library' }]))
+  const line = (await screen.findAllByText(t('notice.dataFolder.quietSetup', { path: '~/Manga Library' })))[0]
+  // Show is the notice's own button: Home has others by that name.
+  const button = screen
+    .getAllByRole('button', { name: t('notice.dataFolder.show') })
+    .find((candidate) => candidate.closest('[aria-live]')?.contains(line))
+  if (!button) throw new Error('the notice has no Show button')
+  expect(session.dataFolderPromptAnswered).toEqual({ setup: 'accepted' })
+  await fireEvent.click(button)
+  expect(show).toHaveBeenCalledTimes(1)
+})
+
+it('opens the Set up dialog when Pear ran here, outside the inert layer, and Not now keeps the library', async () => {
+  const backend = mockBackend({ sisterPresent: true })
+  const quiet = vi.spyOn(backend, 'dataFolderQuietSetup')
+  const { container } = render(App)
+  const dialog = await screen.findByRole('dialog', { name: t('startFolder.title') })
+  expect(layer(container).contains(dialog)).toBe(false)
+  expect(quiet).not.toHaveBeenCalled()
+  await fireEvent.click(screen.getByRole('button', { name: t('startFolder.notNow') }))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: t('startFolder.title') })).toBeNull())
+  expect(session.dataFolderPromptAnswered).toEqual({ setup: 'declined' })
+  expect(dataFolder.status?.mode).toBe('legacy')
+})
+
+it('asks Join in the dialog when Pear set the folder up and this app was used before, with no Home card beside it', async () => {
+  mockBackend({ dataFolder: 'pending' })
+  render(App)
+  await screen.findByRole('dialog', { name: t('startFolder.title') })
+  expect(startDialog.variant).toBe('join')
+  expect(screen.queryByRole('button', { name: t('home.dataFolder.move') })).toBeNull()
+  await fireEvent.click(screen.getByRole('button', { name: t('startFolder.use') }))
+  await waitFor(() => expect(dataFolder.status?.mode).toBe('shared'))
+  await screen.findByText(t('startFolder.done', { path: '~/Manga Library' }), { exact: false })
+  expect(screen.getByRole('button', { name: t('startFolder.chooseTitles') })).toBeTruthy()
 })

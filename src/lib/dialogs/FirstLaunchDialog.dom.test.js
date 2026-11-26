@@ -40,6 +40,7 @@ import FirstLaunchDialog from './FirstLaunchDialog.svelte'
 import SettingsDialog from './SettingsDialog.svelte'
 import { DEFAULT_FLUX_MODEL, FIRST_LAUNCH_STEPS, RUNTIME_ID } from './firstlaunch.js'
 import { SAM_GRAPH_BYTES } from '../model/pipelines.js'
+import { dataFolder, resetDataFolder, startFlow } from '../state/datafolder.svelte.js'
 import {
   configureFirstLaunchCloud,
   dismissFirstLaunch,
@@ -1138,5 +1139,58 @@ describe('Run setup again', () => {
     await waitFor(() => expect(rendered.getByText(t('onboarding.replay.failed'))).toBeTruthy())
     expect(firstLaunch.open).toBe(false)
     expect(app.modals).toHaveLength(1)
+  })
+})
+
+describe('the Join step (start row C)', () => {
+  const ROOT = '/Volumes/Manga/Manga Library'
+  const pending = { mode: 'pending', root: ROOT, library: '/lib', reason: null, defaultRoot: '/Users/reader/Manga Library', typesetterRunning: 'no', synced: false, oldCopies: [], recovered: null, sisterPresent: true, journal: false, titles: 0, home: '/Users/reader' }
+
+  beforeEach(() => {
+    resetDataFolder()
+    session.dataFolderPromptAnswered = false
+    dataFolder.status = /** @type {any} */ (pending)
+  })
+  afterEach(() => {
+    resetDataFolder()
+    session.dataFolderPromptAnswered = false
+  })
+
+  it('is not a step unless the start flow asked for it', async () => {
+    const rendered = open()
+    await press(rendered, t('onboarding.action.start'))
+    expect(firstLaunch.step).toBe('theme')
+    await press(rendered, t('onboarding.action.next'))
+    expect(firstLaunch.step).toBe('token')
+  })
+
+  it('comes after the theme, long before the downloads, and Use the same folder joins', async () => {
+    startFlow.joinStep = true
+    const setup = vi.fn(async ({ target }) => ({ ...pending, mode: 'shared', root: target }))
+    Object.assign(backend, { dataFolderSetup: setup, dataFolderStatus: vi.fn(async () => pending) })
+    const rendered = open('theme')
+    await press(rendered, t('onboarding.action.next'))
+    expect(firstLaunch.step).toBe('join')
+    expect(heading(rendered).textContent?.trim()).toBe(t('onboarding.join.heading'))
+    expect(rendered.getByText(t('onboarding.join.body', { path: ROOT }))).toBeTruthy()
+    await press(rendered, t('onboarding.join.use'))
+    await waitFor(() => expect(firstLaunch.step).toBe('token'))
+    expect(setup).toHaveBeenCalledWith({ target: ROOT, confirmedClosed: false })
+    expect(session.dataFolderPromptAnswered).toEqual({ join: 'accepted' })
+    // Back on it, the step says what was done and offers Next only.
+    await press(rendered, t('onboarding.action.back'))
+    expect(rendered.getByText(t('onboarding.join.done', { path: ROOT }))).toBeTruthy()
+    expect(rendered.queryByRole('button', { name: t('onboarding.join.use') })).toBeNull()
+  })
+
+  it('Keep separate stores the answer and moves nothing', async () => {
+    startFlow.joinStep = true
+    const setup = vi.fn()
+    Object.assign(backend, { dataFolderSetup: setup })
+    const rendered = open('join')
+    await press(rendered, t('onboarding.join.keep'))
+    expect(firstLaunch.step).toBe('token')
+    expect(setup).not.toHaveBeenCalled()
+    expect(session.dataFolderPromptAnswered).toEqual({ join: 'declined' })
   })
 })

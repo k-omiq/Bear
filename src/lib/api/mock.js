@@ -3749,7 +3749,19 @@ export function createMockBackend(options = {}) {
     oldCopies: [],
     /** @type {string|null} */
     recovered: null,
+    /** Pear has run here: `?sister=1` (or `options.sisterPresent`). */
+    sisterPresent: options.sisterPresent ?? search.get('sister') === '1',
+    /** A move is unfinished: `?journal=1` (or `options.journal`), with `?dataFolder=unavailable`. */
+    journal: options.journal ?? search.get('journal') === '1',
+    /** The copy of a setup to another drive, while it runs. */
+    copy: { copied: 0, total: 0 },
   }
+  /** Chapter id → when Save or Send to Pear last handed it over, as `last_sent_at`. @type {Map<string, number>} */
+  const sentAt = new Map()
+  /** Chapter id → when it last changed, as the manifest's mtime would say. @type {Map<string, number>} */
+  const changedAt = new Map()
+  const sendProgress = { running: false, done: 0, total: 0, sent: 0, failed: 0, stopped: false }
+  let sendStop = false
   const SYNCED = /mobile documents|library\/cloudstorage|onedrive|dropbox|google drive|icloud/i
   const dataFolderStatus = () => ({
     mode: dataFolder.mode,
@@ -3761,7 +3773,15 @@ export function createMockBackend(options = {}) {
     synced: SYNCED.test(dataFolder.root ?? '') || (dataFolder.root ?? '').startsWith(`${MOCK_HOME}/Documents`),
     oldCopies: structuredClone(dataFolder.oldCopies),
     recovered: dataFolder.recovered,
+    sisterPresent: dataFolder.sisterPresent || dataFolder.root !== null,
+    journal: dataFolder.mode === 'unavailable' && dataFolder.journal,
+    titles: dataFolder.mode === 'unavailable' ? 0 : state.projects.length,
+    home: MOCK_HOME,
   })
+  /** As `send_to_pear.rs#has_cleaned_page`. @param {any} chapter */
+  const chapterCleaned = (chapter) => (chapter.pages ?? []).some((page) => page.status === 'cleaned')
+  /** As `library.rs#changed_since_sent`. @param {any} chapter */
+  const chapterChanged = (chapter) => !sentAt.has(chapter.id) || (changedAt.get(chapter.id) ?? 0) > (sentAt.get(chapter.id) ?? 0)
   /** As `data_folder.rs#checked_target`. @param {unknown} target */
   const checkedTarget = (target) => {
     if (typeof target !== 'string' || !target.startsWith('/')) throw new Error('Pick a full folder path.')
@@ -3834,12 +3854,105 @@ export function createMockBackend(options = {}) {
       if (dataFolder.mode === 'pending' && to !== dataFolder.root) {
         throw new Error('The typesetter already set up a data folder. Move this library into that one.')
       }
-      // Only this library moves, into a subfolder nothing else writes.
-      readyToMove(confirmedClosed, false)
-      await delay(timing.export * 2)
+      // A setup or a Join is refused while Pear runs there (contract 7).
+      readyToMove(confirmedClosed, dataFolder.mode === 'pending')
+      const otherDrive = to.startsWith('/Volumes/')
+      if (otherDrive && state.projects.length > 0) {
+        dataFolder.copy = { copied: 0, total: 9_700_000_000 }
+        await delay(timing.export)
+        dataFolder.copy = { copied: 5_500_000_000, total: 9_700_000_000 }
+        await delay(timing.export)
+        dataFolder.copy = { copied: 0, total: 0 }
+      } else {
+        await delay(timing.export * 2)
+      }
       dataFolder.mode = 'shared'
       dataFolder.root = to
       return dataFolderStatus()
+    },
+
+    /** Row E: no pointer and no Pear here, as `data_folder.rs#data_folder_quiet_setup`. */
+    async dataFolderQuietSetup() {
+      await delay(timing.method)
+      const quiet = dataFolder.mode === 'legacy' && !dataFolder.sisterPresent && runner.list().length === 0
+      if (quiet) {
+        dataFolder.mode = 'shared'
+        dataFolder.root = `${MOCK_HOME}/Manga Library`
+      }
+      return { done: quiet, status: dataFolderStatus() }
+    },
+
+    /** What a setup at `target` would move. A target under `/Volumes/` is another drive. */
+    async dataFolderPlan({ target = null } = {}) {
+      await delay(timing.method)
+      const to = target ? checkedTarget(target) : (dataFolder.root ?? `${MOCK_HOME}/Manga Library`)
+      const nothing = state.projects.length === 0 || dataFolder.mode === 'shared'
+      return {
+        target: to,
+        bytes: nothing ? 0 : 9_700_000_000,
+        nothingToMove: nothing,
+        sameVolume: nothing || !to.startsWith('/Volumes/'),
+        synced: SYNCED.test(to) || to.startsWith(`${MOCK_HOME}/Documents`),
+        refusal: null,
+      }
+    },
+
+    async dataFolderProgress() {
+      return { ...dataFolder.copy }
+    },
+
+    async dataFolderShow() {
+      await delay(timing.method)
+    },
+
+    /** As `send_to_pear.rs#titles`. */
+    async sendToPearTitles() {
+      await delay(timing.method)
+      if (dataFolder.mode === 'unavailable') throw unavailableError()
+      return state.projects.map((project) => ({
+        projectId: project.id,
+        name: project.name,
+        chapters: project.chapters.length,
+        cleaned: project.chapters.filter(chapterCleaned).length,
+        sent: project.chapters.filter((chapter) => sentAt.has(chapter.id)).length,
+        pending: project.chapters.filter((chapter) => chapterCleaned(chapter) && chapterChanged(chapter)).length,
+      }))
+    },
+
+    /** As `send_to_pear.rs#send_to_pear_start`: one chapter per `timing.export`. */
+    async sendToPearStart({ projectIds = [], again = false } = {}) {
+      await delay(timing.method)
+      if (dataFolder.mode !== 'shared') throw new Error('Send to Pear needs the shared data folder.')
+      if (sendProgress.running) throw new Error('A send to Pear is already going.')
+      const chapters = state.projects
+        .filter((project) => projectIds.includes(project.id))
+        .flatMap((project) => project.chapters.filter((chapter) => chapterCleaned(chapter) && (again || chapterChanged(chapter))))
+      Object.assign(sendProgress, { running: true, done: 0, total: chapters.length, sent: 0, failed: 0, stopped: false })
+      sendStop = false
+      void (async () => {
+        for (const chapter of chapters) {
+          if (sendStop) {
+            sendProgress.stopped = true
+            break
+          }
+          await delay(timing.export)
+          sentAt.set(chapter.id, timers.now())
+          sendProgress.done += 1
+          sendProgress.sent += 1
+        }
+        sendProgress.running = false
+        notify(sendProgress.stopped ? 'notice.sendToPear.stopped' : 'notice.sendToPear.done', { count: sendProgress.sent, failed: sendProgress.failed })
+      })()
+      return { ...sendProgress }
+    },
+
+    async sendToPearProgress() {
+      return { ...sendProgress }
+    },
+
+    async sendToPearStop() {
+      sendStop = true
+      return { ...sendProgress }
     },
 
     /** Shared: the whole folder moves. */
@@ -3897,6 +4010,7 @@ export function createMockBackend(options = {}) {
       // `lock_chapter` refuses while a run holds the chapter.
       if (runner.runFor(found.chapter.id)) throw new Error('A run is going on this chapter. Wait for it to finish.')
       await delay(timing.export)
+      sentAt.set(found.chapter.id, timers.now())
       const pages = found.chapter.pages.length
       const key = `cleaner-mock-library-${found.project.id}-${found.chapter.id}`
       if (state.settings.saveCleanedTo === 'next-to-raws') {

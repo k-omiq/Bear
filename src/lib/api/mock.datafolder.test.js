@@ -88,3 +88,33 @@ describe('the data folder in the mock', () => {
     expect(seen.at(-1)).toMatchObject({ key: 'notice.save.sentAndSaved', params: { count: both.pages, path: both.nextToRaws } })
   })
 })
+
+describe('Send to Pear in the mock', () => {
+  it('lists the titles, sends only cleaned chapters, and sends only what changed after', async () => {
+    const backend = createMockBackend({ timing: TIMING, dataFolder: 'shared' })
+    const seen = notices(backend)
+    const titles = await settle(backend.sendToPearTitles())
+    expect(titles.length).toBeGreaterThan(0)
+    const title = titles.find((row) => row.cleaned > 0)
+    expect(title).toBeTruthy()
+    expect(title).toMatchObject({ sent: 0, pending: title.cleaned })
+    expect(title.cleaned).toBeLessThanOrEqual(title.chapters)
+
+    const started = await settle(backend.sendToPearStart({ projectIds: [title.projectId] }))
+    expect(started).toMatchObject({ total: title.cleaned })
+    const done = await settle(backend.sendToPearProgress())
+    expect(done).toMatchObject({ running: false, done: title.cleaned, sent: title.cleaned, stopped: false })
+    expect(seen.at(-1)).toMatchObject({ key: 'notice.sendToPear.done' })
+
+    const after = (await settle(backend.sendToPearTitles())).find((row) => row.projectId === title.projectId)
+    expect(after).toMatchObject({ sent: title.cleaned, pending: 0 })
+    // Nothing changed: a second send writes nothing, unless "Send all again".
+    expect(await settle(backend.sendToPearStart({ projectIds: [title.projectId] }))).toMatchObject({ total: 0 })
+    expect(await settle(backend.sendToPearStart({ projectIds: [title.projectId], again: true }))).toMatchObject({ total: title.cleaned })
+  })
+
+  it('refuses outside Shared mode', async () => {
+    const backend = createMockBackend({ timing: TIMING })
+    await expect(settle(backend.sendToPearStart({ projectIds: ['x'] }))).rejects.toThrow(/shared data folder/)
+  })
+})

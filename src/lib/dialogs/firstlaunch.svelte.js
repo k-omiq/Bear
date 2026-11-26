@@ -27,10 +27,12 @@ import { capabilities, loadCapabilities } from '../state/capabilities.svelte.js'
 import { cloud } from '../state/cloud.svelte.js'
 import { chooseDetectTarget, chooseDetectionMode, detectTarget, targets as detectTargets } from '../state/cloudtargets.svelte.js'
 import { DETECTION_MODES, HAYAI_FILES, LANGUAGES, OCR_FILES, SAM_GRAPH_BYTES, SAM_ROOM_BYTES, SCRIPT_GATE_FILES, defaultAnalysisTargets, localDetectorModels } from '../model/pipelines.js'
+import { startFlow } from '../state/datafolder.svelte.js'
 import {
   RUNTIME_ID,
   FIRST_LAUNCH_STEPS,
   defaultFluxModel,
+  firstLaunchStepsWith,
   firstLaunchPlan,
   missingBytes,
   neededFiles,
@@ -176,19 +178,29 @@ export function offerFirstLaunch(view, { force = false } = {}) {
   return true
 }
 
-/** @param {string} step - one of `FIRST_LAUNCH_STEPS`; anything else is ignored */
+/**
+ * The steps this setup shows: Join is one of them only at start row C
+ * (`state/datafolder.svelte.js#startFlow`).
+ */
+export function firstLaunchSteps() {
+  return firstLaunchStepsWith({ join: startFlow.joinStep })
+}
+
+/** @param {string} step - one of `firstLaunchSteps()`; anything else is ignored */
 export function setFirstLaunchStep(step) {
-  if (FIRST_LAUNCH_STEPS.includes(/** @type {any} */ (step))) firstLaunch.step = step
+  if (firstLaunchSteps().includes(step)) firstLaunch.step = step
 }
 
 export function nextFirstLaunchStep() {
-  const index = FIRST_LAUNCH_STEPS.indexOf(/** @type {any} */ (firstLaunch.step))
-  if (index >= 0 && index < FIRST_LAUNCH_STEPS.length - 1) firstLaunch.step = FIRST_LAUNCH_STEPS[index + 1]
+  const steps = firstLaunchSteps()
+  const index = steps.indexOf(firstLaunch.step)
+  if (index >= 0 && index < steps.length - 1) firstLaunch.step = steps[index + 1]
 }
 
 export function prevFirstLaunchStep() {
-  const index = FIRST_LAUNCH_STEPS.indexOf(/** @type {any} */ (firstLaunch.step))
-  if (index > 0) firstLaunch.step = FIRST_LAUNCH_STEPS[index - 1]
+  const steps = firstLaunchSteps()
+  const index = steps.indexOf(firstLaunch.step)
+  if (index > 0) firstLaunch.step = steps[index - 1]
 }
 
 /**

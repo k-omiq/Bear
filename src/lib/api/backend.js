@@ -673,6 +673,50 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(spec: {target: string, confirmedClosed?: boolean}) => Promise<DataFolderStatus>} dataFolderUseExisting - point at a folder that is already a data folder and move nothing
  * @property {(spec: {path: string}) => Promise<DataFolderStatus>} dataFolderDeleteOldCopy - delete an old tree a move to another drive set aside. Only paths on `oldCopies`
  * @property {(spec: {chapterId: string}) => Promise<SaveResult>} saveToTypesetter - export every page and hand the chapter to the typesetter through the data folder. The notice comes from the backend (`notice.save.*`, or an export refusal under `notice.export.*`)
+ * @property {() => Promise<{done: boolean, status: DataFolderStatus}>} dataFolderQuietSetup - start row E (`docs/shared-data-folder.md` section 5.2): set up at `~/Manga Library` without asking, only when every check holds, each made again under the move lock. `done: false` leaves the app in Legacy and says nothing
+ * @property {(spec: {target?: string|null}) => Promise<DataFolderPlan>} dataFolderPlan - what a setup at `target` (or a Join of the pointer's folder when it is empty) would move, and whether it is one rename. Reads only
+ * @property {() => Promise<{copied: number, total: number}>} dataFolderProgress - how far the copy of a setup or move in flight has come; zero and zero when none runs
+ * @property {() => Promise<void>} dataFolderShow - open the data folder in Finder or File Explorer
+ * @property {() => Promise<SendTitle[]>} sendToPearTitles - Send to Pear's title list (section 8.4.1)
+ * @property {(spec: {projectIds: string[], again: boolean}) => Promise<SendProgress>} sendToPearStart - send the titles' cleaned chapters in the background, `again` every one, else only those never sent or changed since
+ * @property {() => Promise<SendProgress>} sendToPearProgress - where the send is
+ * @property {() => Promise<SendProgress>} sendToPearStop - stop after the chapter being written; what was written stays
+ */
+
+/**
+ * What `data_folder_plan` answers.
+ *
+ * @typedef {Object} DataFolderPlan
+ * @property {string} target - the data folder the library would go into
+ * @property {number} bytes - what would move, each hard-linked file once
+ * @property {boolean} nothingToMove
+ * @property {boolean} sameVolume - one rename: it takes a moment
+ * @property {boolean} synced - the target is inside a cloud-synced folder
+ * @property {string|null} refusal - why the target cannot take this library, in plain words
+ */
+
+/**
+ * One title in Send to Pear's list.
+ *
+ * @typedef {Object} SendTitle
+ * @property {string} projectId
+ * @property {string} name
+ * @property {number} chapters
+ * @property {number} cleaned - chapters with a cleaned page
+ * @property {number} sent - chapters handed to Pear before
+ * @property {number} pending - cleaned chapters never sent or changed since
+ */
+
+/**
+ * Where a Send to Pear is.
+ *
+ * @typedef {Object} SendProgress
+ * @property {boolean} running
+ * @property {number} done
+ * @property {number} total
+ * @property {number} sent
+ * @property {number} failed
+ * @property {boolean} stopped
  */
 
 /**
@@ -688,6 +732,10 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {boolean} synced - the folder is inside one a cloud service syncs
  * @property {Array<{path: string, bytes: number, movedAt: string}>} oldCopies - trees a move to another drive kept, until the user deletes them
  * @property {string|null} recovered - what the last start's move recovery did
+ * @property {boolean} [sisterPresent] - Pear has run on this computer (section 4.1)
+ * @property {boolean} [journal] - a move is unfinished (start row B)
+ * @property {number} [titles] - how many titles the library read now holds
+ * @property {string|null} [home] - the home folder, so a path can read `~/Manga Library`
  */
 
 /**

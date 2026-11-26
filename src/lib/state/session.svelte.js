@@ -213,7 +213,7 @@ function viewport() {
  * @property {'alt'|'meta'|'control'|'shift'} cloneSourceModifier - held while clicking to set the clone stamp's source; see `setCloneSourceModifier`
  * @property {import('../editor/navigation.js').Navigation} navigation - what the wheel, the middle button and a drag on empty canvas do; see `setNavigation`
  * @property {boolean} firstLaunchOffered - whether the first-launch download offer has been made on this machine
- * @property {boolean} dataFolderPromptAnswered - whether Home's first-run shared data folder card has been answered (Not now, or a Move that worked); see `markDataFolderPromptAnswered`
+ * @property {boolean|{setup?: 'accepted'|'declined', join?: 'accepted'|'declined'}} dataFolderPromptAnswered - the start answers about the shared data folder, per question (`docs/shared-data-folder.md` section 5.3); `true` is a version 1 answer, read by `state/startflow.js#readStartAnswers`; see `setStartAnswer`
  * @property {boolean} closeToTray - close control hides the window and keeps downloads running
  * @property {'rle'|'raw'} exportPsdCompression - how a PSD stores 8-bit channels: packed, or raw for readers that cannot unpack
  * @property {boolean} exportPsdLetteringLayer - whether a layered PSD carries a hidden layer marking where the lettering was
@@ -248,6 +248,26 @@ function viewport() {
  * @property {Record<string, WindowState>} windows
  * @property {number|null} toolPanelWidth - the width the user dragged the tool panel to, or null for its own (`tools.js#PANEL_WIDTH`)
  */
+
+/**
+ * The start answers as stored: a version 1 boolean, or one answer per
+ * question. Anything else is the default (no answer).
+ *
+ * @param {unknown} value
+ * @param {PersistedSession['dataFolderPromptAnswered']} fallback
+ * @returns {PersistedSession['dataFolderPromptAnswered']}
+ */
+function startAnswersOr(value, fallback) {
+  if (typeof value === 'boolean') return value
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return fallback
+  /** @type {{setup?: 'accepted'|'declined', join?: 'accepted'|'declined'}} */
+  const out = {}
+  for (const question of /** @type {const} */ (['setup', 'join'])) {
+    const how = /** @type {Record<string, unknown>} */ (value)[question]
+    if (how === 'accepted' || how === 'declined') out[question] = how
+  }
+  return out
+}
 
 /** @returns {PersistedSession} */
 function defaults() {
@@ -399,9 +419,11 @@ export function sanitizeSession(raw) {
     // the offer, and a machine that has already been asked carries a `true` it
     // wrote itself.
     firstLaunchOffered: boolOr(record.firstLaunchOffered, base.firstLaunchOffered),
-    // False for a record written before the card existed: a Legacy library
-    // is asked once, which is the point of the card.
-    dataFolderPromptAnswered: boolOr(record.dataFolderPromptAnswered, base.dataFolderPromptAnswered),
+    // False for a record written before the question existed: the start
+    // flows ask once, which is the point. Version 1 stored a boolean,
+    // version 2 one answer per question; both are kept as they are and read
+    // by `state/startflow.js#readStartAnswers`.
+    dataFolderPromptAnswered: startAnswersOr(record.dataFolderPromptAnswered, base.dataFolderPromptAnswered),
     closeToTray: boolOr(record.closeToTray, base.closeToTray),
     exportPsdCompression: /** @type {'rle'|'raw'} */ (
       oneOf(record.exportPsdCompression, PSD_COMPRESSIONS, base.exportPsdCompression)
@@ -1066,19 +1088,31 @@ export function markFirstLaunchOffered() {
 }
 
 /**
- * Remember that Home's first-run data folder card has been answered
- * (`home/DataFolderPrompt.svelte`, `docs/shared-data-folder.md` section 7).
- *
- * Set by Not now and by a Move that worked. Choose folder does not set it:
- * Settings may be closed with nothing changed, and the card is then still the
- * one place that asks. Settings > Data folder offers Setup either way.
+ * Remember an answer to one of the start questions about the shared data
+ * folder (`docs/shared-data-folder.md` section 5.3): `setup` (row F, and a
+ * quiet setup) or `join` (rows C and D), `accepted` or `declined`. A
+ * declined question is never asked again; Settings > Data folder still
+ * offers the action. A version 1 `true` is carried over as the Set up answer
+ * it stood for, so a later Join answer does not lose it.
  *
  * **Not a backend setting**, like `firstLaunchOffered`: it is this app's own
  * answer, kept in this app's own store and never in the shared data folder,
  * so each app keeps its own.
+ *
+ * @param {'setup'|'join'} question
+ * @param {'accepted'|'declined'} how
+ * @param {string|null} [mode] - the data folder's mode now, to read a version 1 answer by
  */
-export function markDataFolderPromptAnswered() {
-  session.dataFolderPromptAnswered = true
+export function setStartAnswer(question, how, mode = null) {
+  if (question !== 'setup' && question !== 'join') return
+  if (how !== 'accepted' && how !== 'declined') return
+  const raw = session.dataFolderPromptAnswered
+  /** @type {{setup?: 'accepted'|'declined', join?: 'accepted'|'declined'}} */
+  const answers = raw === true
+    ? { setup: mode === 'shared' ? 'accepted' : 'declined' }
+    : raw && typeof raw === 'object' ? { ...raw } : {}
+  answers[question] = how
+  session.dataFolderPromptAnswered = answers
   save()
 }
 

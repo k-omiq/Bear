@@ -181,7 +181,13 @@ pub async fn send_to_pear_start(app: tauri::AppHandle, project_ids: Vec<String>,
                 at.clone()
             };
             crate::events::notice(
-                if done.stopped { "notice.sendToPear.stopped" } else { "notice.sendToPear.done" },
+                if done.failed > 0 {
+                    "notice.sendToPear.failed"
+                } else if done.stopped {
+                    "notice.sendToPear.stopped"
+                } else {
+                    "notice.sendToPear.done"
+                },
                 serde_json::json!({ "count": done.sent, "failed": done.failed }),
                 if done.failed > 0 { "warn" } else { "info" },
             );

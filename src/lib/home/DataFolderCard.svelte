@@ -20,6 +20,8 @@
     confirmTypesetterClosed,
     dataFolder,
   } from '../state/datafolder.svelte.js'
+  import { startAnswers, startDialog } from '../state/datafolder.svelte.js'
+  import { shownPath } from '../state/startflow.js'
   import { runningCount } from '../state/jobs.svelte.js'
   import { t } from '../i18n/index.js'
 
@@ -29,6 +31,10 @@
   const root = $derived(dataFolder.status?.root ?? '')
   const busy = $derived(dataFolder.busy !== null)
   const jobsRunning = $derived(runningCount() > 0)
+  // Join was answered "Not now" (or "Keep separate"): asked once, never again
+  // (contract section 5.3). Settings > Data folder still offers the move. And
+  // not beside the centered dialog that asks the same thing.
+  const asked = $derived(startAnswers().join === 'declined' || startDialog.open)
 
   async function move() {
     if (busy || !root) return
@@ -40,10 +46,10 @@
   }
 </script>
 
-{#if dataFolder.status?.mode === 'pending' && root && !dataFolder.pendingLater}
+{#if dataFolder.status?.mode === 'pending' && root && !dataFolder.pendingLater && !asked}
   <section class="card" aria-labelledby="data-folder-card-title">
     <h2 id="data-folder-card-title">{t('home.dataFolder.title')}</h2>
-    <p>{t('home.dataFolder.body', { path: root })}</p>
+    <p>{t('home.dataFolder.body', { path: shownPath(root, dataFolder.status?.home) })}</p>
     {#if jobsRunning && !busy}
       <p class="note">{t('settings.dataFolder.blocked.jobsRunning')}</p>
     {/if}

@@ -98,3 +98,22 @@ it('asks for the typesetter to be closed when the drive cannot tell, then uses t
   await waitFor(() => expect(backend.dataFolderUseExisting).toHaveBeenLastCalledWith({ target: '/Volumes/Other/Manga Library', confirmedClosed: true }))
   expect(dataFolder.status?.mode).toBe('shared')
 })
+
+it('names an unfinished move as such, and checks again by itself every three seconds', async () => {
+  vi.useFakeTimers()
+  try {
+    dataFolder.status = /** @type {any} */ ({ ...UNAVAILABLE, journal: true, reason: 'The last move of the data folder did not finish.' })
+    const backend = { dataFolderStatus: vi.fn(async () => SHARED) }
+    render(DataFolderUnavailable, { props: { backend: /** @type {any} */ (backend) } })
+    expect(screen.getByRole('alertdialog', { name: t('shell.dataFolder.titleMoveUnfinished') })).toBeTruthy()
+    expect(screen.getByText(t('shell.dataFolder.bodyMoveUnfinished'))).toBeTruthy()
+    expect(screen.getByText(t('shell.dataFolder.checking'))).toBeTruthy()
+    await vi.advanceTimersByTimeAsync(2999)
+    expect(backend.dataFolderStatus).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(backend.dataFolderStatus).toHaveBeenCalledTimes(1)
+    expect(dataFolder.status?.mode).toBe('shared')
+  } finally {
+    vi.useRealTimers()
+  }
+})

@@ -116,6 +116,9 @@ export const es = {
   },
   shell: {
     dataFolder: {
+      titleMoveUnfinished: 'El traslado de la carpeta de datos no terminó',
+      bodyMoveUnfinished: 'La app termina el traslado sola en cuanto puede. Cierra Pear si está abierto.',
+      checking: 'Se vuelve a comprobar cada pocos segundos.',
       moving: 'La carpeta de datos se está moviendo. Puede tardar unos minutos. La app vuelve cuando termine.',
       title: 'No se encuentra la carpeta de datos',
       reasonUnknown: 'No se encuentra la carpeta de datos.',
@@ -170,6 +173,8 @@ export const es = {
   },
   settings: {
     dataFolder: {
+      sendTitles: 'Enviar títulos a Pear…',
+      sendTitlesBody: 'Lleva a Pear los títulos que limpiaste antes.',
       intro: 'Una carpeta donde Manga Cleaner y el maquetador guardan sus bibliotecas. Guardar envía un capítulo allí y el maquetador lo recoge.',
       recovered: 'En el último inicio: {detail}',
       where: 'Ubicación',
@@ -1234,19 +1239,77 @@ export const es = {
       formatChanged: 'Página {page}: Se guardó como {used} en lugar de {requested}: {requested} no tiene modo {mode}, y convertirlo cambiaría el archivo.',
     },
   },
+  startFolder: {
+    title: 'Una carpeta para las dos apps',
+    lineOne: 'Manga Cleaner y Pear guardan tus títulos en un solo lugar.',
+    lineTwo: 'Los capítulos que limpias aparecen en Pear al guardarlos.',
+    drawing: 'Manga Cleaner y Pear apuntando a una sola carpeta',
+    change: 'Cambiar…',
+    chooser: 'Elige dónde poner la carpeta de datos',
+    setupSameVolume: 'Tu biblioteca se mueve allí. Tarda un momento.',
+    setupOtherVolume: {
+      select: 'minutes',
+      one: 'Tu biblioteca ({bytes:memory}) se copia allí. Tarda alrededor de 1 minuto.',
+      other: 'Tu biblioteca ({bytes:memory}) se copia allí. Tarda alrededor de {minutes} minutos.',
+    },
+    joinSameVolume: 'Pear ya usa esta carpeta. Tu biblioteca ({bytes:memory}) se mueve a su lado.',
+    joinOtherVolume: {
+      select: 'minutes',
+      one: 'Pear ya usa esta carpeta. Tu biblioteca ({bytes:memory}) se copia a su lado. Tarda alrededor de 1 minuto.',
+      other: 'Pear ya usa esta carpeta. Tu biblioteca ({bytes:memory}) se copia a su lado. Tarda alrededor de {minutes} minutos.',
+    },
+    nothingToMove: 'No hay nada que mover.',
+    planning: 'Revisando tu biblioteca…',
+    use: 'Usar una carpeta',
+    notNow: 'Ahora no',
+    blocked: 'Cierra Pear primero.',
+    checkAgain: 'Comprobar de nuevo',
+    copying: 'Copiando {copied:memory} de {total:memory}',
+    moving: 'Moviendo tu biblioteca…',
+    done: 'Listo. Las dos apps usan ahora {path}.',
+    titles: {
+      one: 'Tienes 1 título en Manga Cleaner. ¿Enviarlo a Pear?',
+      other: 'Tienes {count} títulos en Manga Cleaner. ¿Enviarlos a Pear?',
+    },
+    chooseTitles: 'Elegir títulos…',
+    later: 'Más tarde',
+    failed: 'La biblioteca no se movió.',
+    nothingChanged: 'No se cambió nada.',
+  },
+  sendToPear: {
+    title: 'Enviar títulos a Pear',
+    intro: 'Los capítulos con páginas limpias van a Pear. Luego Pear pregunta cómo encajan con los títulos que ya tiene.',
+    loading: 'Leyendo tus títulos…',
+    empty: 'Aún no hay títulos en Manga Cleaner.',
+    counts: {
+      select: 'chapters',
+      one: '1 capítulo, {cleaned} limpios',
+      other: '{chapters} capítulos, {cleaned} limpios',
+    },
+    nothingCleaned: 'Nada limpio todavía',
+    sentBefore: 'Enviado antes',
+    again: 'Enviar todo otra vez',
+    againDescription: 'Envía todos los capítulos limpios, también los ya enviados que no cambiaron.',
+    send: {
+      one: 'Enviar 1 título',
+      other: 'Enviar {count} títulos',
+    },
+    nothingNew: 'No hay nada nuevo que enviar. Activa Enviar todo otra vez para enviarlo todo.',
+    sending: {
+      select: 'total',
+      one: 'Enviando {done} de 1 capítulo',
+      other: 'Enviando {done} de {total} capítulos',
+    },
+    stop: 'Detener',
+    failed: 'No se envió: {detail}',
+    open: 'Enviar títulos a Pear',
+  },
   home: {
     dataFolder: {
       title: 'Carpeta de datos compartida',
       body: 'El maquetador configuró una carpeta de datos compartida en {path}. ¿Mover allí tu biblioteca de limpieza?',
       move: 'Mover',
       later: 'Más tarde',
-    },
-    dataFolderPrompt: {
-      title: 'Una carpeta de datos para Manga Cleaner y Pear',
-      body: 'Mover pone tu biblioteca en {path}. Manga Cleaner y Pear comparten esa carpeta. Los capítulos limpios que guardes aquí aparecen luego en Pear.',
-      move: 'Mover',
-      choose: 'Elegir carpeta',
-      notNow: 'Ahora no',
     },
     section: {
       projects: 'Proyectos',
@@ -1921,6 +1984,16 @@ export const es = {
     detectorFor: 'Limpiar {language}',
   },
   onboarding: {
+    join: {
+      heading: 'Una carpeta para las dos apps',
+      body: 'Pear ya guarda sus títulos en {path}. ¿Usar la misma carpeta?',
+      use: 'Usar la misma carpeta',
+      keep: 'Mantener separadas',
+      working: 'Preparando la carpeta…',
+      done: 'Listo. Las dos apps usan ahora {path}.',
+      kept: 'Se mantienen separadas. En Ajustes, en Carpeta de datos, puedes unirte más tarde.',
+      failed: 'No se hizo: {detail}',
+    },
     title: 'Configurar Manga Cleaner',
     stepOf: 'Paso {current} de {total}',
     progressLabel: 'Progreso de la configuración',
@@ -2961,6 +3034,21 @@ export const es = {
     },
   },
   notice: {
+    dataFolder: {
+      quietSetup: 'Tu biblioteca ahora está en {path}.',
+      show: 'Mostrar',
+    },
+    sendToPear: {
+      done: {
+        one: 'Se envió 1 capítulo a Pear.',
+        other: 'Se enviaron {count} capítulos a Pear.',
+      },
+      stopped: {
+        one: 'Detenido. Se envió 1 capítulo a Pear.',
+        other: 'Detenido. Se enviaron {count} capítulos a Pear.',
+      },
+      failed: 'Capítulos enviados a Pear: {count}. Sin enviar: {failed}.',
+    },
     save: {
       sent: {
         one: 'Se envió 1 página al maquetador.',
