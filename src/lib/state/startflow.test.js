@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
   COPY_BYTES_PER_SECOND,
   copyMinutes,
+  fillsEmptySubfolder,
   isFirstLaunch,
   readStartAnswers,
   shownPath,
@@ -137,5 +138,26 @@ describe('the copy time', () => {
     expect(copyMinutes(1_200_000_001)).toBe(2)
     // The contract's example: 9.7 GB is 485 s, so 9 minutes rounded up.
     expect(copyMinutes(9_700_000_000)).toBe(9)
+  })
+})
+
+describe('an empty Cleaner folder this app already set up or joined', () => {
+  const empty = status({ mode: 'pending', root: '/r', cleanerEmpty: true })
+
+  it('is filled without asking when the stored answer is accepted, a version 1 true included', () => {
+    expect(fillsEmptySubfolder(empty, { setup: 'accepted' })).toBe(true)
+    expect(fillsEmptySubfolder(empty, { join: 'accepted' })).toBe(true)
+    expect(fillsEmptySubfolder(empty, true)).toBe(true)
+  })
+
+  it('is asked about as usual with no answer, or one declined', () => {
+    expect(fillsEmptySubfolder(empty, false)).toBe(false)
+    expect(fillsEmptySubfolder(empty, { setup: 'declined', join: 'declined' })).toBe(false)
+  })
+
+  it('never applies to a missing subfolder, or outside Pending', () => {
+    expect(fillsEmptySubfolder(status({ mode: 'pending', root: '/r', cleanerEmpty: false }), { setup: 'accepted' })).toBe(false)
+    expect(fillsEmptySubfolder(status({ mode: 'shared', root: '/r', cleanerEmpty: true }), { setup: 'accepted' })).toBe(false)
+    expect(fillsEmptySubfolder(null, true)).toBe(false)
   })
 })

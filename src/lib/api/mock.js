@@ -3755,6 +3755,8 @@ export function createMockBackend(options = {}) {
     journal: options.journal ?? search.get('journal') === '1',
     /** The copy of a setup to another drive, while it runs. */
     copy: { copied: 0, total: 0 },
+    /** Pending with an empty `Cleaner/`, as a version 1 setup leaves it: `?cleanerEmpty=1`. */
+    cleanerEmpty: options.cleanerEmpty ?? search.get('cleanerEmpty') === '1',
   }
   /** Chapter id → when Save or Send to Pear last handed it over, as `last_sent_at`. @type {Map<string, number>} */
   const sentAt = new Map()
@@ -3777,6 +3779,7 @@ export function createMockBackend(options = {}) {
     journal: dataFolder.mode === 'unavailable' && dataFolder.journal,
     titles: dataFolder.mode === 'unavailable' ? 0 : state.projects.length,
     home: MOCK_HOME,
+    cleanerEmpty: dataFolder.mode === 'pending' && dataFolder.cleanerEmpty,
   })
   /** As `send_to_pear.rs#has_cleaned_page`. @param {any} chapter */
   const chapterCleaned = (chapter) => (chapter.pages ?? []).some((page) => page.status === 'cleaned')
@@ -3903,6 +3906,16 @@ export function createMockBackend(options = {}) {
 
     async dataFolderShow() {
       await delay(timing.method)
+    },
+
+    /** As `data_folder.rs#data_folder_fill_empty`. */
+    async dataFolderFillEmpty() {
+      await delay(timing.method)
+      if (dataFolder.mode === 'pending' && dataFolder.cleanerEmpty) {
+        dataFolder.mode = 'shared'
+        dataFolder.cleanerEmpty = false
+      }
+      return dataFolderStatus()
     },
 
     /** As `send_to_pear.rs#titles`. */

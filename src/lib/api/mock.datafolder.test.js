@@ -118,3 +118,11 @@ describe('Send to Pear in the mock', () => {
     await expect(settle(backend.sendToPearStart({ projectIds: ['x'] }))).rejects.toThrow(/shared data folder/)
   })
 })
+
+describe('an empty Cleaner folder in the mock', () => {
+  it('says so in the status, and filling it makes the folder Shared', async () => {
+    const backend = createMockBackend({ timing: TIMING, dataFolder: 'pending', cleanerEmpty: true })
+    expect(await settle(backend.dataFolderStatus())).toMatchObject({ mode: 'pending', cleanerEmpty: true })
+    expect(await settle(backend.dataFolderFillEmpty())).toMatchObject({ mode: 'shared', cleanerEmpty: false })
+  })
+})

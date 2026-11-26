@@ -278,6 +278,7 @@ pub fn run() {
             data_folder::data_folder_plan,
             data_folder::data_folder_progress,
             data_folder::data_folder_show,
+            data_folder::data_folder_fill_empty,
             send_to_pear::send_to_pear_titles,
             send_to_pear::send_to_pear_start,
             send_to_pear::send_to_pear_progress,

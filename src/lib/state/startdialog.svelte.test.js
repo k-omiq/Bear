@@ -240,3 +240,29 @@ describe('the first-run Join step', () => {
     expect(backend.dataFolderSetup).not.toHaveBeenCalled()
   })
 })
+
+describe('an empty Cleaner folder with an accepted answer (contract 5.1)', () => {
+  const ROOT = '/Volumes/Manga/Manga Library'
+  const emptyPending = status({ mode: 'pending', root: ROOT, cleanerEmpty: true, titles: 0 })
+
+  it('is filled without asking, and the app is Shared, for a version 1 true', async () => {
+    session.dataFolderPromptAnswered = true
+    const fill = vi.fn(async () => ({ ...SHARED, root: ROOT }))
+    const backend = stub(emptyPending, { dataFolderFillEmpty: fill })
+    await start(backend)
+    expect(fill).toHaveBeenCalledTimes(1)
+    expect(dataFolder.status?.mode).toBe('shared')
+    expect(startDialog.open).toBe(false)
+    expect(startFlow.joinStep).toBe(false)
+    expect(backend.dataFolderSetup).not.toHaveBeenCalled()
+  })
+
+  it('asks Join as usual with no answer stored', async () => {
+    const fill = vi.fn()
+    const backend = stub(emptyPending, { dataFolderFillEmpty: fill })
+    await start(backend)
+    expect(fill).not.toHaveBeenCalled()
+    expect(startDialog.open).toBe(true)
+    expect(startDialog.variant).toBe('join')
+  })
+})

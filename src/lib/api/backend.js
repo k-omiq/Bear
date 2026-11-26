@@ -677,6 +677,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {(spec: {target?: string|null}) => Promise<DataFolderPlan>} dataFolderPlan - what a setup at `target` (or a Join of the pointer's folder when it is empty) would move, and whether it is one rename. Reads only
  * @property {() => Promise<{copied: number, total: number}>} dataFolderProgress - how far the copy of a setup or move in flight has come; zero and zero when none runs
  * @property {() => Promise<void>} dataFolderShow - open the data folder in Finder or File Explorer
+ * @property {() => Promise<DataFolderStatus>} dataFolderFillEmpty - fill an empty `Cleaner/` with its library file, making the folder Shared (section 5.1)
  * @property {() => Promise<SendTitle[]>} sendToPearTitles - Send to Pear's title list (section 8.4.1)
  * @property {(spec: {projectIds: string[], again: boolean}) => Promise<SendProgress>} sendToPearStart - send the titles' cleaned chapters in the background, `again` every one, else only those never sent or changed since
  * @property {() => Promise<SendProgress>} sendToPearProgress - where the send is
@@ -736,6 +737,7 @@ import { createTauriBackend, isTauri } from './tauri.js'
  * @property {boolean} [journal] - a move is unfinished (start row B)
  * @property {number} [titles] - how many titles the library read now holds
  * @property {string|null} [home] - the home folder, so a path can read `~/Manga Library`
+ * @property {boolean} [cleanerEmpty] - Pending with an empty `Cleaner/` subfolder, which an accepted answer fills without asking (section 5.1)
  */
 
 /**

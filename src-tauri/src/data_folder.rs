@@ -1306,6 +1306,11 @@ pub struct Status {
     pub titles: usize,
     /// The user's home folder, so the interface can say `~/Manga Library`.
     pub home: Option<String>,
+    /// Pending with a `Cleaner/` subfolder that is there but empty: a
+    /// version 1 setup with nothing to move leaves this. With an accepted
+    /// stored answer the interface fills it without asking
+    /// (`data_folder_fill_empty`, contract 5.1).
+    pub cleaner_empty: bool,
 }
 
 static RECOVERED: Mutex<Option<String>> = Mutex::new(None);
@@ -1332,7 +1337,45 @@ fn status_of(app: &tauri::AppHandle, resolved: &Resolved) -> Status {
         journal: state_root(app).is_ok_and(|state| journal_exists(&state)),
         titles: resolved.library.as_deref().map(titles_in).unwrap_or(0),
         home: home.as_ref().map(|h| h.display().to_string()),
+        cleaner_empty: resolved.mode == Mode::Pending && resolved.root().is_some_and(own_is_empty),
     }
+}
+
+/// `Cleaner/` under `root` is a folder, with nothing in it that counts.
+fn own_is_empty(root: &Path) -> bool {
+    let own = root.join(CLEANER_DIR);
+    own.is_dir() && own_state(&own) == Own::Absent
+}
+
+/// Fill an empty `Cleaner/` with its library file (contract 5.1, the
+/// exception for an answer already accepted). Answers whether it did: a
+/// missing subfolder, or one with anything in it, is left alone.
+pub fn fill_empty_own(root: &Path) -> Result<bool, String> {
+    if !own_is_empty(root) {
+        return Ok(false);
+    }
+    crate::library::Library::at(root.join(CLEANER_DIR)).ensure_index().map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// Pending with an empty `Cleaner/`, and this app's stored answer says it
+/// already set up or joined this folder: make it Shared without asking.
+/// The answer is the interface's to read; this only refuses any other state.
+#[tauri::command]
+pub async fn data_folder_fill_empty(app: tauri::AppHandle) -> Result<Status, String> {
+    crate::library::blocking(move || {
+        let state = state_root(&app)?;
+        let _lock = take_move_lock(&state)?;
+        let resolved = refresh(&app)?;
+        let root = match (resolved.mode, resolved.root()) {
+            (Mode::Pending, Some(root)) => root.to_path_buf(),
+            _ => return Ok(status_of(&app, &resolved)),
+        };
+        fill_empty_own(&root)?;
+        let resolved = refresh(&app)?;
+        Ok(status_of(&app, &resolved))
+    })
+    .await
 }
 
 /// Inside a folder iCloud, OneDrive, Dropbox or Google Drive syncs, or macOS
@@ -1576,8 +1619,11 @@ pub fn quiet_refusal(check: &QuietCheck) -> Option<&'static str> {
     if library && cloud_only_files(check.legacy) > 0 {
         return Some("some library files are only in the cloud");
     }
-    if in_synced_folder(check.legacy, check.home) || in_synced_folder(check.default_root, check.home) {
-        return Some("a synced folder is involved");
+    // Only the place it goes to (contract 5.2). The library may sit in a
+    // synced folder: moving out of it is the point, and the cloud-only
+    // check above covers the risk.
+    if in_synced_folder(check.default_root, check.home) {
+        return Some("the default place is in a synced folder");
     }
     None
 }
@@ -2100,13 +2146,43 @@ mod tests {
         assert!(quiet_refusal(&quiet(&legacy, &default_root, &home)).is_some(), "the default place has files");
         std::fs::remove_file(default_root.join("notes.txt")).unwrap();
         assert!(quiet_refusal(&QuietCheck { jobs_running: true, ..quiet(&legacy, &default_root, &home) }).is_some());
+        // A library in a synced folder may move out of it (contract 5.2).
         let synced = home.join("Library/CloudStorage/Dropbox/library");
         tree(&synced);
-        assert!(quiet_refusal(&quiet(&synced, &default_root, &home)).is_some(), "a synced library");
+        assert_eq!(quiet_refusal(&quiet(&synced, &default_root, &home)), None, "a synced library moves out");
         let synced_target = home.join("Dropbox").join(DEFAULT_NAME);
         assert!(quiet_refusal(&quiet(&legacy, &synced_target, &home)).is_some(), "a synced default place");
         // No library yet: nothing to check about volumes or the cloud.
         assert_eq!(quiet_refusal(&quiet(&s.0.join("none"), &default_root, &home)), None);
+    }
+
+    #[test]
+    fn an_empty_cleaner_folder_is_filled_and_then_shared() {
+        let s = Scratch::new("fill-empty");
+        let root = s.0.join("Manga Library");
+        let at = good(&root);
+        let legacy = s.0.join("legacy");
+        let pointer = || PointerRead::Good(at.clone());
+        // No subfolder at all: nothing to fill, still Pending.
+        assert!(!fill_empty_own(&root).unwrap());
+        assert!(!root.join(CLEANER_DIR).exists());
+        // An empty one (Finder's file aside) is filled with its index.
+        std::fs::create_dir_all(root.join(CLEANER_DIR)).unwrap();
+        std::fs::write(root.join(CLEANER_DIR).join(".DS_Store"), b"").unwrap();
+        assert!(own_is_empty(&root));
+        assert_eq!(resolve(pointer(), &legacy).mode, Mode::Pending);
+        assert!(fill_empty_own(&root).unwrap());
+        assert!(root.join(CLEANER_DIR).join(crate::library::INDEX_FILE).is_file());
+        assert_eq!(resolve(pointer(), &legacy).mode, Mode::Shared);
+        // Filled once: a second call changes nothing.
+        assert!(!fill_empty_own(&root).unwrap());
+        // One with something else in it is damaged, never filled.
+        let other = s.0.join("Other");
+        good(&other);
+        std::fs::create_dir_all(other.join(CLEANER_DIR)).unwrap();
+        std::fs::write(other.join(CLEANER_DIR).join("page.png"), b"x").unwrap();
+        assert!(!fill_empty_own(&other).unwrap());
+        assert!(!other.join(CLEANER_DIR).join(crate::library::INDEX_FILE).exists());
     }
 
     #[test]

@@ -28,7 +28,7 @@ import { getBackend } from '../api/backend.js'
 import { onBackendError } from '../api/backenderrors.js'
 import { notify } from './app.svelte.js'
 import { session, setStartAnswer } from './session.svelte.js'
-import { readStartAnswers, shownPath, startAction, startRow } from './startflow.js'
+import { fillsEmptySubfolder, readStartAnswers, shownPath, startAction, startRow } from './startflow.js'
 
 /** @typedef {import('../api/backend.js').DataFolderStatus} DataFolderStatus */
 /** @typedef {'setup'|'move'|'useExisting'} ChangeKind */
@@ -293,6 +293,17 @@ export function startAnswers() {
 export async function runStartFlow(backend = getBackend()) {
   if (startFlow.ran) return
   startFlow.ran = true
+  // An empty `Cleaner/` this app already set up or joined is filled, not
+  // asked about (contract 5.1).
+  if (fillsEmptySubfolder(dataFolder.status, session.dataFolderPromptAnswered) && typeof backend.dataFolderFillEmpty === 'function') {
+    try {
+      dataFolder.status = await backend.dataFolderFillEmpty()
+      dataFolder.generation += 1
+    } catch (error) {
+      console.error('the empty Cleaner folder could not be filled', error)
+    }
+    if (dataFolder.status?.mode === 'shared') return
+  }
   const answers = startAnswers()
   const row = startRow(dataFolder.status, { answers, firstLaunchDone: session.firstLaunchOffered })
   const action = startAction(row, answers)

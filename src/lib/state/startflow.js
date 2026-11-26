@@ -47,6 +47,24 @@ export function readStartAnswers(raw, mode) {
   return out
 }
 
+/**
+ * The one exception to "no subfolder yet" (contract 5.1): Pending with an
+ * empty `Cleaner/`, and this app's stored answer says it already set up or
+ * joined this folder. The app then fills the subfolder without asking.
+ *
+ * A version 1 `true` counts as accepted here: version 1 read an existing
+ * `Cleaner/`, even an empty one, as Shared, and made it only on a setup.
+ *
+ * @param {import('../api/backend.js').DataFolderStatus|null|undefined} status
+ * @param {unknown} raw - the stored answers, as kept
+ */
+export function fillsEmptySubfolder(status, raw) {
+  if (status?.mode !== 'pending' || status.cleanerEmpty !== true) return false
+  if (raw === true) return true
+  const answers = readStartAnswers(raw, status.mode)
+  return answers.setup === 'accepted' || answers.join === 'accepted'
+}
+
 /** @param {StartAnswers} answers */
 export function hasAnyAnswer(answers) {
   return Boolean(answers.setup || answers.join)

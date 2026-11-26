@@ -217,6 +217,7 @@ fn main() {
             "data_folder_plan",
             "data_folder_progress",
             "data_folder_show",
+            "data_folder_fill_empty",
             "send_to_pear_titles",
             "send_to_pear_start",
             "send_to_pear_progress",
